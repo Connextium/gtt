@@ -4,7 +4,7 @@ import type { ApiAuthContext } from "./auth/index.js";
 import { authenticateApiRequest } from "./auth/middleware.js";
 import { createInitialState, emitAudit } from "./data.js";
 import { loadApiStateSnapshot, saveApiStateSnapshot } from "./db/state-store.js";
-import { readRawBody, sendJson, badRequest } from "./http/index.js";
+import { readRawBody, sendJson, badRequest, corsHeaders } from "./http/index.js";
 import { findIdempotentResponse, recordIdempotentResponse, requestHash } from "./events/idempotency.js";
 import { handleApiRequest, routeMetadata } from "./http/router.js";
 
@@ -21,9 +21,7 @@ export const createApiServer = () => {
   return createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
-        "access-control-allow-headers": "authorization,content-type,idempotency-key,x-correlation-id,x-gtt-api-key,x-dev-auth-user-id,x-dev-auth-email"
+        ...corsHeaders()
       });
       response.end();
       return;

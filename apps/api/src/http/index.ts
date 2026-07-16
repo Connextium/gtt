@@ -7,13 +7,17 @@ export interface JsonResponse {
   requiredScopes?: string[];
 }
 
+export const corsHeaders = (): Record<string, string> => ({
+  "access-control-allow-origin": process.env.CORS_ALLOWED_ORIGIN ?? "*",
+  "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
+  "access-control-allow-headers": "authorization,content-type,idempotency-key,x-correlation-id,x-gtt-api-key,x-dev-auth-user-id,x-dev-auth-email"
+});
+
 export const sendJson = (response: ServerResponse, result: JsonResponse): void => {
   const payload = JSON.stringify(result.body, (_key, value: unknown) => (typeof value === "bigint" ? value.toString() : value));
   response.writeHead(result.status, {
     "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
-    "access-control-allow-headers": "authorization,content-type,idempotency-key,x-correlation-id,x-gtt-api-key,x-dev-auth-user-id,x-dev-auth-email"
+    ...corsHeaders()
   });
   response.end(payload);
 };
