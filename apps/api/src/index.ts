@@ -1,6 +1,6 @@
 import { domainModules, evaluatePilotReadiness, type PilotReadinessInput } from "./domain/index.js";
 import { validateMigrationCatalog } from "./db/migrations-catalog/index.js";
-import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 export interface ApiHealth {
   service: "gtt-api";
@@ -155,10 +155,10 @@ export const applicationManifest = (): ApiApplicationManifest => {
 
 export const evaluateReleaseReadiness = (input: PilotReadinessInput) => evaluatePilotReadiness(input);
 
-let vercelServer: Server | undefined;
+let handleVercelRequest: ((request: IncomingMessage, response: ServerResponse) => Promise<void>) | undefined;
 
 export default async function handler(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  const { createApiServer } = await import("./server.js");
-  vercelServer ??= createApiServer();
-  vercelServer.emit("request", request, response);
+  const { createApiRequestHandler } = await import("./server.js");
+  handleVercelRequest ??= createApiRequestHandler();
+  await handleVercelRequest(request, response);
 }

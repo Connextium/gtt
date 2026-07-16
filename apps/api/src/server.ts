@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config as loadEnv } from "dotenv";
 import type { ApiAuthContext } from "./auth/index.js";
 import { authenticateApiRequest } from "./auth/middleware.js";
@@ -16,9 +16,8 @@ export interface ApiServerOptions {
   host?: string;
 }
 
-export const createApiServer = () => {
-  const statePromise = loadApiStateSnapshot(createInitialState());
-  return createServer(async (request, response) => {
+export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(createInitialState())) =>
+  async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
         ...corsHeaders()
@@ -74,7 +73,10 @@ export const createApiServer = () => {
     } catch (error) {
       sendJson(response, badRequest(error instanceof Error ? error.message : "request_failed"));
     }
-  });
+  };
+
+export const createApiServer = () => {
+  return createServer(createApiRequestHandler());
 };
 
 const stringFromBody = (body: Record<string, unknown>, key: string): string | undefined => {

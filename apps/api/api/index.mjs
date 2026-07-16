@@ -1,7 +1,7 @@
-import { createApiServer } from "../dist/server.js";
+import { createApiRequestHandler } from "../dist/server.js";
 
-const server = createApiServer();
+const handleRequest = createApiRequestHandler();
 
-export default function handler(request, response) {
-  server.emit("request", request, response);
+export default async function handler(request, response) {
+  await handleRequest(request, response);
 }
