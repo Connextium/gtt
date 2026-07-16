@@ -20,7 +20,7 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
   async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
-        ...corsHeaders()
+        ...corsHeaders(request.headers.origin)
       });
       response.end();
       return;
@@ -36,7 +36,7 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
       if (!metadata.public) {
         const auth = authenticateApiRequest(state, request, metadata.requiredScopes);
         if (auth.error) {
-          sendJson(response, auth.error);
+          sendJson(response, auth.error, request);
           return;
         }
         authContext = auth.auth;
@@ -47,7 +47,7 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
       const hash = request.method === "POST" ? requestHash({ method: request.method ?? "GET", pathname: url.pathname, body }) : undefined;
       const replay = hash ? findIdempotentResponse(state, { key: idempotencyKey, hash }) : { replayed: false as const };
       if (replay.replayed) {
-        sendJson(response, { status: 200, body: replay.responseSnapshot });
+        sendJson(response, { status: 200, body: replay.responseSnapshot }, request);
         return;
       }
       const result = await handleApiRequest(state, {
@@ -69,9 +69,9 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
         recordIdempotentResponse(state, { key: idempotencyKey, hash, responseSnapshot: result.body });
       }
       await saveApiStateSnapshot(state);
-      sendJson(response, result);
+      sendJson(response, result, request);
     } catch (error) {
-      sendJson(response, badRequest(error instanceof Error ? error.message : "request_failed"));
+      sendJson(response, badRequest(error instanceof Error ? error.message : "request_failed"), request);
     }
   };
 
