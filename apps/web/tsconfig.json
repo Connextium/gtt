@@ -1,9 +1,15 @@
 {
-  "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
     "jsx": "react-jsx",
-    "rootDir": "src",
-    "noEmit": true
+    "rootDir": "src"
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
