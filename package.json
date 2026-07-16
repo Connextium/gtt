@@ -1,0 +1,44 @@
+{
+  "name": "global-trade-treasury",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "demo:sprint1": "npm run build && node dist/sprint1/demo.js",
+    "demo:sprint2": "npm run build && node dist/sprint2/demo.js",
+    "demo:sprint3": "npm run build && node dist/sprint3/demo.js",
+    "demo:sprint4": "npm run build && node dist/sprint4/demo.js",
+    "demo:sprint5": "npm run build && node dist/sprint5/demo.js",
+    "demo:sprint6": "npm run build && node dist/sprint6/demo.js",
+    "demo:sprint7": "npm run build && node dist/sprint7/demo.js",
+    "demo:sprint8": "npm run build && node dist/sprint8/demo.js",
+    "migrations:check": "node scripts/check-migrations.mjs",
+    "api:build": "npm run build --workspace @gtt/api",
+    "api:dev": "npm run dev --workspace @gtt/api",
+    "api:scheduler": "npm run scheduler --workspace @gtt/api",
+    "api:smoke": "npm run smoke --workspace @gtt/api",
+    "api:start": "npm run start --workspace @gtt/api",
+    "api:worker": "npm run worker --workspace @gtt/api",
+    "test:sprint1": "npm run build && node dist/sprint1/tests.js",
+    "test:sprint2": "npm run build && node dist/sprint2/tests.js",
+    "test:sprint3": "npm run build && node dist/sprint3/tests.js",
+    "test:sprint4": "npm run build && node dist/sprint4/tests.js",
+    "test:sprint5": "npm run build && node dist/sprint5/tests.js",
+    "test:sprint6": "npm run build && node dist/sprint6/tests.js",
+    "test:sprint7": "npm run build && node dist/sprint7/tests.js",
+    "test:sprint8": "npm run build && node dist/sprint8/tests.js",
+    "test:sprint9": "npm run workspaces:check && node scripts/check-sprint9-app-buildout.mjs",
+    "web:build": "npm run build --workspace @gtt/web",
+    "web:dev": "npm run dev --workspace @gtt/web",
+    "web:preview": "npm run preview --workspace @gtt/web",
+    "workspaces:check": "npm run check --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

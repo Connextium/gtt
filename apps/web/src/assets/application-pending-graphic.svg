@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">Application review terminal graphic</title>
+  <desc id="desc">Fictional treasury review schematic with compliance nodes, settlement rails, and a pending application state.</desc>
+  <rect width="1200" height="520" fill="#f9f9f9"/>
+  <rect x="0.5" y="0.5" width="1199" height="519" fill="none" stroke="#e0e0e0"/>
+  <g fill="none" stroke="#000" stroke-width="1">
+    <path d="M100 116H1110"/>
+    <path d="M100 404H1110"/>
+    <path d="M170 60V458"/>
+    <path d="M1030 60V458"/>
+    <path d="M252 260H948"/>
+    <path d="M252 260C330 150 460 150 538 260S746 370 824 260"/>
+    <path d="M252 260C330 370 460 370 538 260S746 150 824 260"/>
+  </g>
+  <g fill="#fff" stroke="#000" stroke-width="1">
+    <rect x="92" y="84" width="160" height="64"/>
+    <rect x="474" y="206" width="252" height="108"/>
+    <rect x="948" y="372" width="176" height="64"/>
+    <rect x="922" y="84" width="176" height="64"/>
+  </g>
+  <g fill="#000">
+    <circle cx="252" cy="260" r="9"/>
+    <circle cx="538" cy="260" r="9"/>
+    <circle cx="824" cy="260" r="9"/>
+    <circle cx="948" cy="260" r="9"/>
+  </g>
+  <g font-family="JetBrains Mono, ui-monospace, monospace" fill="#1b1b1b">
+    <text x="116" y="112" font-size="13">KYB_QUEUE</text>
+    <text x="116" y="132" font-size="10" fill="#5e5e5e">STATE: RECEIVED</text>
+    <text x="502" y="246" font-size="13">APPLICATION REVIEW</text>
+    <text x="502" y="270" font-size="10" fill="#5e5e5e">RISK VECTOR / OWNERSHIP / JURISDICTION</text>
+    <text x="502" y="292" font-size="10" fill="#5e5e5e">STATUS: PENDING_ATTESTATION</text>
+    <text x="968" y="112" font-size="13">SETTLEMENT</text>
+    <text x="968" y="132" font-size="10" fill="#5e5e5e">LOCKED</text>
+    <text x="974" y="400" font-size="13">FINAL_APPROVAL</text>
+    <text x="974" y="420" font-size="10" fill="#5e5e5e">WAITING</text>
+  </g>
+  <g fill="none" stroke="#5e5e5e" stroke-width="1" opacity=".55">
+    <path d="M330 148h58v58h-58z"/>
+    <path d="M812 314h58v58h-58z"/>
+    <path d="M388 148l424 224"/>
+    <path d="M812 314L388 206"/>
+    <path d="M622 116v90"/>
+    <path d="M622 314v90"/>
+  </g>
+  <g fill="#000">
+    <rect x="354" y="172" width="10" height="10"/>
+    <rect x="836" y="338" width="10" height="10"/>
+    <rect x="616" y="110" width="12" height="12"/>
+    <rect x="616" y="398" width="12" height="12"/>
+  </g>
+  <g font-family="Libre Franklin, ui-sans-serif, sans-serif" fill="#5e5e5e" font-size="10" letter-spacing="2">
+    <text x="100" y="478">GLOBAL TRADE TREASURY / APPLICATION-PENDING / FICTIONAL SYSTEM MAP</text>
+    <text x="780" y="478">NO LIVE MARKET DATA</text>
+  </g>
+</svg>

@@ -1,0 +1,307 @@
+openapi: 3.1.0
+info:
+  title: Global Trade Treasury API
+  version: 0.1.0-full-api-foundation
+  description: API-centric Global Trade Treasury backend covering operations, Circle integration, events, webhooks, and release readiness.
+servers:
+  - url: http://localhost:4000
+security:
+  - ApiKeyBearer: []
+  - ApiKeyHeader: []
+components:
+  securitySchemes:
+    ApiKeyBearer:
+      type: http
+      scheme: bearer
+      description: Use `Authorization: Bearer gtt_live_<key_id>.<secret>`.
+    ApiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-GTT-API-Key
+      description: Use `X-GTT-API-Key: gtt_live_<key_id>.<secret>`.
+    SupabaseUserBearer:
+      type: http
+      scheme: bearer
+      description: Use the Supabase Auth access token for business user onboarding endpoints.
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+    MoneyMinorUnits:
+      type: string
+      pattern: "^[0-9]+$"
+paths:
+  /health:
+    get:
+      security: []
+      responses:
+        "200":
+          description: Service health.
+  /manifest:
+    get:
+      security: []
+      responses:
+        "200":
+          description: API manifest and migration state.
+  /readiness:
+    get:
+      security: []
+      responses:
+        "200":
+          description: Runtime readiness, database configuration, state-store persistence status, and Circle mode.
+  /auth/invitations:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Accept email-only self-registration and dispatch Supabase Auth invitation.
+  /onboarding/me:
+    get:
+      security:
+        - SupabaseUserBearer: []
+      responses:
+        "200":
+          description: Get or create authenticated business user's onboarding profile and draft application.
+  /onboarding/me/steps/{stepKey}:
+    patch:
+      security:
+        - SupabaseUserBearer: []
+      parameters:
+        - name: stepKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Save authenticated business user's onboarding step payload.
+  /onboarding/me/submit:
+    post:
+      security:
+        - SupabaseUserBearer: []
+      responses:
+        "200":
+          description: Submit authenticated business user's onboarding application to pending review.
+  /api-keys:
+    get:
+      responses:
+        "200":
+          description: List API keys without plaintext secrets.
+    post:
+      responses:
+        "201":
+          description: Create API key and return plaintext key once.
+  /api-keys/{id}:
+    get:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: API key detail without plaintext secret.
+  /api-keys/{id}/revoke:
+    post:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Revoke API key.
+  /api-keys/{id}/rotate:
+    post:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Rotate API key and return new plaintext key once.
+  /business-clients:
+    get:
+      responses:
+        "200":
+          description: List business clients.
+    post:
+      responses:
+        "201":
+          description: Create business client.
+  /business-clients/{id}:
+    get:
+      responses:
+        "200":
+          description: Get business client.
+  /business-clients/{id}/submit-onboarding:
+    post:
+      responses:
+        "200":
+          description: Submit onboarding and invoke Circle adapter.
+  /business-clients/{id}/map-circle:
+    post:
+      responses:
+        "200":
+          description: Map Circle identifiers.
+  /accounts-of-digital-asset:
+    get:
+      responses:
+        "200":
+          description: List Accounts of Digital Asset.
+    post:
+      responses:
+        "201":
+          description: Create Account of Digital Asset.
+  /accounts-of-digital-asset/{id}/provision-circle:
+    post:
+      responses:
+        "200":
+          description: Provision account through Circle adapter.
+  /ledger/journals:
+    get:
+      responses:
+        "200":
+          description: List journals.
+    post:
+      responses:
+        "201":
+          description: Post journal.
+  /settlement-obligations:
+    get:
+      responses:
+        "200":
+          description: List settlement obligations.
+    post:
+      responses:
+        "201":
+          description: Create settlement obligation.
+  /funding-reservations:
+    get:
+      responses:
+        "200":
+          description: List funding reservations.
+    post:
+      responses:
+        "201":
+          description: Create active funding reservation.
+  /payments/internal:
+    post:
+      responses:
+        "201":
+          description: Create internal payment execution.
+  /payments/external-usdc:
+    post:
+      responses:
+        "201":
+          description: Create external USDC payment execution.
+  /payments/{id}/submit:
+    post:
+      responses:
+        "200":
+          description: Submit payment through Circle adapter.
+  /fiat/wire-accounts:
+    get:
+      responses:
+        "200":
+          description: List fiat wire accounts.
+    post:
+      responses:
+        "201":
+          description: Create fiat wire account.
+  /fiat/redemptions:
+    get:
+      responses:
+        "200":
+          description: List fiat redemptions.
+    post:
+      responses:
+        "201":
+          description: Create fiat redemption.
+  /liquidity-rebalancing/recommendations:
+    get:
+      responses:
+        "200":
+          description: List liquidity recommendations.
+  /liquidity-rebalancing/instructions:
+    get:
+      responses:
+        "200":
+          description: List rebalancing instructions.
+    post:
+      responses:
+        "201":
+          description: Queue rebalancing instruction.
+  /reconciliation/runs:
+    get:
+      responses:
+        "200":
+          description: List reconciliation runs.
+    post:
+      responses:
+        "201":
+          description: Start reconciliation run.
+  /reconciliation/breaks:
+    get:
+      responses:
+        "200":
+          description: List reconciliation breaks.
+  /webhooks/circle:
+    post:
+      security: []
+      responses:
+        "200":
+          description: Receive Circle webhook.
+  /events/outbox:
+    get:
+      responses:
+        "200":
+          description: List outbox events.
+  /events/inbox:
+    get:
+      responses:
+        "200":
+          description: List inbox events.
+  /dead-letter:
+    get:
+      responses:
+        "200":
+          description: List dead-letter events.
+  /treasury-accounting/trial-balance:
+    get:
+      responses:
+        "200":
+          description: Trial balance.
+  /reports/daily-close:
+    get:
+      responses:
+        "200":
+          description: Daily close.
+  /uat/scenarios:
+    get:
+      responses:
+        "200":
+          description: UAT scenarios.
+  /release-readiness:
+    get:
+      responses:
+        "200":
+          description: Release readiness.

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run migrations:check
+      - run: npm run test:sprint1
+      - run: npm run test:sprint2
+      - run: npm run test:sprint3
+      - run: npm run test:sprint4
+      - run: npm run test:sprint5
+      - run: npm run test:sprint6
+      - run: npm run test:sprint7
+      - run: npm run test:sprint8
+      - run: npm run test:sprint9
+      - run: npm run api:build
+      - run: npm run api:smoke
+      - run: npm run web:build

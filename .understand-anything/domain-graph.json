@@ -1,0 +1,450 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "Global Trade Treasury",
+    "languages": ["TypeScript"],
+    "frameworks": ["Node.js", "React", "Vite", "PostgreSQL"],
+    "description": "Global Trade Treasury MVP handling business client onboarding, digital accounts, settlement obligations, reservations, payment execution via Circle, liquidity rebalancing, and reconciliation.",
+    "analyzedAt": "2026-07-15T19:48:30Z",
+    "gitCommitHash": ""
+  },
+  "nodes": [
+    {
+      "id": "domain:client-onboarding",
+      "type": "domain",
+      "name": "Client Onboarding",
+      "summary": "Handles registration, document submission, and state transitions of business clients onboarding onto the trade treasury platform.",
+      "tags": ["onboarding", "clients"],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entities": ["BusinessClient", "ApiClient"],
+        "businessRules": [
+          "Clients must provide legalName and country",
+          "Onboarding starts in draft and progresses to submitted then approved or restricted/closed"
+        ],
+        "crossDomainInteractions": ["Associates new business clients with Circle client entity IDs"]
+      }
+    },
+    {
+      "id": "domain:digital-accounts",
+      "type": "domain",
+      "name": "Digital Accounts",
+      "summary": "Manages accounts of digital asset (ADA) representing USDC holdings, including balance categorization and Circle sub-account provisioning.",
+      "tags": ["accounts", "balances"],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entities": ["AccountOfDigitalAsset", "Balance"],
+        "businessRules": [
+          "Every ADA has associated availability, pending, reserved, and locked balances",
+          "USDC balances are tracked in minor units (bigint)"
+        ],
+        "crossDomainInteractions": ["Triggers Circle account provisioning for sub-account tracking"]
+      }
+    },
+    {
+      "id": "domain:settlement-obligations",
+      "type": "domain",
+      "name": "Settlement Obligations",
+      "summary": "Models buyer-supplier trade liabilities, supporting disputes and cash reservations to secure upcoming settlements.",
+      "tags": ["obligations", "reservations"],
+      "complexity": "complex",
+      "domainMeta": {
+        "entities": ["SettlementObligation", "FundingReservation"],
+        "businessRules": [
+          "Obligations can be disputed to lock a portion of minor units",
+          "Funding reservation locks available balance into reserved balance"
+        ],
+        "crossDomainInteractions": ["Uses digital account balances to secure trade obligations"]
+      }
+    },
+    {
+      "id": "domain:payment-execution",
+      "type": "domain",
+      "name": "Payment Execution",
+      "summary": "Executes internal and external crypto/USDC payments via Circle APIs and handles fiat wire redemptions.",
+      "tags": ["payments", "transfers", "circle"],
+      "complexity": "complex",
+      "domainMeta": {
+        "entities": ["Payment", "WireAccount", "Redemption"],
+        "businessRules": [
+          "Payments are submitted idempotently using unique hashes",
+          "External wire redemptions require active validated wire bank details"
+        ],
+        "crossDomainInteractions": ["Interacts with Circle APIs for ledger settlement sync"]
+      }
+    },
+    {
+      "id": "domain:treasury-ledger",
+      "type": "domain",
+      "name": "Treasury Ledger",
+      "summary": "Provides double-entry accounting ledger system, keeping record of transaction journals, daily closes, and trial balances.",
+      "tags": ["ledger", "accounting"],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entities": ["JournalEntry", "Balance"],
+        "businessRules": [
+          "All journal entries must balance debits and credits",
+          "Reversals create opposite journal entries linking back to the original"
+        ],
+        "crossDomainInteractions": ["Applies journal entries directly to update Digital Account balances"]
+      }
+    },
+    {
+      "id": "domain:reconciliation-ops",
+      "type": "domain",
+      "name": "Reconciliation & Operations",
+      "summary": "Detects balance discrepancies between ledger and Circle, manages breaks, and performs liquidity rebalancing.",
+      "tags": ["reconciliation", "rebalancing", "ops"],
+      "complexity": "complex",
+      "domainMeta": {
+        "entities": ["ReconciliationBreak", "RebalanceRecommendation"],
+        "businessRules": [
+          "Reconciles digital account ledger balances with Circle adapter balances",
+          "Rebalance recommendations trigger internal transfers to cover account shortfalls"
+        ],
+        "crossDomainInteractions": ["Verifies external Circle balances and matches with internal ledger"]
+      }
+    },
+    {
+      "id": "flow:client-signup",
+      "type": "flow",
+      "name": "Client Signup & Onboarding",
+      "summary": "Initiating a business client profile, submitting onboarding docs to Circle, and approving the account.",
+      "tags": ["onboarding", "signup"],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "POST /business-clients",
+        "entryType": "http"
+      }
+    },
+    {
+      "id": "step:client-signup:create-draft",
+      "type": "step",
+      "name": "Create Client Draft",
+      "summary": "Inserts a new business client in draft status into the database store.",
+      "tags": ["draft", "client"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [87, 99]
+    },
+    {
+      "id": "step:client-signup:submit-circle",
+      "type": "step",
+      "name": "Submit Onboarding to Circle",
+      "summary": "Triggers Circle adapter onboarding application call, assigning a providerReferenceId.",
+      "tags": ["circle", "onboarding"],
+      "complexity": "moderate",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [103, 111]
+    },
+    {
+      "id": "step:client-signup:map-credentials",
+      "type": "step",
+      "name": "Map Circle credentials",
+      "summary": "Saves client entities and flags the client onboarding status as approved.",
+      "tags": ["approve", "map"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [112, 119]
+    },
+    {
+      "id": "flow:provision-account",
+      "type": "flow",
+      "name": "Provision Digital Account",
+      "summary": "Creating an Account of Digital Asset (ADA) and provisioning sub-accounts in Circle.",
+      "tags": ["ada", "account"],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "POST /accounts-of-digital-asset",
+        "entryType": "http"
+      }
+    },
+    {
+      "id": "step:provision-account:create-ada",
+      "type": "step",
+      "name": "Create ADA Record",
+      "summary": "Creates account mapping entry and initializes zero-balance tracking.",
+      "tags": ["create", "ada"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [127, 140]
+    },
+    {
+      "id": "step:provision-account:provision-circle",
+      "type": "step",
+      "name": "Provision Circle Wallet",
+      "summary": "Calls Circle API to configure and map a sub-account/wallet ID.",
+      "tags": ["circle", "provision"],
+      "complexity": "moderate",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [144, 152]
+    },
+    {
+      "id": "flow:create-obligation",
+      "type": "flow",
+      "name": "Create & Manage Obligation",
+      "summary": "Drafting trade obligations, approving them, or handling disputes.",
+      "tags": ["obligation"],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "POST /settlement-obligations",
+        "entryType": "http"
+      }
+    },
+    {
+      "id": "step:create-obligation:draft-obligation",
+      "type": "step",
+      "name": "Draft Obligation",
+      "summary": "Creates a settlement obligation outlining buyer, supplier, and dueDate.",
+      "tags": ["draft", "obligation"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [199, 214]
+    },
+    {
+      "id": "step:create-obligation:dispute-approve",
+      "type": "step",
+      "name": "Manage Dispute/Approval",
+      "summary": "Allows operators to approve, dispute, or cancel trade obligations.",
+      "tags": ["dispute", "approve"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [218, 233]
+    },
+    {
+      "id": "flow:reserve-funds",
+      "type": "flow",
+      "name": "Reserve Settlement Funds",
+      "summary": "Securing funds from an active digital account balance to back a trade obligation.",
+      "tags": ["reservation", "lock"],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "POST /funding-reservations",
+        "entryType": "http"
+      }
+    },
+    {
+      "id": "step:reserve-funds:check-balance",
+      "type": "step",
+      "name": "Verify Available Balance",
+      "summary": "Ensures the selected digital account has enough available USDC minor units.",
+      "tags": ["check", "balance"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [245, 246]
+    },
+    {
+      "id": "step:reserve-funds:lock-balance",
+      "type": "step",
+      "name": "Move to Reserved Balance",
+      "summary": "Decreases available USDC units and increases reserved USDC units.",
+      "tags": ["reserve", "lock"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [247, 250]
+    },
+    {
+      "id": "step:reserve-funds:emit-active",
+      "type": "step",
+      "name": "Emit Activated Event",
+      "summary": "Pushes funding_reservation.activated event to the outbox queue.",
+      "tags": ["event", "outbox"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [251, 252]
+    },
+    {
+      "id": "flow:execute-payment",
+      "type": "flow",
+      "name": "Execute USDC Payment",
+      "summary": "Transferring USDC tokens internally or externally via the Circle integration adapter.",
+      "tags": ["payment", "circle"],
+      "complexity": "complex",
+      "domainMeta": {
+        "entryPoint": "POST /payments/internal",
+        "entryType": "http"
+      }
+    },
+    {
+      "id": "step:execute-payment:create-payment",
+      "type": "step",
+      "name": "Create Payment Record",
+      "summary": "Creates a payment entry capturing source, destination, and minor units.",
+      "tags": ["create", "payment"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [266, 281]
+    },
+    {
+      "id": "step:execute-payment:invoke-circle",
+      "type": "step",
+      "name": "Invoke Circle Adapter",
+      "summary": "Submits the transfer to Circle's API with an idempotency key.",
+      "tags": ["circle", "adapter"],
+      "complexity": "complex",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [285, 292]
+    },
+    {
+      "id": "step:execute-payment:complete-payment",
+      "type": "step",
+      "name": "Complete & Emit Status",
+      "summary": "Sets payment status and emits a payment completion outbox event.",
+      "tags": ["event", "complete"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [293, 296]
+    },
+    {
+      "id": "flow:post-journal",
+      "type": "flow",
+      "name": "Post double-entry journal",
+      "summary": "Submitting a new journal transaction entry and recording balanced debits and credits.",
+      "tags": ["journal", "ledger"],
+      "complexity": "moderate",
+      "domainMeta": {
+        "entryPoint": "POST /ledger/journals",
+        "entryType": "http"
+      }
+    },
+    {
+      "id": "step:post-journal:verify-balances",
+      "type": "step",
+      "name": "Verify Balanced Journals",
+      "summary": "Ensures total debit units equal total credit units on the journal entries.",
+      "tags": ["verify", "accounting"],
+      "complexity": "simple",
+      "filePath": "src/sprint1/accounting.ts",
+      "lineRange": [593, 594]
+    },
+    {
+      "id": "step:post-journal:save-journal",
+      "type": "step",
+      "name": "Save and Update Balances",
+      "summary": "Saves journal entry and increases available balance on the linked digital account.",
+      "tags": ["save", "balance"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [176, 177]
+    },
+    {
+      "id": "step:post-journal:emit-posted",
+      "type": "step",
+      "name": "Emit Posted Event",
+      "summary": "Emits treasury.journal_entry.posted event to notify ledger subscribers.",
+      "tags": ["event", "posted"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [178, 179]
+    },
+    {
+      "id": "flow:run-reconciliation",
+      "type": "flow",
+      "name": "Run Reconciliation",
+      "summary": "Analyzing ledger versus external Circle balances and managing breaks.",
+      "tags": ["reconciliation", "breaks"],
+      "complexity": "complex",
+      "domainMeta": {
+        "entryPoint": "POST /reconciliation/runs",
+        "entryType": "http"
+      }
+    },
+    {
+      "id": "step:run-reconciliation:execute-recon",
+      "type": "step",
+      "name": "Compare Balances",
+      "summary": "Retrieves current balances from local ledger and Circle API, matching discrepancies.",
+      "tags": ["compare", "reconcile"],
+      "complexity": "moderate",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [342, 345]
+    },
+    {
+      "id": "step:run-reconciliation:manage-break",
+      "type": "step",
+      "name": "Manage Reconciliation Break",
+      "summary": "Allows operators to assign, comment on, and resolve specific reconciliation breaks.",
+      "tags": ["breaks", "resolve"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [352, 368]
+    },
+    {
+      "id": "flow:liquidity-rebalancing",
+      "type": "flow",
+      "name": "Manage Liquidity Rebalancing",
+      "summary": "Recommending and executing internal rebalance transfers when digital accounts drop below target thresholds.",
+      "tags": ["rebalancing", "liquidity"],
+      "complexity": "complex",
+      "domainMeta": {
+        "entryPoint": "GET /liquidity-rebalancing/recommendations",
+        "entryType": "http"
+      }
+    },
+    {
+      "id": "step:liquidity-rebalancing:recommend-rebalance",
+      "type": "step",
+      "name": "Recommend Rebalance",
+      "summary": "Calculates digital account shortfalls and recommends transfers from deployable sources.",
+      "tags": ["recommend", "shortfall"],
+      "complexity": "moderate",
+      "filePath": "apps/api/src/domain/index.ts",
+      "lineRange": [101, 113]
+    },
+    {
+      "id": "step:liquidity-rebalancing:approve-execute",
+      "type": "step",
+      "name": "Approve and Execute Rebalance",
+      "summary": "Queues rebalance instruction, requires approval if over threshold, and changes status to executed.",
+      "tags": ["approve", "execute"],
+      "complexity": "simple",
+      "filePath": "apps/api/src/http/router.ts",
+      "lineRange": [326, 339]
+    }
+  ],
+  "edges": [
+    { "source": "domain:client-onboarding", "target": "flow:client-signup", "type": "contains_flow", "direction": "forward", "weight": 1.0 },
+    { "source": "flow:client-signup", "target": "step:client-signup:create-draft", "type": "flow_step", "direction": "forward", "weight": 0.3 },
+    { "source": "flow:client-signup", "target": "step:client-signup:submit-circle", "type": "flow_step", "direction": "forward", "weight": 0.6 },
+    { "source": "flow:client-signup", "target": "step:client-signup:map-credentials", "type": "flow_step", "direction": "forward", "weight": 1.0 },
+
+    { "source": "domain:digital-accounts", "target": "flow:provision-account", "type": "contains_flow", "direction": "forward", "weight": 1.0 },
+    { "source": "flow:provision-account", "target": "step:provision-account:create-ada", "type": "flow_step", "direction": "forward", "weight": 0.5 },
+    { "source": "flow:provision-account", "target": "step:provision-account:provision-circle", "type": "flow_step", "direction": "forward", "weight": 1.0 },
+
+    { "source": "domain:settlement-obligations", "target": "flow:create-obligation", "type": "contains_flow", "direction": "forward", "weight": 1.0 },
+    { "source": "flow:create-obligation", "target": "step:create-obligation:draft-obligation", "type": "flow_step", "direction": "forward", "weight": 0.5 },
+    { "source": "flow:create-obligation", "target": "step:create-obligation:dispute-approve", "type": "flow_step", "direction": "forward", "weight": 1.0 },
+
+    { "source": "domain:settlement-obligations", "target": "flow:reserve-funds", "type": "contains_flow", "direction": "forward", "weight": 1.0 },
+    { "source": "flow:reserve-funds", "target": "step:reserve-funds:check-balance", "type": "flow_step", "direction": "forward", "weight": 0.3 },
+    { "source": "flow:reserve-funds", "target": "step:reserve-funds:lock-balance", "type": "flow_step", "direction": "forward", "weight": 0.6 },
+    { "source": "flow:reserve-funds", "target": "step:reserve-funds:emit-active", "type": "flow_step", "direction": "forward", "weight": 1.0 },
+
+    { "source": "domain:payment-execution", "target": "flow:execute-payment", "type": "contains_flow", "direction": "forward", "weight": 1.0 },
+    { "source": "flow:execute-payment", "target": "step:execute-payment:create-payment", "type": "flow_step", "direction": "forward", "weight": 0.3 },
+    { "source": "flow:execute-payment", "target": "step:execute-payment:invoke-circle", "type": "flow_step", "direction": "forward", "weight": 0.6 },
+    { "source": "flow:execute-payment", "target": "step:execute-payment:complete-payment", "type": "flow_step", "direction": "forward", "weight": 1.0 },
+
+    { "source": "domain:treasury-ledger", "target": "flow:post-journal", "type": "contains_flow", "direction": "forward", "weight": 1.0 },
+    { "source": "flow:post-journal", "target": "step:post-journal:verify-balances", "type": "flow_step", "direction": "forward", "weight": 0.3 },
+    { "source": "flow:post-journal", "target": "step:post-journal:save-journal", "type": "flow_step", "direction": "forward", "weight": 0.6 },
+    { "source": "flow:post-journal", "target": "step:post-journal:emit-posted", "type": "flow_step", "direction": "forward", "weight": 1.0 },
+
+    { "source": "domain:reconciliation-ops", "target": "flow:run-reconciliation", "type": "contains_flow", "direction": "forward", "weight": 1.0 },
+    { "source": "flow:run-reconciliation", "target": "step:run-reconciliation:execute-recon", "type": "flow_step", "direction": "forward", "weight": 0.5 },
+    { "source": "flow:run-reconciliation", "target": "step:run-reconciliation:manage-break", "type": "flow_step", "direction": "forward", "weight": 1.0 },
+
+    { "source": "domain:reconciliation-ops", "target": "flow:liquidity-rebalancing", "type": "contains_flow", "direction": "forward", "weight": 1.0 },
+    { "source": "flow:liquidity-rebalancing", "target": "step:liquidity-rebalancing:recommend-rebalance", "type": "flow_step", "direction": "forward", "weight": 0.5 },
+    { "source": "flow:liquidity-rebalancing", "target": "step:liquidity-rebalancing:approve-execute", "type": "flow_step", "direction": "forward", "weight": 1.0 },
+
+    { "source": "domain:client-onboarding", "target": "domain:digital-accounts", "type": "cross_domain", "direction": "forward", "description": "Provides onboarded business clients required to open an account of digital asset.", "weight": 0.5 },
+    { "source": "domain:digital-accounts", "target": "domain:settlement-obligations", "type": "cross_domain", "direction": "forward", "description": "Provides available balances that can be reserved for settlement obligations.", "weight": 0.6 },
+    { "source": "domain:settlement-obligations", "target": "domain:payment-execution", "type": "cross_domain", "direction": "forward", "description": "Triggers payment transfers to settle obligations when reservations are released.", "weight": 0.7 },
+    { "source": "domain:payment-execution", "target": "domain:treasury-ledger", "type": "cross_domain", "direction": "forward", "description": "Posts double-entry journal records of payment executions into the ledger.", "weight": 0.6 },
+    { "source": "domain:reconciliation-ops", "target": "domain:payment-execution", "type": "cross_domain", "direction": "forward", "description": "Recommends rebalance transfers executed through internal payments.", "weight": 0.5 }
+  ],
+  "layers": [],
+  "tour": []
+}

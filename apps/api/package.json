@@ -1,0 +1,27 @@
+{
+  "name": "@gtt/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "dev": "tsx src/server.ts",
+    "smoke": "tsx src/smoke-test.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "worker": "tsx src/workers/index.ts",
+    "scheduler": "tsx src/workers/scheduler.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.6",
+    "dotenv": "^17.4.2",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.4"
+  }
+}
