@@ -26,7 +26,7 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
       return;
     }
 
-    const url = new URL(request.url ?? "/", "http://localhost");
+    const url = parseRequestUrl(request.url ?? "/");
     try {
       const state = await statePromise;
       const rawBody = ["POST", "PATCH"].includes(request.method ?? "GET") ? await readRawBody(request) : "";
@@ -82,6 +82,18 @@ export const createApiServer = () => {
 const stringFromBody = (body: Record<string, unknown>, key: string): string | undefined => {
   const value = body[key];
   return typeof value === "string" && value.trim() ? value : undefined;
+};
+
+export const parseRequestUrl = (rawUrl: string): URL => {
+  const normalizedRawUrl = rawUrl.replace(/^\/+/, "/");
+  const url = new URL(normalizedRawUrl, "http://localhost");
+  url.pathname = normalizeRequestPath(url.pathname);
+  return url;
+};
+
+export const normalizeRequestPath = (pathname: string): string => {
+  const normalized = pathname.replace(/\/{2,}/g, "/");
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
 };
 
 export const startApiServer = (options: ApiServerOptions = {}) => {

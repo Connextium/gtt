@@ -1591,7 +1591,7 @@ async function apiRequest<T = unknown>(
 ): Promise<T> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (options.token) headers.authorization = `Bearer ${options.token}`;
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: options.method ?? "GET",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined
@@ -1601,4 +1601,10 @@ async function apiRequest<T = unknown>(
     throw new Error(typeof body.error === "string" ? body.error : `Request failed with status ${response.status}`);
   }
   return body as T;
+}
+
+function apiUrl(path: string): string {
+  const base = apiBaseUrl.replace(/\/+$/, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${normalizedPath}`;
 }
