@@ -53,6 +53,7 @@ type Navigate = (path: string) => void;
 
 type OnboardingStatus = "draft" | "submitted" | "pending_review" | "approved" | "rejected";
 type OnboardingStepKey = "step_1" | "step_2" | "step_3" | "step_4" | "pending_review" | "reviewd";
+type OnboardingDraftPayload = Record<string, string | string[]>;
 
 interface OnboardingApplication {
   id: string;
@@ -497,11 +498,19 @@ function OnboardingStepScreen({ path, navigate, session }: { path: string; navig
     const token = session?.access_token;
     if (!token) return;
     let active = true;
-    nextOnboardingRoute(token)
-      .then((route) => {
+    apiRequest<MyOnboardingResponse>("/onboarding/me", { token })
+      .then((result) => {
         if (!active) return;
-        const currentRoute = `/onboarding/step-${stepNumber}`;
-        if (route !== currentRoute) navigate(route);
+        const route = routeForApplication(result.application);
+        const requestedStep = Number.isFinite(stepNumber) ? stepNumber : 1;
+        const latestAllowedStep = onboardingStepNumber(result.application.currentStep);
+        if (route === "/application-pending" || route === "/welcome") {
+          navigate(route);
+          return;
+        }
+        if (requestedStep > latestAllowedStep) {
+          navigate(route);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -538,6 +547,7 @@ function OnboardingStepScreen({ path, navigate, session }: { path: string; navig
         body: {
           payload: {
             ...payload,
+            completedStepKey: `step_${stepNumber}`,
             completedFrom: step,
             nextStep: `step_${nextStepNumber}`,
             savedAt: new Date().toISOString()
@@ -734,9 +744,11 @@ function FrameworkCard({ active, copy, icon: Icon, index, muted, status, title }
 }
 
 function BusinessProfileStep({ continueStep, error, navigate, saving }: StepProps) {
+  const draft = loadOnboardingDraft("step_2");
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const data = formToPayload(event.currentTarget);
+    saveOnboardingDraft("step_2", data);
     continueStep(data);
   }
 
@@ -745,25 +757,25 @@ function BusinessProfileStep({ continueStep, error, navigate, saving }: StepProp
       <OnboardingSidebar currentStep={2} />
       <section className="gtt-onboarding-main">
         <OnboardingTopBar currentStep={2} title="Onboarding: Business Profile" />
-        <form className="gtt-onboarding-layout" onSubmit={submit}>
+        <form className="gtt-onboarding-layout" onChange={(event) => saveOnboardingDraft("step_2", formToPayload(event.currentTarget))} onSubmit={submit}>
           <div className="gtt-form-stack">
             <FormSection index="1" title="Basic Business Info">
-              <TextField label="Business Website" name="businessWebsite" placeholder="https://www.yourcompany.com" type="url" />
-              <TextArea label="Business Model Description" name="businessModel" note="Provide a concise overview of commercial operations." placeholder="Digital payments platform specializing in cross-border trade settlements..." />
-              <TextArea label="Products/Services Description" name="productsServices" placeholder="Describe specific financial or commercial products offered..." />
+              <TextField defaultValue={draftString(draft, "businessWebsite")} label="Business Website" name="businessWebsite" placeholder="https://www.yourcompany.com" type="url" />
+              <TextArea defaultValue={draftString(draft, "businessModel")} label="Business Model Description" name="businessModel" note="Provide a concise overview of commercial operations." placeholder="Digital payments platform specializing in cross-border trade settlements..." />
+              <TextArea defaultValue={draftString(draft, "productsServices")} label="Products/Services Description" name="productsServices" placeholder="Describe specific financial or commercial products offered..." />
             </FormSection>
             <FormSection index="2" title="Business Registration">
               <div className="gtt-field-grid">
-                <TextField wide label="Legal Business Name" name="legalBusinessName" placeholder="Full Legal Entity Name" />
-                <SelectField label="Country of Formation" name="formationCountry" options={["Select Jurisdiction", "United States", "United Kingdom", "Singapore", "Germany"]} />
-                <TextField label="Registration Number" name="registrationNumber" placeholder="EIN / CRN" />
-                <TextField wide label="Tax ID (TIN / VAT)" name="taxId" placeholder="Tax Identification Number" />
+                <TextField defaultValue={draftString(draft, "legalBusinessName")} wide label="Legal Business Name" name="legalBusinessName" placeholder="Full Legal Entity Name" />
+                <SelectField defaultValue={draftString(draft, "formationCountry")} label="Country of Formation" name="formationCountry" options={["Select Jurisdiction", "United States", "United Kingdom", "Singapore", "Germany"]} />
+                <TextField defaultValue={draftString(draft, "registrationNumber")} label="Registration Number" name="registrationNumber" placeholder="EIN / CRN" />
+                <TextField defaultValue={draftString(draft, "taxId")} wide label="Tax ID (TIN / VAT)" name="taxId" placeholder="Tax Identification Number" />
               </div>
             </FormSection>
             <FormSection index="3" title="Entity Operations">
               <div className="gtt-field-grid">
-                <CheckboxGroup label="Countries with Most Customers" name="customerCountries" options={["United States", "United Kingdom", "European Union", "Japan", "Singapore", "Brazil"]} />
-                <CheckboxGroup label="Countries with Physical Presence" name="presenceCountries" options={["Same as Formation", "United States", "Singapore", "UAE (Dubai)", "Switzerland"]} />
+                <CheckboxGroup defaultValues={draftArray(draft, "customerCountries")} label="Countries with Most Customers" name="customerCountries" options={["United States", "United Kingdom", "European Union", "Japan", "Singapore", "Brazil"]} />
+                <CheckboxGroup defaultValues={draftArray(draft, "presenceCountries")} label="Countries with Physical Presence" name="presenceCountries" options={["Same as Formation", "United States", "Singapore", "UAE (Dubai)", "Switzerland"]} />
               </div>
             </FormSection>
             <ActionRow backTo="/onboarding/step-1" error={error} navigate={navigate} primary="Save & Continue" saving={saving} />
@@ -797,10 +809,12 @@ function GuidancePanel() {
 }
 
 function BeneficialOwnershipStep({ continueStep, error, navigate, saving }: StepProps) {
-  const [hasOwners, setHasOwners] = useState("yes");
+  const draft = loadOnboardingDraft("step_3");
+  const [hasOwners, setHasOwners] = useState(draftString(draft, "hasOwners", "yes"));
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const data = formToPayload(event.currentTarget);
+    saveOnboardingDraft("step_3", { ...data, hasOwners });
     continueStep({ ...data, hasOwners });
   }
 
@@ -809,7 +823,7 @@ function BeneficialOwnershipStep({ continueStep, error, navigate, saving }: Step
       <OnboardingSidebar currentStep={3} />
       <section className="gtt-onboarding-main">
         <OnboardingTopBar currentStep={3} title="Onboarding: Beneficial Ownership" />
-        <form className="gtt-onboarding-split" onSubmit={submit}>
+        <form className="gtt-onboarding-split" onChange={(event) => saveOnboardingDraft("step_3", { ...formToPayload(event.currentTarget), hasOwners })} onSubmit={submit}>
           <div className="gtt-form-stack">
             <FormSection index="1" title="Declaration of Ownership">
               <div className="gtt-radio-card">
@@ -823,11 +837,11 @@ function BeneficialOwnershipStep({ continueStep, error, navigate, saving }: Step
                 <div className="gtt-owner-card">
                   <span>Primary Owner</span>
                   <div className="gtt-field-grid">
-                    <TextField label="Legal Name (As Per Passport)" name="ownerName" placeholder="JORDAN LEE" />
-                    <TextField label="Date of Birth" name="ownerDob" type="date" />
-                    <SelectField label="Citizenship" name="ownerCitizenship" options={["United States", "United Kingdom", "Singapore", "European Union"]} />
-                    <TextField label="Percent Ownership (%)" name="ownerPercent" placeholder="25" type="number" />
-                    <TextField wide label="Residential Address" name="ownerAddress" placeholder="Street address, city, postal code" />
+                    <TextField defaultValue={draftString(draft, "ownerName")} label="Legal Name (As Per Passport)" name="ownerName" placeholder="JORDAN LEE" />
+                    <TextField defaultValue={draftString(draft, "ownerDob")} label="Date of Birth" name="ownerDob" type="date" />
+                    <SelectField defaultValue={draftString(draft, "ownerCitizenship")} label="Citizenship" name="ownerCitizenship" options={["United States", "United Kingdom", "Singapore", "European Union"]} />
+                    <TextField defaultValue={draftString(draft, "ownerPercent")} label="Percent Ownership (%)" name="ownerPercent" placeholder="25" type="number" />
+                    <TextField defaultValue={draftString(draft, "ownerAddress")} wide label="Residential Address" name="ownerAddress" placeholder="Street address, city, postal code" />
                   </div>
                 </div>
                 <button className="gtt-dashed-action" type="button"><Plus size={16} /> Add Another Beneficial Owner</button>
@@ -860,9 +874,11 @@ function BeneficialOwnershipStep({ continueStep, error, navigate, saving }: Step
 }
 
 function IntendedUseStep({ continueStep, error, navigate, saving }: StepProps) {
+  const draft = loadOnboardingDraft("step_4");
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const data = formToPayload(event.currentTarget);
+    saveOnboardingDraft("step_4", data);
     continueStep(data);
   }
 
@@ -871,26 +887,26 @@ function IntendedUseStep({ continueStep, error, navigate, saving }: StepProps) {
       <OnboardingSidebar currentStep={4} />
       <section className="gtt-onboarding-main">
         <OnboardingTopBar currentStep={4} title="Onboarding: Intended Use" />
-        <form className="gtt-onboarding-split final" onSubmit={submit}>
+        <form className="gtt-onboarding-split final" onChange={(event) => saveOnboardingDraft("step_4", formToPayload(event.currentTarget))} onSubmit={submit}>
           <div className="gtt-form-stack">
             <FormSection index="1" title="Account Purpose and Usage">
               <div className="gtt-purpose-grid">
-                <PurposeOption defaultChecked icon={CreditCard} label="Payment Processing Platform" value="payments" />
-                <PurposeOption icon={Building2} label="Treasury Management" value="treasury" />
-                <PurposeOption icon={BarChart2} label="Institutional Trading" value="trading" />
+                <PurposeOption defaultChecked={!draftString(draft, "accountPurpose") || draftString(draft, "accountPurpose") === "payments"} icon={CreditCard} label="Payment Processing Platform" value="payments" />
+                <PurposeOption defaultChecked={draftString(draft, "accountPurpose") === "treasury"} icon={Building2} label="Treasury Management" value="treasury" />
+                <PurposeOption defaultChecked={draftString(draft, "accountPurpose") === "trading"} icon={BarChart2} label="Institutional Trading" value="trading" />
               </div>
               <div className="gtt-field-grid">
-                <SelectField label="Expected Monthly Fiat Activity (USD)" name="monthlyFiat" options={["0 to 100k", "100k to 1M", "1M to 10M", "10M+"]} />
-                <SelectField label="Expected Monthly Crypto Activity (USDC)" name="monthlyCrypto" options={["0 to 100k", "100k to 1M", "1M to 10M", "10M+"]} />
+                <SelectField defaultValue={draftString(draft, "monthlyFiat")} label="Expected Monthly Fiat Activity (USD)" name="monthlyFiat" options={["0 to 100k", "100k to 1M", "1M to 10M", "10M+"]} />
+                <SelectField defaultValue={draftString(draft, "monthlyCrypto")} label="Expected Monthly Crypto Activity (USDC)" name="monthlyCrypto" options={["0 to 100k", "100k to 1M", "1M to 10M", "10M+"]} />
               </div>
             </FormSection>
             <FormSection index="2" title="Source of Funds">
               <div className="gtt-choice-grid">
                 {["Business Operating Funds", "Equity Capital", "Investor Funds", "Other Business Proceeds"].map((item, index) => (
-                  <label key={item}><input defaultChecked={index === 0} name="sourceOrigin" type="radio" value={item} /> {item}</label>
+                  <label key={item}><input defaultChecked={draftString(draft, "sourceOrigin") ? draftString(draft, "sourceOrigin") === item : index === 0} name="sourceOrigin" type="radio" value={item} /> {item}</label>
                 ))}
               </div>
-              <TextArea label="Description of Fund Origin" name="fundOriginDescription" note="Include specific business activities or major funding events." placeholder="Provide details on revenue streams or funding rounds..." />
+              <TextArea defaultValue={draftString(draft, "fundOriginDescription")} label="Description of Fund Origin" name="fundOriginDescription" note="Include specific business activities or major funding events." placeholder="Provide details on revenue streams or funding rounds..." />
             </FormSection>
             <ActionRow backTo="/onboarding/step-3" error={error} navigate={navigate} primary="Submit Application" saving={saving} />
           </div>
@@ -916,23 +932,23 @@ function FormSection({ children, index, title }: { children: ReactNode; index: s
   return <section className="gtt-form-section"><h2>{index}. {title}</h2>{children}</section>;
 }
 
-function TextField({ label, name, placeholder, type = "text", wide }: { label: string; name: string; placeholder?: string; type?: string; wide?: boolean }) {
-  return <label className={wide ? "wide" : ""}><span>{label}</span><input name={name} placeholder={placeholder} type={type} /></label>;
+function TextField({ defaultValue, label, name, placeholder, type = "text", wide }: { defaultValue?: string; label: string; name: string; placeholder?: string; type?: string; wide?: boolean }) {
+  return <label className={wide ? "wide" : ""}><span>{label}</span><input defaultValue={defaultValue} name={name} placeholder={placeholder} type={type} /></label>;
 }
 
-function TextArea({ label, name, note, placeholder }: { label: string; name: string; note?: string; placeholder?: string }) {
-  return <label className="wide"><span>{label}</span><textarea name={name} placeholder={placeholder} rows={4} />{note ? <small>{note}</small> : null}</label>;
+function TextArea({ defaultValue, label, name, note, placeholder }: { defaultValue?: string; label: string; name: string; note?: string; placeholder?: string }) {
+  return <label className="wide"><span>{label}</span><textarea defaultValue={defaultValue} name={name} placeholder={placeholder} rows={4} />{note ? <small>{note}</small> : null}</label>;
 }
 
-function SelectField({ label, name, options }: { label: string; name: string; options: string[] }) {
-  return <label><span>{label}</span><select name={name}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
+function SelectField({ defaultValue, label, name, options }: { defaultValue?: string; label: string; name: string; options: string[] }) {
+  return <label><span>{label}</span><select defaultValue={defaultValue} name={name}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
 }
 
-function CheckboxGroup({ label, name, options }: { label: string; name: string; options: string[] }) {
+function CheckboxGroup({ defaultValues = [], label, name, options }: { defaultValues?: string[]; label: string; name: string; options: string[] }) {
   return (
     <fieldset>
       <legend>{label}</legend>
-      <div>{options.map((option) => <label key={option}><input name={name} type="checkbox" value={option} /> {option}</label>)}</div>
+      <div>{options.map((option) => <label key={option}><input defaultChecked={defaultValues.includes(option)} name={name} type="checkbox" value={option} /> {option}</label>)}</div>
     </fieldset>
   );
 }
@@ -1516,8 +1532,61 @@ function routeForApplication(application: OnboardingApplication): string {
   if (application.status === "approved") return "/welcome";
   if (application.status === "rejected") return "/application-pending";
   if (application.status === "pending_review" || application.currentStep === "pending_review") return "/application-pending";
-  const step = application.currentStep.match(/^step_(\d)$/)?.[1] ?? "1";
-  return `/onboarding/step-${step}`;
+  return `/onboarding/step-${onboardingStepNumber(application.currentStep)}`;
+}
+
+function onboardingStepNumber(step: OnboardingStepKey): number {
+  const parsed = Number(step.match(/^step_(\d)$/)?.[1] ?? "1");
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(Math.max(parsed, 1), 4);
+}
+
+function formToPayload(form: HTMLFormElement): OnboardingDraftPayload {
+  const payload: OnboardingDraftPayload = {};
+  for (const [key, value] of new FormData(form).entries()) {
+    if (typeof value !== "string") continue;
+    const existing = payload[key];
+    if (Array.isArray(existing)) {
+      existing.push(value);
+    } else if (typeof existing === "string") {
+      payload[key] = [existing, value];
+    } else {
+      payload[key] = value;
+    }
+  }
+  return payload;
+}
+
+function draftStorageKey(stepKey: string): string {
+  return `gtt_onboarding_draft_${stepKey}`;
+}
+
+function loadOnboardingDraft(stepKey: string): OnboardingDraftPayload {
+  const raw = sessionStorage.getItem(draftStorageKey(stepKey));
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as OnboardingDraftPayload;
+  } catch {
+    return {};
+  }
+}
+
+function saveOnboardingDraft(stepKey: string, payload: OnboardingDraftPayload): void {
+  sessionStorage.setItem(draftStorageKey(stepKey), JSON.stringify(payload));
+}
+
+function draftString(draft: OnboardingDraftPayload, key: string, fallback = ""): string {
+  const value = draft[key];
+  if (Array.isArray(value)) return value[0] ?? fallback;
+  return value ?? fallback;
+}
+
+function draftArray(draft: OnboardingDraftPayload, key: string): string[] {
+  const value = draft[key];
+  if (Array.isArray(value)) return value;
+  return value ? [value] : [];
 }
 
 function pendingStatusMeta(status: OnboardingStatus): {

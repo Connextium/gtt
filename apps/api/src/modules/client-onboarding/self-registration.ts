@@ -142,8 +142,9 @@ export const handleSaveMyOnboardingStep = async (
   if (!stepKey) return badRequest("step_key_required");
 
   const now = new Date().toISOString();
-  const existing = state.onboardingStepPayloads.find((item) => item.applicationId === bundle.application.id && item.stepKey === stepKey);
   const payload = isRecord(input.payload) ? input.payload : {};
+  const payloadStepKey = stringPayload(payload, "completedStepKey") ?? stepKey;
+  const existing = state.onboardingStepPayloads.find((item) => item.applicationId === bundle.application.id && item.stepKey === payloadStepKey);
   let savedStep: OnboardingStepPayload;
   if (existing) {
     existing.payload = payload;
@@ -154,7 +155,7 @@ export const handleSaveMyOnboardingStep = async (
       id: newId("onboarding_step"),
       tenantId: state.tenantId,
       applicationId: bundle.application.id,
-      stepKey,
+      stepKey: payloadStepKey,
       payload,
       savedAt: now
     };
@@ -413,6 +414,11 @@ const isExistingSupabaseUserError = (message: string): boolean => {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const stringPayload = (payload: Record<string, unknown>, key: string): string | undefined => {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+};
 
 const isOnboardingStep = (value: string): value is BusinessOnboardingApplication["currentStep"] =>
   ["step_1", "step_2", "step_3", "step_4", "pending_review", "reviewd"].includes(value);

@@ -103,6 +103,7 @@ test("advances onboarding current step for resume navigation", async () => {
     headers,
     stepKey: "step_2",
     payload: {
+      completedStepKey: "step_1",
       completedFrom: "step-1",
       acknowledgedFramework: true
     }
@@ -111,4 +112,5 @@ test("advances onboarding current step for resume navigation", async () => {
   assert.equal(result.status, 200);
   assert.equal(state.businessOnboardingApplications[0]?.currentStep, "step_2");
   assert.equal(state.businessOnboardingApplications[0]?.status, "draft");
+  assert.equal(state.onboardingStepPayloads[0]?.stepKey, "step_1");
 });
