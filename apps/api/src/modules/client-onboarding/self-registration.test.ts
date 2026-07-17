@@ -114,3 +114,28 @@ test("advances onboarding current step for resume navigation", async () => {
   assert.equal(state.businessOnboardingApplications[0]?.status, "draft");
   assert.equal(state.onboardingStepPayloads[0]?.stepKey, "step_1");
 });
+
+test("returns saved onboarding step payloads for persisted resume", async () => {
+  process.env.ALLOW_DEV_WITHOUT_SUPABASE = "true";
+  const state = createInitialState();
+  const headers = {
+    authorization: "Bearer dev-token",
+    "x-dev-auth-email": "finance@example.com",
+    "x-dev-auth-user-id": "auth_user_1"
+  };
+
+  await handleGetOrCreateMyOnboarding(state, headers);
+  await handleSaveMyOnboardingStep(state, {
+    headers,
+    stepKey: "step_3",
+    payload: {
+      completedStepKey: "step_2",
+      legalBusinessName: "Example Trading LLC"
+    }
+  });
+  const result = await handleGetOrCreateMyOnboarding(state, headers);
+
+  assert.equal(result.status, 200);
+  const body = result.body as { stepPayloads?: Record<string, Record<string, unknown>> };
+  assert.equal(body.stepPayloads?.step_2?.legalBusinessName, "Example Trading LLC");
+});

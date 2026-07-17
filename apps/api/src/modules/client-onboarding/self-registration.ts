@@ -123,10 +123,14 @@ export const handleGetOrCreateMyOnboarding = async (
   if (!auth) return unauthorized("business_user_auth_required");
   const persisted = await hydrateBusinessUserOnboarding(state, auth);
   const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
+  const stepPayloads = await hydrateOnboardingStepPayloads(state, bundle.application);
   await persistOnboardingBundle(state, auth, bundle);
   return {
     status: 200,
-    body: bundle
+    body: {
+      ...bundle,
+      stepPayloads
+    }
   };
 };
 
@@ -286,6 +290,44 @@ const hydrateBusinessUserOnboarding = async (
   return { profile, application };
 };
 
+const hydrateOnboardingStepPayloads = async (
+  state: ApiState,
+  application: BusinessOnboardingApplication
+): Promise<Record<string, Record<string, unknown>>> => {
+  const applicationId = uuidFromRuntimeId(application.id);
+  const supabase = supabaseAdminClient();
+  if (!supabase || !applicationId) {
+    return Object.fromEntries(
+      state.onboardingStepPayloads
+        .filter((item) => item.applicationId === application.id)
+        .map((item) => [item.stepKey, item.payload])
+    );
+  }
+
+  const result = await supabase
+    .from("onboarding_step_payloads")
+    .select("*")
+    .eq("application_id", applicationId);
+  if (result.error) throw new Error(`onboarding_step_payloads_select_failed: ${result.error.message}`);
+
+  const payloads: Record<string, Record<string, unknown>> = {};
+  for (const row of result.data ?? []) {
+    const stepPayload = mapStoredStepPayload(row);
+    payloads[stepPayload.stepKey] = stepPayload.payload;
+    upsertRuntimeStepPayload(state, stepPayload);
+  }
+  return payloads;
+};
+
+const mapStoredStepPayload = (row: Record<string, unknown>): OnboardingStepPayload => ({
+  id: `onboarding_step_${String(row.id)}`,
+  tenantId: String(row.tenant_id),
+  applicationId: `business_onboarding_application_${String(row.application_id)}`,
+  stepKey: String(row.step_key),
+  payload: isRecord(row.payload) ? row.payload : {},
+  savedAt: String(row.saved_at)
+});
+
 const mapStoredProfile = (row: Record<string, unknown>): BusinessUserProfile => ({
   id: `business_user_profile_${String(row.id)}`,
   tenantId: String(row.tenant_id),
@@ -325,6 +367,17 @@ const upsertRuntimeApplication = (state: ApiState, application: BusinessOnboardi
     return;
   }
   state.businessOnboardingApplications.push(application);
+};
+
+const upsertRuntimeStepPayload = (state: ApiState, stepPayload: OnboardingStepPayload): void => {
+  const index = state.onboardingStepPayloads.findIndex(
+    (item) => item.applicationId === stepPayload.applicationId && item.stepKey === stepPayload.stepKey
+  );
+  if (index >= 0) {
+    state.onboardingStepPayloads[index] = stepPayload;
+    return;
+  }
+  state.onboardingStepPayloads.push(stepPayload);
 };
 
 const createOrReuseInvitation = (state: ApiState, email: string): BusinessOnboardingInvitation => {

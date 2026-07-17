@@ -66,6 +66,7 @@ interface OnboardingApplication {
 
 interface MyOnboardingResponse {
   application: OnboardingApplication;
+  stepPayloads?: Record<string, OnboardingDraftPayload>;
 }
 
 interface InvitationResponse {
@@ -1525,7 +1526,15 @@ function ActivityItem({ active, copy, icon: Icon, meta, title }: { active?: bool
 
 async function nextOnboardingRoute(token: string): Promise<string> {
   const result = await apiRequest<MyOnboardingResponse>("/onboarding/me", { token });
+  restorePersistedStepPayloads(result.stepPayloads);
   return routeForApplication(result.application);
+}
+
+function restorePersistedStepPayloads(stepPayloads?: Record<string, OnboardingDraftPayload>): void {
+  if (!stepPayloads) return;
+  for (const [stepKey, payload] of Object.entries(stepPayloads)) {
+    saveOnboardingDraft(stepKey, payload);
+  }
 }
 
 function routeForApplication(application: OnboardingApplication): string {
