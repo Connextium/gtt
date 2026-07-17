@@ -531,12 +531,20 @@ function OnboardingStepScreen({ path, navigate, session }: { path: string; navig
       return;
     }
     try {
-      await apiRequest(`/onboarding/me/steps/step_${stepNumber}`, {
+      const nextStepNumber = stepNumber + 1;
+      await apiRequest(`/onboarding/me/steps/step_${nextStepNumber}`, {
         method: "PATCH",
         token,
-        body: { payload: { ...payload, completedFrom: step, savedAt: new Date().toISOString() } }
+        body: {
+          payload: {
+            ...payload,
+            completedFrom: step,
+            nextStep: `step_${nextStepNumber}`,
+            savedAt: new Date().toISOString()
+          }
+        }
       });
-      navigate(`/onboarding/step-${stepNumber + 1}`);
+      navigate(`/onboarding/step-${nextStepNumber}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to save onboarding step.");
     } finally {

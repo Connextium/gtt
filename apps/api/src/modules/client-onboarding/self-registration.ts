@@ -136,7 +136,8 @@ export const handleSaveMyOnboardingStep = async (
 ): Promise<JsonResponse> => {
   const auth = await authenticateBusinessUser(input.headers);
   if (!auth) return unauthorized("business_user_auth_required");
-  const bundle = ensureBusinessUserOnboarding(state, auth);
+  const persisted = await hydrateBusinessUserOnboarding(state, auth);
+  const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
   const stepKey = input.stepKey.trim();
   if (!stepKey) return badRequest("step_key_required");
 
@@ -180,7 +181,8 @@ export const handleSubmitMyOnboarding = async (
 ): Promise<JsonResponse> => {
   const auth = await authenticateBusinessUser(headers);
   if (!auth) return unauthorized("business_user_auth_required");
-  const bundle = ensureBusinessUserOnboarding(state, auth);
+  const persisted = await hydrateBusinessUserOnboarding(state, auth);
+  const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
   const now = new Date().toISOString();
   bundle.application.status = "pending_review";
   bundle.application.currentStep = "pending_review";

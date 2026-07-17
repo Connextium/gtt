@@ -88,3 +88,27 @@ test("stores authenticated onboarding step payload before submission", async () 
   });
   assert.equal(state.businessOnboardingApplications[0]?.status, "pending_review");
 });
+
+test("advances onboarding current step for resume navigation", async () => {
+  process.env.ALLOW_DEV_WITHOUT_SUPABASE = "true";
+  const state = createInitialState();
+  const headers = {
+    authorization: "Bearer dev-token",
+    "x-dev-auth-email": "finance@example.com",
+    "x-dev-auth-user-id": "auth_user_1"
+  };
+
+  await handleGetOrCreateMyOnboarding(state, headers);
+  const result = await handleSaveMyOnboardingStep(state, {
+    headers,
+    stepKey: "step_2",
+    payload: {
+      completedFrom: "step-1",
+      acknowledgedFramework: true
+    }
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(state.businessOnboardingApplications[0]?.currentStep, "step_2");
+  assert.equal(state.businessOnboardingApplications[0]?.status, "draft");
+});
