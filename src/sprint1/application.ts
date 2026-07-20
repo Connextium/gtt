@@ -1,9 +1,10 @@
-import { postOpeningJournal, type PostOpeningJournalInput } from "./accounting.js";
+import { makeOutboxEvent, postOpeningJournal, type PostOpeningJournalInput } from "./accounting.js";
 import { initialControlAccounts } from "./control-accounts.js";
 import { invariant } from "./errors.js";
 import { executeIdempotently, hashRequest } from "./idempotency.js";
 import { nextId, nowIso } from "./ids.js";
 import { parseMinorUnits } from "./money.js";
+import { initialPostingRules } from "./posting-rules.js";
 import { InMemorySprint1Store } from "./store.js";
 import type {
   AccountOfDigitalAsset,
@@ -49,6 +50,13 @@ export class Sprint1Application {
     }
   }
 
+  bootstrapPostingRules(): void {
+    const existingCount = this.store.read((state) => state.postingRules.size);
+    if (existingCount === 0) {
+      this.store.seedPostingRules(initialPostingRules);
+    }
+  }
+
   createBusinessClient(context: ActorContext, input: CreateBusinessClientInput): BusinessClient {
     return this.store.transaction((state) => {
       return executeIdempotently(state.idempotencyRecords, input.idempotencyKey, hashRequest(input), () => {
@@ -86,13 +94,8 @@ export class Sprint1Application {
         };
 
         state.businessClients.set(client.id, client);
-        state.outboxEvents.set(nextId("outbox"), {
-          id: nextId("outbox"),
-          tenantId: context.tenantId,
-          eventType: "business_client.created",
-          payload: client,
-          createdAt: nowIso()
-        });
+        const outboxEvent = makeOutboxEvent(context, "business_client.created", client);
+        state.outboxEvents.set(outboxEvent.id, outboxEvent);
         return client;
       });
     });
@@ -142,13 +145,8 @@ export class Sprint1Application {
         };
 
         state.accountsOfDigitalAsset.set(account.id, account);
-        state.outboxEvents.set(nextId("outbox"), {
-          id: nextId("outbox"),
-          tenantId: context.tenantId,
-          eventType: "account_of_digital_asset.provisioned",
-          payload: account,
-          createdAt: nowIso()
-        });
+        const outboxEvent = makeOutboxEvent(context, "account_of_digital_asset.provisioned", account);
+        state.outboxEvents.set(outboxEvent.id, outboxEvent);
         return account;
       });
     });
@@ -245,6 +243,10 @@ export class Sprint1Application {
       const client = state.businessClients.get(businessClientId);
       invariant(Boolean(client), "business_client_not_found", { businessClientId });
       invariant(client?.tenantId === context.tenantId, "tenant_access_denied");
+      invariant(client?.onboardingStatus === "submitted", "business_client_invalid_status_transition", {
+        from: client?.onboardingStatus,
+        to: "approved"
+      });
 
       const updated: BusinessClient = {
         ...client!,
@@ -262,5 +264,6 @@ export const createSprint1Application = (): { app: Sprint1Application; store: In
   const store = new InMemorySprint1Store();
   const app = new Sprint1Application(store);
   app.bootstrapControlAccounts();
+  app.bootstrapPostingRules();
   return { app, store };
 };

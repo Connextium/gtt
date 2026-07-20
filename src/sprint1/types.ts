@@ -78,6 +78,14 @@ export interface LedgerAccount {
   normalBalance: NormalBalance;
 }
 
+export interface PostingRuleRecord {
+  eventType: TreasuryAccountingEvent["eventType"];
+  ruleName: string;
+  status: "active" | "draft";
+  debitLedgerAccountCode: string;
+  creditLedgerAccountCode: string;
+}
+
 export interface TreasuryAccountingEvent {
   id: Id;
   tenantId: Id;

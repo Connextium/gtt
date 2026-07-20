@@ -8,6 +8,7 @@ import type {
   LedgerAccount,
   LinkedInstrument,
   OutboxEvent,
+  PostingRuleRecord,
   TreasuryJournalEntry
 } from "./types.js";
 
@@ -16,6 +17,7 @@ export interface Sprint1State {
   accountsOfDigitalAsset: Map<string, AccountOfDigitalAsset>;
   linkedInstruments: Map<string, LinkedInstrument>;
   ledgerAccounts: Map<string, LedgerAccount>;
+  postingRules: Map<string, PostingRuleRecord>;
   journalEntries: Map<string, TreasuryJournalEntry>;
   idempotencyRecords: Map<string, IdempotencyRecord>;
   inboundEvents: Map<string, InboundEvent>;
@@ -31,6 +33,7 @@ const cloneState = (source: Sprint1State): Sprint1State => ({
   accountsOfDigitalAsset: cloneMap(source.accountsOfDigitalAsset),
   linkedInstruments: cloneMap(source.linkedInstruments),
   ledgerAccounts: cloneMap(source.ledgerAccounts),
+  postingRules: cloneMap(source.postingRules),
   journalEntries: cloneMap(source.journalEntries),
   idempotencyRecords: cloneMap(source.idempotencyRecords),
   inboundEvents: cloneMap(source.inboundEvents),
@@ -43,6 +46,7 @@ export class InMemorySprint1Store {
     accountsOfDigitalAsset: new Map(),
     linkedInstruments: new Map(),
     ledgerAccounts: new Map(),
+    postingRules: new Map(),
     journalEntries: new Map(),
     idempotencyRecords: new Map(),
     inboundEvents: new Map(),
@@ -71,6 +75,17 @@ export class InMemorySprint1Store {
     });
   }
 
+  seedPostingRules(rules: PostingRuleRecord[]): void {
+    this.transaction((state) => {
+      for (const rule of rules) {
+        invariant(!state.postingRules.has(rule.eventType), "posting_rule_duplicate", {
+          eventType: rule.eventType
+        });
+        state.postingRules.set(rule.eventType, rule);
+      }
+    });
+  }
+
   insertInboundEvent(event: InboundEvent): void {
     this.transaction((state) => {
       invariant(!state.inboundEvents.has(event.eventId), "inbound_event_duplicate", { eventId: event.eventId });
@@ -80,6 +95,10 @@ export class InMemorySprint1Store {
 
   outboxEvents(): OutboxEvent[] {
     return this.read((state) => [...state.outboxEvents.values()]);
+  }
+
+  outboxEventIdsMatchStorageKeys(): boolean {
+    return this.read((state) => [...state.outboxEvents.entries()].every(([key, event]) => key === event.id));
   }
 
   journalEntries(): TreasuryJournalEntry[] {

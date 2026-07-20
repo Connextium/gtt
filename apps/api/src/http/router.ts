@@ -1,3 +1,4 @@
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { publicApiKey, type ApiScope } from "../auth/index.js";
 import { invokeCircle, verifyCircleWebhook } from "../modules/circle/index.js";
 import {
@@ -7,16 +8,29 @@ import {
   handleSubmitMyOnboarding
 } from "../modules/client-onboarding/index.js";
 import { checkDatabaseConnection } from "../db/connection.js";
+import { listApiKeysFromState, listApiKeysFromTables } from "../db/api-key-store.js";
+import {
+  decideBusinessOnboardingApplication,
+  getBusinessOnboardingApplication,
+  listBusinessOnboardingApplications,
+  type BusinessOnboardingReviewActionType
+} from "../db/business-onboarding-review-store.js";
+import { listInternalUsersFromIdentityTables } from "../db/internal-identity-store.js";
+import { getSupabaseClient } from "../db/transaction.js";
 import { stateStoreStatus } from "../db/state-store.js";
 import {
   createApiClientAndKey,
   dailyClose,
+  emitAudit,
   emitOutbox,
   newId,
   releaseReadiness,
   toMinorUnits,
   trialBalance,
-  type ApiState
+  type ApiState,
+  type AppUser,
+  type InternalUserInvitation,
+  type RoleCode
 } from "../data.js";
 import { applicationManifest, health } from "../index.js";
 import { badRequest, notFound, type JsonResponse } from "./index.js";
@@ -33,8 +47,13 @@ export const routeMetadata = (method: string, pathname: string): { public?: bool
   if (method === "GET" && ["/health", "/manifest", "/version", "/readiness"].includes(pathname)) return { public: true };
   if (method === "POST" && pathname === "/webhooks/circle") return { public: true };
   if (method === "POST" && pathname === "/auth/invitations") return { public: true };
+  if (method === "GET" && pathname === "/auth/me") return { public: true };
+  if (method === "POST" && pathname === "/admin/bootstrap/super-admin") return { public: true };
+  if (method === "POST" && ["/internal-access/initialize", "/internal-access/login"].includes(pathname)) return { public: true };
   if (pathname === "/onboarding/me" || pathname.startsWith("/onboarding/me/")) return { public: true };
   if (pathname.startsWith("/api-keys")) return { requiredScopes: ["admin:api-keys"] };
+  if (pathname.startsWith("/admin/business-onboarding")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:clients"] };
+  if (pathname.startsWith("/admin/users") || pathname === "/admin/roles") return { requiredScopes: ["admin:users"] };
   if (method === "GET") return { requiredScopes: ["read:operations"] };
   if (pathname.includes("reconciliation")) return { requiredScopes: ["write:reconciliation"] };
   if (pathname.includes("liquidity-rebalancing")) return { requiredScopes: ["write:rebalancing"] };
@@ -70,6 +89,18 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
       headers: input.headers
     });
   }
+  if (method === "POST" && pathname === "/admin/bootstrap/super-admin") {
+    return handleBootstrapSuperAdmin(state, body, input.headers ?? {});
+  }
+  if (method === "POST" && pathname === "/internal-access/initialize") {
+    return handleInternalAccessInitialize(state, body);
+  }
+  if (method === "POST" && pathname === "/internal-access/login") {
+    return handleInternalAccessLogin(state, body);
+  }
+  if (method === "GET" && pathname === "/auth/me") {
+    return handleAuthMe(state, input.headers ?? {});
+  }
   if (method === "GET" && pathname === "/onboarding/me") {
     return handleGetOrCreateMyOnboarding(state, input.headers ?? {});
   }
@@ -92,7 +123,277 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
       expiresAt: optionalStringBody(body, "expiresAt")
     }));
   }
-  if (method === "GET" && pathname === "/api-keys") return ok({ keys: state.apiKeys.map(publicApiKey) });
+  if (method === "GET" && pathname === "/api-keys") {
+    const databaseKeys = await listApiKeysFromTables();
+    return ok({ keys: databaseKeys ?? listApiKeysFromState(state) });
+  }
+
+  if (method === "GET" && pathname === "/admin/roles") return ok({ roles: state.roles });
+  if (method === "GET" && pathname === "/admin/business-onboarding/applications") {
+    return ok({ applications: await listBusinessOnboardingApplications(state) });
+  }
+  const adminOnboardingMatch = pathname.match(/^\/admin\/business-onboarding\/applications\/([^/]+)$/);
+  if (method === "GET" && adminOnboardingMatch) {
+    const application = await getBusinessOnboardingApplication(state, decodeURIComponent(adminOnboardingMatch[1]!));
+    return application ? ok({ application }) : notFound(pathname);
+  }
+  const adminOnboardingActionMatch = pathname.match(/^\/admin\/business-onboarding\/applications\/([^/]+)\/(approve|reject|request-info)$/);
+  if (method === "POST" && adminOnboardingActionMatch) {
+    const action = reviewActionFromRoute(adminOnboardingActionMatch[2]!);
+    if (!action) return badRequest("invalid_review_action");
+    const application = await decideBusinessOnboardingApplication(state, {
+      action,
+      actorEmail: optionalStringBody(body, "actorEmail"),
+      applicationId: decodeURIComponent(adminOnboardingActionMatch[1]!),
+      note: optionalStringBody(body, "note"),
+      requestedFields: (arrayBody(body, "requestedFields") ?? []).map(String)
+    });
+    return application ? ok({ application }) : notFound(pathname);
+  }
+  if (method === "GET" && pathname === "/admin/users") {
+    const databaseUsers = await listInternalUsersFromIdentityTables();
+    return ok({ users: databaseUsers ?? state.appUsers.map((user) => userWithRoles(state, user)) });
+  }
+  if (method === "POST" && pathname === "/admin/users/invitations") {
+    const roleCode = stringBody(body, "roleCode") as RoleCode;
+    if (!roleCode || roleCode === "business_user" || roleCode === "super_admin" || !state.roles.some((role) => role.roleCode === roleCode)) return badRequest("invalid_internal_role");
+    const idempotencyKey = stringBody(body, "idempotencyKey");
+    if (!idempotencyKey) return badRequest("idempotency_key_required");
+    const email = stringBody(body, "email").trim().toLowerCase();
+    if (!email) return badRequest("email_required");
+    const duplicate = state.internalUserInvitations.find((item) => item.idempotencyKey === idempotencyKey);
+    if (duplicate) return ok({ invitation: duplicate, duplicate: true });
+    const existingInternalUser = state.appUsers.find((item) => item.email === email && item.userType === "internal_user");
+    if (existingInternalUser && existingInternalUser.status !== "invited") return badRequest("internal_user_already_exists");
+
+    const invitedAt = new Date().toISOString();
+    const setupToken = randomBytes(32).toString("base64url");
+    const provisionedUser = existingInternalUser ?? {
+      id: randomUUID(),
+      tenantId: persistentTenantId(state),
+      authUserId: randomUUID(),
+      email,
+      displayName: stringBody(body, "displayName", email),
+      userType: "internal_user" as const,
+      status: "invited" as const,
+      createdAt: invitedAt,
+      updatedAt: invitedAt
+    };
+    if (!existingInternalUser) state.appUsers.push(provisionedUser);
+    else {
+      existingInternalUser.displayName = stringBody(body, "displayName", existingInternalUser.displayName);
+      existingInternalUser.updatedAt = invitedAt;
+    }
+    assignRoles(state, provisionedUser.id, [roleCode], stringBody(body, "invitedByUserId", "user_platform_admin"));
+    const invitation = {
+      id: randomUUID(),
+      tenantId: provisionedUser.tenantId,
+      email,
+      displayName: provisionedUser.displayName,
+      roleCode: roleCode as Exclude<RoleCode, "business_user">,
+      status: "sent" as const,
+      supabaseUserId: provisionedUser.authUserId,
+      idempotencyKey,
+      invitedByUserId: stringBody(body, "invitedByUserId", "user_platform_admin"),
+      invitedAt,
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString(),
+      createdAt: invitedAt,
+      updatedAt: invitedAt
+    };
+    state.internalUserInvitations.push(invitation);
+    state.internalAccessSecrets.push({
+      userId: provisionedUser.id,
+      invitationId: invitation.id,
+      email,
+      setupTokenHash: hashSecret(setupToken),
+      createdAt: invitedAt,
+      updatedAt: invitedAt
+    });
+    emitAudit(state, {
+      eventType: "internal_user.invited",
+      requestPath: pathname,
+      requestMethod: method,
+      correlationId: idempotencyKey
+    });
+    const baseUrl = stringBody(body, "internalAccessBaseUrl", process.env.INTERNAL_OPERATION_BASE_URL ?? "http://localhost:5173/internal/access/init");
+    const initializationUrl = `${baseUrl}?email=${encodeURIComponent(email)}&token=${encodeURIComponent(setupToken)}`;
+    const emailDelivery = await sendInternalInvitationEmail({
+      email,
+      displayName: invitation.displayName,
+      initializationUrl,
+      invitationId: invitation.id,
+      roleCode: invitation.roleCode
+    });
+    if (emailDelivery.supabaseUserId && isUuid(emailDelivery.supabaseUserId)) {
+      provisionedUser.authUserId = emailDelivery.supabaseUserId;
+      provisionedUser.updatedAt = new Date().toISOString();
+      invitation.supabaseUserId = emailDelivery.supabaseUserId;
+      invitation.updatedAt = provisionedUser.updatedAt;
+    }
+    emitAudit(state, {
+      eventType: emailDelivery.sent ? "internal_user.invitation_email.sent" : "internal_user.invitation_email.dev_queued",
+      requestPath: pathname,
+      requestMethod: method,
+      correlationId: idempotencyKey
+    });
+    return created({ invitation, user: userWithRoles(state, provisionedUser), setupToken, initializationUrl, emailDelivery });
+  }
+  const resendInternalInvitationMatch = pathname.match(/^\/admin\/users\/([^/]+)\/invitation\/resend$/);
+  if (method === "POST" && resendInternalInvitationMatch) {
+    const user = requireItem(state.appUsers, resendInternalInvitationMatch[1]!, "app_user_not_found");
+    if (user.userType !== "internal_user") return badRequest("internal_user_required");
+    if (user.status !== "invited") return badRequest("internal_user_not_invited");
+    const roles = rolesForUser(state, user.id).filter((role): role is Exclude<RoleCode, "business_user"> => role !== "business_user");
+    const roleCode = roles.find((role) => role !== "super_admin") ?? roles[0];
+    if (!roleCode) return badRequest("internal_user_role_required");
+
+    const now = new Date().toISOString();
+    const setupToken = randomBytes(32).toString("base64url");
+    let invitation = state.internalUserInvitations
+      .filter((item) => item.email === user.email && item.status === "sent")
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+
+    if (!invitation) {
+      invitation = {
+        id: randomUUID(),
+        tenantId: user.tenantId,
+        email: user.email,
+        displayName: user.displayName,
+        roleCode,
+        status: "sent",
+        supabaseUserId: user.authUserId,
+        idempotencyKey: `resend-${user.id}-${Date.now()}`,
+        invitedByUserId: stringBody(body, "invitedByUserId", "user_platform_admin"),
+        invitedAt: now,
+        expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString(),
+        createdAt: now,
+        updatedAt: now
+      };
+      state.internalUserInvitations.push(invitation);
+    } else {
+      invitation.displayName = user.displayName;
+      invitation.roleCode = roleCode;
+      invitation.supabaseUserId = user.authUserId;
+      invitation.invitedAt = now;
+      invitation.expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString();
+      invitation.updatedAt = now;
+    }
+
+    const secret = state.internalAccessSecrets.find((item) => item.userId === user.id || item.invitationId === invitation.id || item.email === user.email);
+    if (secret) {
+      secret.userId = user.id;
+      secret.invitationId = invitation.id;
+      secret.email = user.email;
+      secret.setupTokenHash = hashSecret(setupToken);
+      secret.updatedAt = now;
+    } else {
+      state.internalAccessSecrets.push({
+        userId: user.id,
+        invitationId: invitation.id,
+        email: user.email,
+        setupTokenHash: hashSecret(setupToken),
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+
+    user.updatedAt = now;
+    const baseUrl = stringBody(body, "internalAccessBaseUrl", process.env.INTERNAL_OPERATION_BASE_URL ?? "http://localhost:5173/internal/access/init");
+    const initializationUrl = `${baseUrl}?email=${encodeURIComponent(user.email)}&token=${encodeURIComponent(setupToken)}`;
+    const emailDelivery = await sendInternalInvitationEmail({
+      email: user.email,
+      displayName: user.displayName,
+      initializationUrl,
+      invitationId: invitation.id,
+      roleCode
+    });
+    if (emailDelivery.supabaseUserId && isUuid(emailDelivery.supabaseUserId)) {
+      user.authUserId = emailDelivery.supabaseUserId;
+      user.updatedAt = new Date().toISOString();
+      invitation.supabaseUserId = emailDelivery.supabaseUserId;
+      invitation.updatedAt = user.updatedAt;
+    }
+    emitAudit(state, {
+      eventType: emailDelivery.sent ? "internal_user.invitation_email.resent" : "internal_user.invitation_email.dev_requeued",
+      requestPath: pathname,
+      requestMethod: method,
+      correlationId: invitation.idempotencyKey
+    });
+    return ok({ invitation, user: userWithRoles(state, user), setupToken, initializationUrl, emailDelivery });
+  }
+  const adminUserMatch = pathname.match(/^\/admin\/users\/([^/]+)$/);
+  if (method === "GET" && adminUserMatch) return ok({ user: userWithRoles(state, requireItem(state.appUsers, adminUserMatch[1]!, "app_user_not_found")) });
+  if (method === "PATCH" && adminUserMatch) {
+    const user = requireItem(state.appUsers, adminUserMatch[1]!, "app_user_not_found");
+    if (user.userType !== "internal_user") return badRequest("internal_user_required");
+    const displayName = optionalStringBody(body, "displayName")?.trim();
+    const email = optionalStringBody(body, "email")?.trim().toLowerCase();
+    const status = optionalStringBody(body, "status") as AppUser["status"] | undefined;
+    const roleCodes = arrayBody(body, "roles") as RoleCode[] | undefined;
+
+    if (displayName !== undefined && !displayName) return badRequest("display_name_required");
+    if (email !== undefined && !email) return badRequest("email_required");
+    if (email && state.appUsers.some((item) => item.id !== user.id && item.email === email)) return badRequest("email_already_in_use");
+    if (status !== undefined && !["invited", "active", "disabled"].includes(status)) return badRequest("invalid_user_status");
+    if (roleCodes !== undefined) {
+      if (!roleCodes.length) return badRequest("roles_required");
+      if (roleCodes.some((roleCode) => roleCode === "business_user" || !state.roles.some((role) => role.roleCode === roleCode))) return badRequest("invalid_role");
+    }
+    const nextStatus = status ?? user.status;
+    const nextRoles = roleCodes ?? rolesForUser(state, user.id);
+    const currentlyActiveAdmin = user.status === "active" && (hasRole(state, user.id, "platform_admin") || hasRole(state, user.id, "super_admin"));
+    const remainsActiveAdmin = nextStatus === "active" && (nextRoles.includes("platform_admin") || nextRoles.includes("super_admin"));
+    if (currentlyActiveAdmin && !remainsActiveAdmin && activePlatformAdminCount(state) <= 1) {
+      return badRequest("last_active_platform_admin_required");
+    }
+
+    const previousEmail = user.email;
+    const now = new Date().toISOString();
+    if (displayName !== undefined) user.displayName = displayName;
+    if (email !== undefined) user.email = email;
+    user.status = nextStatus;
+    user.updatedAt = now;
+    if (roleCodes !== undefined) assignRoles(state, user.id, roleCodes, stringBody(body, "updatedByUserId", "user_platform_admin"));
+    for (const invitation of state.internalUserInvitations.filter((item) => item.email === previousEmail || item.email === user.email)) {
+      invitation.email = user.email;
+      invitation.displayName = user.displayName;
+      invitation.updatedAt = now;
+    }
+    for (const secret of state.internalAccessSecrets.filter((item) => item.userId === user.id || item.email === previousEmail)) {
+      secret.email = user.email;
+      secret.updatedAt = now;
+    }
+    emitAudit(state, {
+      eventType: "internal_user.updated",
+      requestPath: pathname,
+      requestMethod: method,
+      correlationId: stringBody(body, "idempotencyKey", `update-${user.id}-${Date.now()}`)
+    });
+    return ok({ user: userWithRoles(state, user) });
+  }
+  const adminUserRolesMatch = pathname.match(/^\/admin\/users\/([^/]+)\/roles$/);
+  if (method === "PATCH" && adminUserRolesMatch) {
+    const user = requireItem(state.appUsers, adminUserRolesMatch[1]!, "app_user_not_found");
+    if (user.status === "disabled") return badRequest("disabled_user_cannot_receive_roles");
+    const roleCodes = arrayBody(body, "roles") as RoleCode[] | undefined;
+    if (!roleCodes?.length) return badRequest("roles_required");
+    if (roleCodes.some((roleCode) => !state.roles.some((role) => role.roleCode === roleCode))) return badRequest("invalid_role");
+    assignRoles(state, user.id, roleCodes, stringBody(body, "assignedByUserId", "user_platform_admin"));
+    user.updatedAt = new Date().toISOString();
+    return ok({ user: userWithRoles(state, user) });
+  }
+  const adminUserStatusMatch = pathname.match(/^\/admin\/users\/([^/]+)\/status$/);
+  if (method === "PATCH" && adminUserStatusMatch) {
+    const user = requireItem(state.appUsers, adminUserStatusMatch[1]!, "app_user_not_found");
+    const status = stringBody(body, "status") as AppUser["status"];
+    if (!["invited", "active", "disabled"].includes(status)) return badRequest("invalid_user_status");
+    if (status === "disabled" && hasRole(state, user.id, "platform_admin") && activePlatformAdminCount(state) <= 1) {
+      return badRequest("last_active_platform_admin_required");
+    }
+    user.status = status;
+    user.updatedAt = new Date().toISOString();
+    return ok({ user: userWithRoles(state, user) });
+  }
   const apiKeyMatch = pathname.match(/^\/api-keys\/([^/]+)$/);
   if (method === "GET" && apiKeyMatch) return ok({ key: publicApiKey(requireItem(state.apiKeys, apiKeyMatch[1]!, "api_key_not_found")) });
   const revokeMatch = pathname.match(/^\/api-keys\/([^/]+)\/revoke$/);
@@ -132,6 +433,8 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   const onboardingMatch = pathname.match(/^\/business-clients\/([^/]+)\/submit-onboarding$/);
   if (method === "POST" && onboardingMatch) {
     const client = requireItem(state.businessClients, onboardingMatch[1]!, "business_client_not_found");
+    const transitionError = validateBusinessClientTransition(client.onboardingStatus, "submitted");
+    if (transitionError) return badRequest(transitionError);
     client.onboardingStatus = "submitted";
     const circle = await invokeCircle(state, { tenantId: state.tenantId, operationType: "client_onboarding", payload: { businessClientId: client.id } });
     client.circleApplicationId = circle.providerReferenceId;
@@ -141,6 +444,8 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   const mapCircleMatch = pathname.match(/^\/business-clients\/([^/]+)\/map-circle$/);
   if (method === "POST" && mapCircleMatch) {
     const client = requireItem(state.businessClients, mapCircleMatch[1]!, "business_client_not_found");
+    const transitionError = validateBusinessClientTransition(client.onboardingStatus, "approved");
+    if (transitionError) return badRequest(transitionError);
     client.circleClientEntityId = stringBody(body, "circleClientEntityId", `circle_${client.id}`);
     client.circleApplicationId = stringBody(body, "circleApplicationId", `app_${client.id}`);
     client.onboardingStatus = "approved";
@@ -149,15 +454,21 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   const clientRestrictionMatch = pathname.match(/^\/business-clients\/([^/]+)\/(restrict|close)$/);
   if (method === "POST" && clientRestrictionMatch) {
     const client = requireItem(state.businessClients, clientRestrictionMatch[1]!, "business_client_not_found");
-    client.onboardingStatus = clientRestrictionMatch[2] === "restrict" ? "restricted" : "closed";
+    const nextStatus = clientRestrictionMatch[2] === "restrict" ? "restricted" as const : "closed" as const;
+    const transitionError = validateBusinessClientTransition(client.onboardingStatus, nextStatus);
+    if (transitionError) return badRequest(transitionError);
+    client.onboardingStatus = nextStatus;
     return ok({ businessClient: client });
   }
 
   if (method === "POST" && pathname === "/accounts-of-digital-asset") {
+    const businessClientId = stringBody(body, "businessClientId", "client_buyer");
+    const client = requireItem(state.businessClients, businessClientId, "business_client_not_found");
+    if (client.onboardingStatus !== "approved") return badRequest("business_client_not_approved");
     const account = {
       id: newId("ada"),
       tenantId: state.tenantId,
-      businessClientId: stringBody(body, "businessClientId", "client_buyer"),
+      businessClientId,
       accountName: stringBody(body, "accountName", "New ADA"),
       usePurpose: "settlement" as const,
       status: "active" as const,
@@ -182,7 +493,10 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   const accountRestrictionMatch = pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/(restrict|unrestrict)$/);
   if (method === "POST" && accountRestrictionMatch) {
     const account = requireItem(state.accounts, accountRestrictionMatch[1]!, "account_not_found");
-    account.status = accountRestrictionMatch[2] === "restrict" ? "restricted" : "active";
+    const nextStatus = accountRestrictionMatch[2] === "restrict" ? "restricted" as const : "active" as const;
+    const transitionError = validateAccountTransition(account.status, nextStatus);
+    if (transitionError) return badRequest(transitionError);
+    account.status = nextStatus;
     return ok({ account });
   }
   const balanceMatch = pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/balance$/);
@@ -190,7 +504,30 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   const statementMatch = pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/statement$/);
   if (method === "GET" && statementMatch) return ok({ accountId: statementMatch[1], journals: state.journals.filter((item) => item.accountOfDigitalAssetId === statementMatch[1]) });
 
-  if (method === "GET" && pathname === "/ledger/chart-of-accounts") return ok({ accounts: ["10020 Customer USDC Asset", "20400 Customer Liability", "10150 Suspense"] });
+  if (method === "GET" && pathname === "/ledger/chart-of-accounts") return ok({ accounts: chartOfAccounts });
+  if (method === "GET" && pathname === "/ledger/posting-rules") return ok({ postingRules });
+  if (method === "POST" && pathname === "/ledger/events/opening-journal") {
+    const accountOfDigitalAssetId = stringBody(body, "accountOfDigitalAssetId");
+    requireItem(state.accounts, accountOfDigitalAssetId, "account_not_found");
+    const rule = postingRules.find((item) => item.eventType === "treasury.opening_journal.posted" && item.status === "active");
+    if (!rule) return badRequest("posting_rule_not_active");
+    const amountMinorUnits = toMinorUnits(body.amountMinorUnits, 0n);
+    if (amountMinorUnits <= 0n) return badRequest("money_amount_must_be_positive");
+    const journal = {
+      id: newId("journal"),
+      tenantId: state.tenantId,
+      description: stringBody(body, "description", rule.ruleName),
+      amountMinorUnits,
+      debitLedgerAccountCode: rule.debitLedgerAccountCode,
+      creditLedgerAccountCode: rule.creditLedgerAccountCode,
+      accountOfDigitalAssetId,
+      createdAt: new Date().toISOString()
+    };
+    state.journals.push(journal);
+    balanceFor(state, accountOfDigitalAssetId).availableMinorUnits += journal.amountMinorUnits;
+    emitOutbox(state, "treasury.journal_entry.posted", { journalEntryId: journal.id, postingRule: rule.eventType });
+    return created({ journal });
+  }
   if (method === "POST" && pathname === "/ledger/journals") {
     const journal = {
       id: newId("journal"),
@@ -419,8 +756,8 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
     event.processedAt = new Date().toISOString();
     return ok({ event });
   }
-  if (method === "GET" && pathname === "/audit-log") return ok({ auditEvents: state.auditEvents });
-  if (method === "GET" && pathname === "/operations/dashboard") return ok({ dailyClose: dailyClose(state), recommendations: state.recommendations, breaks: state.reconciliationBreaks });
+  if (method === "GET" && ["/audit-log", "/audit-events"].includes(pathname)) return ok({ auditEvents: state.auditEvents });
+  if (method === "GET" && pathname === "/internal/operations/commandcentre") return ok({ dailyClose: dailyClose(state), recommendations: state.recommendations, breaks: state.reconciliationBreaks });
 
   if (method === "POST" && pathname === "/webhooks/circle") {
     const verification = verifyCircleWebhook(input.rawBody ?? JSON.stringify(body), input.headers?.["circle-signature"]);
@@ -457,7 +794,17 @@ const ok = (body: unknown): JsonResponse => ({ status: 200, body });
 const created = (body: unknown): JsonResponse => ({ status: 201, body });
 const stringBody = (body: Record<string, unknown>, key: string, fallback?: string): string => typeof body[key] === "string" ? body[key] as string : fallback ?? "";
 const optionalStringBody = (body: Record<string, unknown>, key: string): string | undefined => typeof body[key] === "string" ? body[key] as string : undefined;
+const uuidBody = (body: Record<string, unknown>, key: string): string | undefined => {
+  const value = optionalStringBody(body, key);
+  return value && isUuid(value) ? value : undefined;
+};
 const arrayBody = (body: Record<string, unknown>, key: string): unknown[] | undefined => Array.isArray(body[key]) ? body[key] as unknown[] : undefined;
+const reviewActionFromRoute = (value: string): BusinessOnboardingReviewActionType | undefined => {
+  if (value === "approve") return "approved";
+  if (value === "reject") return "rejected";
+  if (value === "request-info") return "requested_information";
+  return undefined;
+};
 const requireItem = <T extends { id: string }>(items: T[], id: string, errorCode: string): T => {
   const item = items.find((candidate) => candidate.id === id);
   if (!item) throw new Error(errorCode);
@@ -467,6 +814,349 @@ const balanceFor = (state: ApiState, accountOfDigitalAssetId: string) => {
   const balance = state.balances.find((item) => item.accountOfDigitalAssetId === accountOfDigitalAssetId);
   if (!balance) throw new Error("balance_not_found");
   return balance;
+};
+
+const rolePriority: RoleCode[] = ["super_admin", "platform_admin", "platform_operator", "treasury_operator", "auditor", "business_user"];
+
+const roleRedirects: Record<RoleCode, string> = {
+  super_admin: "/internal/operations/commandcentre",
+  platform_admin: "/internal/operations/commandcentre",
+  platform_operator: "/internal/operations/business-clients",
+  treasury_operator: "/internal/operations/ledger/chart-of-accounts",
+  auditor: "/internal/operations/audit",
+  business_user: "/onboarding/step-1"
+};
+
+const rolePermissions: Record<RoleCode, string[]> = {
+  super_admin: ["users:bootstrap", "users:invite", "users:write", "api_keys:write", "tenant:write", "tenant:read"],
+  platform_admin: ["users:invite", "users:write", "api_keys:write", "tenant:read"],
+  platform_operator: ["clients:write", "adas:write", "onboarding:review"],
+  treasury_operator: ["ledger:read", "ledger:write", "statements:read"],
+  auditor: ["audit:read", "events:read", "statements:read"],
+  business_user: ["onboarding:own"]
+};
+
+const rolesForUser = (state: ApiState, userId: string): RoleCode[] => {
+  return state.userRoleAssignments
+    .filter((assignment) => assignment.userId === userId)
+    .map((assignment) => state.roles.find((role) => role.id === assignment.roleId)?.roleCode)
+    .filter((roleCode): roleCode is RoleCode => Boolean(roleCode));
+};
+
+const userWithRoles = (state: ApiState, user: AppUser) => ({
+  ...user,
+  roles: rolesForUser(state, user.id)
+});
+
+const defaultRedirect = (roles: RoleCode[], status: AppUser["status"]): string | undefined => {
+  if (status === "disabled") return undefined;
+  const selected = rolePriority.find((role) => roles.includes(role));
+  return selected ? roleRedirects[selected] : undefined;
+};
+
+const permissionsForRoles = (roles: RoleCode[]): string[] => {
+  return [...new Set(roles.flatMap((role) => rolePermissions[role]))];
+};
+
+const handleAuthMe = (state: ApiState, headers: Record<string, string | undefined>): JsonResponse => {
+  const email = headers["x-dev-auth-email"]?.trim().toLowerCase() ?? "admin@gtt.example";
+  const user = state.appUsers.find((item) => item.email === email);
+  if (!user) return { status: 401, body: { error: "user_not_found" } };
+  const roles = rolesForUser(state, user.id);
+  return ok({
+    user: {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      tenantId: user.tenantId,
+      userType: user.userType,
+      roles,
+      status: user.status
+    },
+    permissions: user.status === "active" ? permissionsForRoles(roles) : [],
+    redirectTo: defaultRedirect(roles, user.status)
+  });
+};
+
+const assignRoles = (state: ApiState, userId: string, roleCodes: RoleCode[], assignedByUserId: string): void => {
+  const now = new Date().toISOString();
+  state.userRoleAssignments = state.userRoleAssignments.filter((assignment) => assignment.userId !== userId);
+  for (const roleCode of roleCodes) {
+    const role = state.roles.find((candidate) => candidate.roleCode === roleCode);
+    if (role) state.userRoleAssignments.push({ userId, roleId: role.id, assignedByUserId, assignedAt: now });
+  }
+};
+
+const hasRole = (state: ApiState, userId: string, roleCode: RoleCode): boolean => rolesForUser(state, userId).includes(roleCode);
+
+const activePlatformAdminCount = (state: ApiState): number => {
+  return state.appUsers.filter((user) => user.status === "active" && (hasRole(state, user.id, "platform_admin") || hasRole(state, user.id, "super_admin"))).length;
+};
+
+const persistentTenantId = (state: ApiState): string => {
+  if (isUuid(state.tenantId)) return state.tenantId;
+  return process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001";
+};
+
+const sendInternalInvitationEmail = async (input: {
+  email: string;
+  displayName: string;
+  initializationUrl: string;
+  invitationId: string;
+  roleCode: Exclude<RoleCode, "business_user">;
+}): Promise<{ sent: boolean; provider: "supabase" | "dev"; status: string; detail?: string; initializationUrl?: string; supabaseUserId?: string }> => {
+  if (!process.env.SUPABASE_URL) {
+    return {
+      sent: false,
+      provider: "dev",
+      status: "dev_email_not_configured",
+      detail: "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to send invitation email.",
+      initializationUrl: input.initializationUrl
+    };
+  }
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return {
+      sent: false,
+      provider: "supabase",
+      status: "supabase_service_role_key_required",
+      detail: "SUPABASE_SERVICE_ROLE_KEY is required because Supabase Auth Admin invite cannot send email with the anon key.",
+      initializationUrl: input.initializationUrl
+    };
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return {
+      sent: false,
+      provider: "dev",
+      status: "supabase_admin_not_configured",
+      initializationUrl: input.initializationUrl
+    };
+  }
+
+  const { data, error } = await supabase.auth.admin.inviteUserByEmail(input.email, {
+    redirectTo: input.initializationUrl,
+    data: {
+      displayName: input.displayName,
+      internalInvitationId: input.invitationId,
+      role: input.roleCode,
+      userType: "internal_user"
+    }
+  });
+
+  if (error) {
+    return {
+      sent: false,
+      provider: "supabase",
+      status: "supabase_invitation_failed",
+      detail: error.message,
+      initializationUrl: input.initializationUrl
+    };
+  }
+
+  return {
+    sent: true,
+    provider: "supabase",
+    status: "sent",
+    supabaseUserId: data.user?.id
+  };
+};
+
+const isUuid = (value: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+const handleBootstrapSuperAdmin = (
+  state: ApiState,
+  body: Record<string, unknown>,
+  headers: Record<string, string | undefined>
+): JsonResponse => {
+  const expectedToken = process.env.GTT_BOOTSTRAP_TOKEN;
+  if (!expectedToken) return { status: 503, body: { error: "bootstrap_token_not_configured" } };
+  const presentedToken = headers["x-bootstrap-token"] ?? stringBody(body, "bootstrapToken");
+  if (!presentedToken || hashSecret(presentedToken) !== hashSecret(expectedToken)) return { status: 401, body: { error: "bootstrap_token_invalid" } };
+  if (
+    state.appUsers.some((user) => rolesForUser(state, user.id).includes("super_admin")) ||
+    state.internalUserInvitations.some((invitation) => invitation.roleCode === "super_admin" && ["sent", "accepted"].includes(invitation.status))
+  ) {
+    return badRequest("super_admin_already_provisioned");
+  }
+
+  const now = new Date().toISOString();
+  const email = stringBody(body, "email").trim().toLowerCase();
+  if (!email) return badRequest("email_required");
+  const setupToken = randomBytes(32).toString("base64url");
+  ensureRole(state, "super_admin", "Super Admin");
+  const idempotencyKey = stringBody(body, "idempotencyKey", `bootstrap-${email}`);
+  const invitation = {
+    id: randomUUID(),
+    tenantId: persistentTenantId(state),
+    email,
+    displayName: stringBody(body, "displayName", "Super Admin"),
+    roleCode: "super_admin",
+    status: "sent",
+    supabaseUserId: uuidBody(body, "authUserId"),
+    idempotencyKey,
+    invitedByUserId: "bootstrap",
+    invitedAt: now,
+    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
+    createdAt: now,
+    updatedAt: now
+  } satisfies InternalUserInvitation;
+  state.internalUserInvitations.push(invitation);
+  state.internalAccessSecrets.push({
+    invitationId: invitation.id,
+    email,
+    setupTokenHash: hashSecret(setupToken),
+    createdAt: now,
+    updatedAt: now
+  });
+  const baseUrl = stringBody(body, "internalAccessBaseUrl", process.env.INTERNAL_OPERATION_BASE_URL ?? "http://localhost:5173/internal/access/init");
+  const initializationUrl = `${baseUrl}?email=${encodeURIComponent(email)}&token=${encodeURIComponent(setupToken)}`;
+  return created({
+    invitation,
+    identity: {
+      email,
+      displayName: invitation.displayName,
+      status: "invited",
+      roles: ["super_admin"]
+    },
+    setupToken,
+    initializationUrl
+  });
+};
+
+const handleInternalAccessInitialize = (state: ApiState, body: Record<string, unknown>): JsonResponse => {
+  const email = stringBody(body, "email").trim().toLowerCase();
+  const setupToken = stringBody(body, "setupToken");
+  const password = stringBody(body, "password");
+  const error = validateInternalPassword(password);
+  if (error) return badRequest(error);
+  const existingUser = state.appUsers.find((item) => item.email === email && item.userType === "internal_user");
+  if (existingUser?.status === "disabled") return { status: 403, body: { error: "internal_user_disabled" } };
+  const invitation = state.internalUserInvitations.find((item) =>
+    item.email === email &&
+    item.status === "sent" &&
+    new Date(item.expiresAt).getTime() > Date.now()
+  );
+  if (!existingUser && !invitation) return { status: 404, body: { error: "internal_invitation_not_found" } };
+  const secret = state.internalAccessSecrets.find((item) =>
+    (existingUser && item.userId === existingUser.id) ||
+    (invitation && item.invitationId === invitation.id) ||
+    item.email === email
+  );
+  if (!secret?.setupTokenHash || secret.setupTokenHash !== hashSecret(setupToken)) return { status: 401, body: { error: "setup_token_invalid" } };
+
+  const now = new Date().toISOString();
+  const invitationAuthUserId = isUuid(invitation?.supabaseUserId ?? "") ? invitation?.supabaseUserId : undefined;
+  const user = existingUser ?? {
+    id: randomUUID(),
+    tenantId: invitation?.tenantId ?? persistentTenantId(state),
+    authUserId: uuidBody(body, "authUserId") ?? invitationAuthUserId ?? randomUUID(),
+    email,
+    displayName: invitation?.displayName ?? email,
+    userType: "internal_user" as const,
+    status: "invited" as const,
+    createdAt: now,
+    updatedAt: now
+  };
+  if (!existingUser) state.appUsers.push(user);
+  if (invitation) assignRoles(state, user.id, [invitation.roleCode], invitation.invitedByUserId);
+  secret.passwordHash = hashSecret(password);
+  secret.setupTokenHash = undefined;
+  secret.userId = user.id;
+  secret.initializedAt = now;
+  secret.updatedAt = now;
+  user.status = "active";
+  user.updatedAt = now;
+  for (const invitation of state.internalUserInvitations.filter((item) => item.email === email && item.status === "sent")) {
+    invitation.status = "accepted";
+    invitation.acceptedAt = now;
+    invitation.updatedAt = now;
+  }
+  const roles = rolesForUser(state, user.id);
+  return ok({ user: userWithRoles(state, user), redirectTo: defaultRedirect(roles, user.status) });
+};
+
+const handleInternalAccessLogin = (state: ApiState, body: Record<string, unknown>): JsonResponse => {
+  const email = stringBody(body, "email").trim().toLowerCase();
+  const password = stringBody(body, "password");
+  const user = state.appUsers.find((item) => item.email === email && item.userType === "internal_user");
+  if (!user) return { status: 401, body: { error: "invalid_internal_credentials" } };
+  if (user.status === "disabled") return { status: 403, body: { error: "internal_user_disabled" } };
+  if (user.status === "invited") return { status: 403, body: { error: "internal_user_not_initialized" } };
+  const secret = state.internalAccessSecrets.find((item) => item.userId === user.id);
+  if (!secret?.passwordHash || secret.passwordHash !== hashSecret(password)) return { status: 401, body: { error: "invalid_internal_credentials" } };
+  const roles = rolesForUser(state, user.id);
+  return ok({
+    user: userWithRoles(state, user),
+    permissions: permissionsForRoles(roles),
+    redirectTo: defaultRedirect(roles, user.status)
+  });
+};
+
+const ensureRole = (state: ApiState, roleCode: RoleCode, roleName: string) => {
+  let role = state.roles.find((item) => item.roleCode === roleCode);
+  if (!role) {
+    role = { id: `role_${roleCode}`, roleCode, roleName };
+    state.roles.push(role);
+  }
+  return role;
+};
+
+const hashSecret = (value: string): string => {
+  return createHash("sha256").update(`${process.env.GTT_INTERNAL_SECRET_PEPPER ?? "gtt_internal_secret_pepper"}:${value}`).digest("hex");
+};
+
+const validateInternalPassword = (password: string): string | undefined => {
+  if (password.length < 14) return "password_minimum_14_characters";
+  if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+    return "password_complexity_required";
+  }
+  if (["password", "1234", "qwerty", "admin"].some((pattern) => password.toLowerCase().includes(pattern))) {
+    return "password_common_pattern_rejected";
+  }
+  return undefined;
+};
+
+const chartOfAccounts = [
+  { accountCode: "10020", accountName: "Circle Business Account USDC", accountClass: "Asset", normalBalance: "debit" },
+  { accountCode: "10150", accountName: "Circle Settlement Suspense", accountClass: "Asset", normalBalance: "debit" },
+  { accountCode: "20400", accountName: "Escrow Liability - Investor Funds", accountClass: "Liability", normalBalance: "credit" },
+  { accountCode: "20430", accountName: "Customer ADA Liability - Available", accountClass: "Liability", normalBalance: "credit" },
+  { accountCode: "20440", accountName: "Customer ADA Liability - Reserved", accountClass: "Liability", normalBalance: "credit" }
+];
+
+const postingRules = [
+  {
+    eventType: "treasury.opening_journal.posted",
+    ruleName: "Opening ADA journal",
+    status: "active",
+    debitLedgerAccountCode: "10020",
+    creditLedgerAccountCode: "20400"
+  }
+];
+
+const businessClientTransitions: Record<string, string[]> = {
+  draft: ["submitted"],
+  submitted: ["approved", "restricted"],
+  approved: ["restricted", "closed"],
+  restricted: ["approved"],
+  closed: []
+};
+
+const accountTransitions: Record<string, string[]> = {
+  draft: ["active"],
+  active: ["restricted", "closed"],
+  restricted: ["active"],
+  closed: []
+};
+
+const validateBusinessClientTransition = (from: string, to: string): string | undefined => {
+  return businessClientTransitions[from]?.includes(to) ? undefined : "business_client_invalid_status_transition";
+};
+
+const validateAccountTransition = (from: string, to: string): string | undefined => {
+  return accountTransitions[from]?.includes(to) ? undefined : "account_invalid_status_transition";
 };
 
 const uatScenarios = [

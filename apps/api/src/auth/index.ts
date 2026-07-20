@@ -11,6 +11,7 @@ export type ApiScope =
   | "write:rebalancing"
   | "write:reconciliation"
   | "write:release-readiness"
+  | "admin:users"
   | "admin:api-keys";
 
 export interface ApiClient {
@@ -61,6 +62,7 @@ export const allApiScopes: ApiScope[] = [
   "write:rebalancing",
   "write:reconciliation",
   "write:release-readiness",
+  "admin:users",
   "admin:api-keys"
 ];
 

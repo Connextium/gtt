@@ -20,6 +20,7 @@ import {
   LineChart,
   Loader2,
   Lock,
+  LogOut,
   Mail,
   MoreHorizontal,
   Plus,
@@ -51,7 +52,58 @@ const supabase = (() => {
 
 type Navigate = (path: string) => void;
 
-type OnboardingStatus = "draft" | "submitted" | "pending_review" | "approved" | "rejected";
+async function logoutBusinessUser(navigate: Navigate) {
+  await supabase?.auth.signOut();
+  navigate("/sign-in");
+}
+
+function BusinessAvatarMenu({
+  direction = "down",
+  email,
+  onLogout
+}: {
+  direction?: "down" | "up";
+  email?: string;
+  onLogout: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const displayEmail = email ?? "Authenticated business user";
+
+  function logout() {
+    setOpen(false);
+    onLogout();
+  }
+
+  return (
+    <div className={`gtt-business-avatar-menu-shell ${direction === "up" ? "upward" : ""}`}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label="Business user profile"
+        className="gtt-business-avatar-button"
+        onClick={() => setOpen((current) => !current)}
+        title="Business user profile"
+        type="button"
+      >
+        <User size={17} />
+      </button>
+      {open ? (
+        <div className="gtt-business-avatar-popover" role="menu">
+          <div>
+            <span>Business User</span>
+            <small>{displayEmail}</small>
+          </div>
+          <button onClick={logout} role="menuitem" type="button">
+            <LogOut size={14} />
+            Logout
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type OnboardingStatus = "draft" | "submitted" | "pending_review" | "needs_information" | "approved" | "rejected";
 type OnboardingStepKey = "step_1" | "step_2" | "step_3" | "step_4" | "pending_review" | "reviewd";
 type OnboardingDraftPayload = Record<string, string | string[]>;
 
@@ -563,7 +615,7 @@ function OnboardingStepScreen({ path, navigate, session }: { path: string; navig
     }
   }
 
-  const props = { error, navigate, saving, continueStep };
+  const props = { error, navigate, saving, continueStep, onLogout: () => logoutBusinessUser(navigate), userEmail: session?.user.email };
   if (stepNumber === 2) return <BusinessProfileStep {...props} />;
   if (stepNumber === 3) return <BeneficialOwnershipStep {...props} />;
   if (stepNumber === 4) return <IntendedUseStep {...props} />;
@@ -574,7 +626,9 @@ type StepProps = {
   continueStep: (payload?: Record<string, unknown>) => void;
   error?: string;
   navigate: Navigate;
+  onLogout: () => void;
   saving: boolean;
+  userEmail?: string;
 };
 
 const stepLabels = ["Business Identity", "Business Profile", "Beneficial Ownership", "Intended Use"];
@@ -611,15 +665,18 @@ function OnboardingSidebar({ currentStep }: { currentStep: number }) {
   );
 }
 
-function OnboardingTopBar({ currentStep, title }: { currentStep: number; title: string }) {
+function OnboardingTopBar({ currentStep, onLogout, title, userEmail }: { currentStep: number; onLogout: () => void; title: string; userEmail?: string }) {
   return (
     <header className="gtt-onboarding-topbar">
       <div>
         <span>Step {currentStep} of 4</span>
         <h1>{title}</h1>
       </div>
-      <div className="gtt-step-progress" aria-label={`Step ${currentStep} of 4`}>
-        {[1, 2, 3, 4].map((item) => <i className={item <= currentStep ? "active" : ""} key={item} />)}
+      <div className="gtt-onboarding-topbar-actions">
+        <div className="gtt-step-progress" aria-label={`Step ${currentStep} of 4`}>
+          {[1, 2, 3, 4].map((item) => <i className={item <= currentStep ? "active" : ""} key={item} />)}
+        </div>
+        <BusinessAvatarMenu email={userEmail} onLogout={onLogout} />
       </div>
     </header>
   );
@@ -660,12 +717,15 @@ function ActionRow({ backTo, error, navigate, primary, saving }: { backTo?: stri
   );
 }
 
-function OnboardingIntroStep({ continueStep, error, navigate, saving }: StepProps) {
+function OnboardingIntroStep({ continueStep, error, onLogout, saving, userEmail }: StepProps) {
   return (
     <main className="gtt-onboarding-intro">
       <header className="gtt-register-header">
         <div className="gtt-register-brand">Global Trade Treasury</div>
-        <span>Partner Onboarding</span>
+        <div className="gtt-business-header-actions">
+          <span>Partner Onboarding</span>
+          <BusinessAvatarMenu email={userEmail} onLogout={onLogout} />
+        </div>
       </header>
       <section className="gtt-intro-hero grid grid-cols-1 md:grid-cols-12 gap-6 mb-12">
         <div className="md:col-span-7 flex flex-col justify-center">
@@ -744,7 +804,7 @@ function FrameworkCard({ active, copy, icon: Icon, index, muted, status, title }
   );
 }
 
-function BusinessProfileStep({ continueStep, error, navigate, saving }: StepProps) {
+function BusinessProfileStep({ continueStep, error, navigate, onLogout, saving, userEmail }: StepProps) {
   const draft = loadOnboardingDraft("step_2");
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -757,7 +817,7 @@ function BusinessProfileStep({ continueStep, error, navigate, saving }: StepProp
     <main className="gtt-onboarding-workspace">
       <OnboardingSidebar currentStep={2} />
       <section className="gtt-onboarding-main">
-        <OnboardingTopBar currentStep={2} title="Onboarding: Business Profile" />
+        <OnboardingTopBar currentStep={2} onLogout={onLogout} title="Onboarding: Business Profile" userEmail={userEmail} />
         <form className="gtt-onboarding-layout" onChange={(event) => saveOnboardingDraft("step_2", formToPayload(event.currentTarget))} onSubmit={submit}>
           <div className="gtt-form-stack">
             <FormSection index="1" title="Basic Business Info">
@@ -809,7 +869,7 @@ function GuidancePanel() {
   );
 }
 
-function BeneficialOwnershipStep({ continueStep, error, navigate, saving }: StepProps) {
+function BeneficialOwnershipStep({ continueStep, error, navigate, onLogout, saving, userEmail }: StepProps) {
   const draft = loadOnboardingDraft("step_3");
   const [hasOwners, setHasOwners] = useState(draftString(draft, "hasOwners", "yes"));
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -823,7 +883,7 @@ function BeneficialOwnershipStep({ continueStep, error, navigate, saving }: Step
     <main className="gtt-onboarding-workspace">
       <OnboardingSidebar currentStep={3} />
       <section className="gtt-onboarding-main">
-        <OnboardingTopBar currentStep={3} title="Onboarding: Beneficial Ownership" />
+        <OnboardingTopBar currentStep={3} onLogout={onLogout} title="Onboarding: Beneficial Ownership" userEmail={userEmail} />
         <form className="gtt-onboarding-split" onChange={(event) => saveOnboardingDraft("step_3", { ...formToPayload(event.currentTarget), hasOwners })} onSubmit={submit}>
           <div className="gtt-form-stack">
             <FormSection index="1" title="Declaration of Ownership">
@@ -874,7 +934,7 @@ function BeneficialOwnershipStep({ continueStep, error, navigate, saving }: Step
   );
 }
 
-function IntendedUseStep({ continueStep, error, navigate, saving }: StepProps) {
+function IntendedUseStep({ continueStep, error, navigate, onLogout, saving, userEmail }: StepProps) {
   const draft = loadOnboardingDraft("step_4");
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -887,7 +947,7 @@ function IntendedUseStep({ continueStep, error, navigate, saving }: StepProps) {
     <main className="gtt-onboarding-workspace">
       <OnboardingSidebar currentStep={4} />
       <section className="gtt-onboarding-main">
-        <OnboardingTopBar currentStep={4} title="Onboarding: Intended Use" />
+        <OnboardingTopBar currentStep={4} onLogout={onLogout} title="Onboarding: Intended Use" userEmail={userEmail} />
         <form className="gtt-onboarding-split final" onChange={(event) => saveOnboardingDraft("step_4", formToPayload(event.currentTarget))} onSubmit={submit}>
           <div className="gtt-form-stack">
             <FormSection index="1" title="Account Purpose and Usage">
@@ -994,6 +1054,7 @@ function SubmissionConfirmedScreen({ navigate, session }: { navigate: Navigate; 
         <div className="gtt-submission-icons">
           <Bell size={21} strokeWidth={1.8} />
           <Settings size={21} strokeWidth={1.8} />
+          <BusinessAvatarMenu email={application?.email ?? session?.user.email} onLogout={() => logoutBusinessUser(navigate)} />
         </div>
       </header>
 
@@ -1139,7 +1200,7 @@ function PendingReviewScreen({ navigate, session }: { navigate: Navigate; sessio
           <a aria-disabled="true" href="#"><BarChart2 size={20} /> Analytics</a>
         </nav>
         <div className="gtt-pending-identity">
-          <div className="gtt-pending-avatar"><User size={15} /></div>
+          <BusinessAvatarMenu direction="up" email={application?.email ?? session?.user.email} onLogout={() => logoutBusinessUser(navigate)} />
           <div>
             <strong>Terminal ID</strong>
             <span>{terminalId}</span>
@@ -1332,8 +1393,7 @@ function WelcomeLandingScreen({ navigate, session }: { navigate: Navigate; sessi
 
   async function logout() {
     setProfileMenuOpen(false);
-    await supabase?.auth.signOut();
-    navigate("/sign-in");
+    await logoutBusinessUser(navigate);
   }
 
   return (
@@ -1540,7 +1600,7 @@ function restorePersistedStepPayloads(stepPayloads?: Record<string, OnboardingDr
 function routeForApplication(application: OnboardingApplication): string {
   if (application.status === "approved") return "/welcome";
   if (application.status === "rejected") return "/application-pending";
-  if (application.status === "pending_review" || application.currentStep === "pending_review") return "/application-pending";
+  if (application.status === "pending_review" || application.status === "needs_information" || application.currentStep === "pending_review") return "/application-pending";
   return `/onboarding/step-${onboardingStepNumber(application.currentStep)}`;
 }
 
@@ -1624,6 +1684,16 @@ function pendingStatusMeta(status: OnboardingStatus): {
       reviewCopy: "Application requires operator follow-up",
       reviewStatus: "Review Required",
       timelineCopy: "Compliance desk requires additional resolution."
+    };
+  }
+  if (status === "needs_information") {
+    return {
+      activation: "Client Action",
+      copy: "The compliance desk has requested more information before approval can continue. Review your email or secure support thread for the requested evidence.",
+      label: "Information Requested",
+      reviewCopy: "Compliance review is waiting on additional client evidence",
+      reviewStatus: "RFI Open",
+      timelineCopy: "Current phase: request for information issued by the compliance desk."
     };
   }
   if (status === "submitted") {

@@ -1,6 +1,6 @@
-import pg from "pg";
+import { createClient } from "@supabase/supabase-js";
 import type { ApiState } from "../data.js";
-import { databaseUrlFromEnv } from "./connection.js";
+import { databaseModeFromEnv, databaseUrlFromEnv } from "./connection.js";
 
 export interface StateStoreStatus {
   configured: boolean;
@@ -10,7 +10,7 @@ export interface StateStoreStatus {
 }
 
 const snapshotName = "default";
-const schemaVersion = "0012";
+const schemaVersion = "0015";
 
 export const stateStoreStatus: StateStoreStatus = {
   configured: Boolean(databaseUrlFromEnv()),
@@ -18,55 +18,91 @@ export const stateStoreStatus: StateStoreStatus = {
   persisted: false
 };
 
-export const loadApiStateSnapshot = async (fallback: ApiState): Promise<ApiState> => {
-  const connectionString = databaseUrlFromEnv();
-  stateStoreStatus.configured = Boolean(connectionString);
-  if (!connectionString) return fallback;
+const supabaseStateClient = () => {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return undefined;
+  return createClient(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    }
+  });
+};
 
-  const client = new pg.Client({ connectionString, connectionTimeoutMillis: 5000 });
+const readSnapshot = async (): Promise<unknown | undefined> => {
+  const mode = databaseModeFromEnv();
+  if (mode === "postgres") return undefined;
+
+  const client = supabaseStateClient();
+  if (!client) return undefined;
+  const { data, error } = await client
+    .from("api_runtime_state_snapshots")
+    .select("state_payload")
+    .eq("snapshot_name", snapshotName)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.state_payload;
+};
+
+const writeSnapshot = async (state: ApiState): Promise<void> => {
+  const payload = { snapshotName, schemaVersion, state: encodeBigInts(state) };
+  const mode = databaseModeFromEnv();
+  if (mode === "postgres") return;
+
+  const client = supabaseStateClient();
+  if (!client) return;
+  const { error } = await client.from("api_runtime_state_snapshots").upsert({
+    snapshot_name: snapshotName,
+    state_payload: encodeBigInts(state),
+    schema_version: schemaVersion,
+    updated_at: new Date().toISOString()
+  });
+  if (error) throw error;
+};
+
+export const loadApiStateSnapshot = async (fallback: ApiState): Promise<ApiState> => {
+  const configPath = databaseUrlFromEnv();
+  stateStoreStatus.configured = Boolean(configPath);
+  if (!configPath) return fallback;
+  if (databaseModeFromEnv() === "postgres") {
+    stateStoreStatus.loaded = false;
+    stateStoreStatus.persisted = false;
+    stateStoreStatus.error = undefined;
+    return fallback;
+  }
+
   try {
-    await client.connect();
-    const result = await client.query<{ state_payload: unknown }>(
-      "select state_payload from api_runtime_state_snapshots where snapshot_name = $1",
-      [snapshotName]
-    );
-    const snapshot = result.rows[0]?.state_payload;
+    const snapshot = await readSnapshot();
     if (!snapshot) {
       await saveApiStateSnapshot(fallback);
       return fallback;
     }
     stateStoreStatus.loaded = true;
     stateStoreStatus.error = undefined;
-    return reviveBigInts(snapshot) as ApiState;
+    return reviveApiStateSnapshot(snapshot, fallback);
   } catch (error) {
     stateStoreStatus.error = error instanceof Error ? error.message : "state_snapshot_load_failed";
     return fallback;
-  } finally {
-    await client.end().catch(() => undefined);
   }
 };
 
 export const saveApiStateSnapshot = async (state: ApiState): Promise<void> => {
-  const connectionString = databaseUrlFromEnv();
-  stateStoreStatus.configured = Boolean(connectionString);
-  if (!connectionString) return;
+  const configPath = databaseUrlFromEnv();
+  stateStoreStatus.configured = Boolean(configPath);
+  if (!configPath) return;
+  if (databaseModeFromEnv() === "postgres") {
+    stateStoreStatus.persisted = false;
+    stateStoreStatus.error = undefined;
+    return;
+  }
 
-  const client = new pg.Client({ connectionString, connectionTimeoutMillis: 5000 });
   try {
-    await client.connect();
-    await client.query(
-      `insert into api_runtime_state_snapshots (snapshot_name, state_payload, schema_version, updated_at)
-       values ($1, $2::jsonb, $3, now())
-       on conflict (snapshot_name)
-       do update set state_payload = excluded.state_payload, schema_version = excluded.schema_version, updated_at = now()`,
-      [snapshotName, JSON.stringify(encodeBigInts(state)), schemaVersion]
-    );
+    await writeSnapshot(state);
     stateStoreStatus.persisted = true;
     stateStoreStatus.error = undefined;
   } catch (error) {
     stateStoreStatus.error = error instanceof Error ? error.message : "state_snapshot_save_failed";
-  } finally {
-    await client.end().catch(() => undefined);
   }
 };
 
@@ -89,4 +125,32 @@ export const reviveBigInts = (value: unknown): unknown => {
     return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, reviveBigInts(item)]));
   }
   return value;
+};
+
+export const reviveApiStateSnapshot = (snapshot: unknown, fallback: ApiState): ApiState => {
+  const revived = reviveBigInts(snapshot);
+  const candidate = unwrapApiStateSnapshot(revived);
+  return isApiState(candidate) ? candidate : fallback;
+};
+
+const unwrapApiStateSnapshot = (value: unknown): unknown => {
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return record.state ?? value;
+};
+
+const isApiState = (value: unknown): value is ApiState => {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<Record<keyof ApiState, unknown>>;
+  return (
+    typeof record.tenantId === "string" &&
+    Array.isArray(record.apiClients) &&
+    Array.isArray(record.apiKeys) &&
+    Array.isArray(record.businessClients) &&
+    Array.isArray(record.accounts) &&
+    Array.isArray(record.balances) &&
+    Array.isArray(record.idempotencyRecords) &&
+    Array.isArray(record.outbox) &&
+    Array.isArray(record.inbox)
+  );
 };

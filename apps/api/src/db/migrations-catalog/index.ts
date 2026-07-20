@@ -19,7 +19,7 @@ export interface MigrationCatalogValidation {
 }
 
 export const requireDatabaseUrl = (env: Record<string, string | undefined>): string => {
-  const value = env.DATABASE_URL ?? env.SUPABASE_DB_URL;
+  const value = env.DATABASE_URL ?? env.SUPABASE_DB_URL ?? env.SUPABASE_URL;
   if (!value) {
     throw new Error("database_url_required");
   }
@@ -91,6 +91,36 @@ export const migrationCatalog: MigrationCatalogEntry[] = [
     version: "0013",
     fileName: "0013_sprint0_business_user_self_registration_auth.sql",
     domainModules: ["client-onboarding", "api-auth"]
+  },
+  {
+    version: "0014",
+    fileName: "0014_allow_reviewd_onboarding_current_step.sql",
+    domainModules: ["client-onboarding"]
+  },
+  {
+    version: "0015",
+    fileName: "0015_sprint1_review_completion_fixes.sql",
+    domainModules: ["client-onboarding", "digital-accounts", "ledger"]
+  },
+  {
+    version: "0016",
+    fileName: "0016_sprint1_2_operator_admin_identity.sql",
+    domainModules: ["api-auth", "client-onboarding"]
+  },
+  {
+    version: "0017",
+    fileName: "0017_sprint1_postgres_unit_of_work.sql",
+    domainModules: ["api-auth", "events", "ledger", "client-onboarding", "digital-accounts"]
+  },
+  {
+    version: "0018",
+    fileName: "0018_super_admin_bootstrap_and_internal_access.sql",
+    domainModules: ["api-auth"]
+  },
+  {
+    version: "0019",
+    fileName: "0019_business_onboarding_review_actions.sql",
+    domainModules: ["client-onboarding"]
   }
 ];
 

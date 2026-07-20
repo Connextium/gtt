@@ -97,7 +97,7 @@ try {
   assert(unauthorized.status === 401, "protected routes should require API key");
 
   const manifest = await requestJson(port, "/manifest", {}, false);
-  assert(manifest.latestMigrationVersion === "0012", "manifest should expose latest migration");
+  assert(manifest.latestMigrationVersion === "0015", "manifest should expose latest migration");
 
   const apiKey = await requestJson(port, "/api-keys", {
     method: "POST",
@@ -106,14 +106,15 @@ try {
   assert(typeof apiKey.plaintextKey === "string", "api key creation should show plaintext once");
   assert(!(apiKey.key as Record<string, unknown>).keyHash, "api key response must not expose hash");
 
+  const smokeClientCreateKey = `smoke-client-create-${Date.now()}`;
   const client = await requestJson(port, "/business-clients", {
     method: "POST",
-    headers: { "idempotency-key": "smoke-client-create" },
+    headers: { "idempotency-key": smokeClientCreateKey },
     body: JSON.stringify({ legalName: "Smoke Buyer", country: "US" })
   });
   const clientReplay = await requestJson(port, "/business-clients", {
     method: "POST",
-    headers: { "idempotency-key": "smoke-client-create" },
+    headers: { "idempotency-key": smokeClientCreateKey },
     body: JSON.stringify({ legalName: "Smoke Buyer", country: "US" })
   });
   assert((clientReplay.businessClient as { id: string }).id === (client.businessClient as { id: string }).id, "idempotency replay should return original response");

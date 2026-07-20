@@ -19,6 +19,7 @@
     "demo:sprint8": "npm run build && node dist/sprint8/demo.js",
     "migrations:check": "node scripts/check-migrations.mjs",
     "api:build": "npm run build --workspace @gtt/api",
+    "api:bootstrap-super-admin": "npm run bootstrap:super-admin --workspace @gtt/api",
     "api:dev": "npm run dev --workspace @gtt/api",
     "api:scheduler": "npm run scheduler --workspace @gtt/api",
     "api:smoke": "npm run smoke --workspace @gtt/api",

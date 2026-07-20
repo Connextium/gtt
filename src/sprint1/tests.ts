@@ -61,8 +61,6 @@ const testSprint1Flow = (): void => {
     accountOfDigitalAssetId: account.id,
     description: "Opening USDC position",
     idempotencyKey: "idem_opening_001",
-    debitLedgerAccountCode: "10020",
-    creditLedgerAccountCode: "20400",
     amountMinorUnits: "100000000"
   });
 
@@ -70,13 +68,13 @@ const testSprint1Flow = (): void => {
     accountOfDigitalAssetId: account.id,
     description: "Opening USDC position",
     idempotencyKey: "idem_opening_001",
-    debitLedgerAccountCode: "10020",
-    creditLedgerAccountCode: "20400",
     amountMinorUnits: "100000000"
   });
 
   assert(journal.id === retriedJournal.id, "idempotent retry should return original journal");
   assert(store.journalEntries().length === 1, "idempotent retry must not duplicate posting");
+  assert(journal.lines[0]?.ledgerAccountId === "ledger_10020", "opening journal should use posting-rule debit account");
+  assert(journal.lines[1]?.ledgerAccountId === "ledger_20400", "opening journal should use posting-rule credit account");
 
   const statement = app.getAccountStatement(context, account.id);
   assert(statement.journalEntries.length === 1, "statement should include one journal");
@@ -88,8 +86,6 @@ const testSprint1Flow = (): void => {
       accountOfDigitalAssetId: account.id,
       description: "Opening USDC position changed",
       idempotencyKey: "idem_opening_001",
-      debitLedgerAccountCode: "10020",
-      creditLedgerAccountCode: "20400",
       amountMinorUnits: "100000001"
     });
   }, "idempotency_key_reused_with_different_request");
@@ -185,11 +181,99 @@ const testMoneyValidation = (): void => {
       accountOfDigitalAssetId: account.id,
       description: "Invalid fractional minor units",
       idempotencyKey: "idem_money_fraction",
-      debitLedgerAccountCode: "10020",
-      creditLedgerAccountCode: "20400",
       amountMinorUnits: "1.25"
     });
   }, "money_amount_must_be_integer_minor_units");
+};
+
+const testPostingRuleRejectsAdHocLedgerCodes = (): void => {
+  resetIdsForTest();
+  const { app } = createSprint1Application();
+  const context = makeContext("tenant_a", "user_operator", "corr_posting_rule");
+  const client = app.createBusinessClient(context, {
+    legalName: "Posting Rule Client",
+    country: "US",
+    onboardingStatus: "approved",
+    idempotencyKey: "idem_posting_rule_client"
+  });
+  const account = app.createAccountOfDigitalAsset(context, {
+    businessClientId: client.id,
+    accountName: "Posting Rule ADA",
+    usePurpose: "settlement",
+    idempotencyKey: "idem_posting_rule_ada"
+  });
+
+  assertThrowsCode(() => {
+    app.postOpeningJournal(context, {
+      accountOfDigitalAssetId: account.id,
+      description: "Ad hoc debit account",
+      idempotencyKey: "idem_posting_rule_journal",
+      debitLedgerAccountCode: "10150",
+      amountMinorUnits: "100"
+    });
+  }, "posting_rule_debit_account_mismatch");
+};
+
+const testLifecycleTransitions = (): void => {
+  resetIdsForTest();
+  const { app } = createSprint1Application();
+  const context = makeContext("tenant_a", "user_operator", "corr_lifecycle");
+
+  const draftClient = app.createBusinessClient(context, {
+    legalName: "Draft Client",
+    country: "US",
+    onboardingStatus: "draft",
+    idempotencyKey: "idem_lifecycle_draft"
+  });
+
+  assertThrowsCode(() => {
+    app.mapApprovedOnboarding(context, draftClient.id, "circle_draft_client", "circle_draft_application");
+  }, "business_client_invalid_status_transition");
+
+  const submittedClient = app.createBusinessClient(context, {
+    legalName: "Submitted Client",
+    country: "US",
+    onboardingStatus: "submitted",
+    idempotencyKey: "idem_lifecycle_submitted"
+  });
+  const approvedClient = app.mapApprovedOnboarding(
+    context,
+    submittedClient.id,
+    "circle_submitted_client",
+    "circle_submitted_application"
+  );
+
+  assert(approvedClient.onboardingStatus === "approved", "submitted client should transition to approved");
+};
+
+const testOutboxIdsMatchStorageKeys = (): void => {
+  resetIdsForTest();
+  const { app, store } = createSprint1Application();
+  const context = makeContext("tenant_a", "user_operator", "corr_outbox");
+
+  const client = app.createBusinessClient(context, {
+    legalName: "Outbox Client",
+    country: "US",
+    onboardingStatus: "approved",
+    idempotencyKey: "idem_outbox_client"
+  });
+  const account = app.createAccountOfDigitalAsset(context, {
+    businessClientId: client.id,
+    accountName: "Outbox ADA",
+    usePurpose: "settlement",
+    idempotencyKey: "idem_outbox_ada"
+  });
+  app.postOpeningJournal(context, {
+    accountOfDigitalAssetId: account.id,
+    description: "Outbox journal",
+    idempotencyKey: "idem_outbox_journal",
+    amountMinorUnits: "100"
+  });
+
+  const events = store.outboxEvents();
+  assert(new Set(events.map((event) => event.id)).size === events.length, "outbox IDs should be unique");
+  assert(events.every((event) => event.id.startsWith("outbox_")), "outbox IDs should use outbox prefix");
+  assert(store.outboxEventIdsMatchStorageKeys(), "outbox map keys should match event IDs");
 };
 
 const testInboxIdempotency = (): void => {
@@ -208,6 +292,9 @@ testSprint1Flow();
 testTenantIsolation();
 testJournalValidation();
 testMoneyValidation();
+testPostingRuleRejectsAdHocLedgerCodes();
+testLifecycleTransitions();
+testOutboxIdsMatchStorageKeys();
 testInboxIdempotency();
 
 console.log("Sprint 1 tests passed");

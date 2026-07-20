@@ -3,11 +3,14 @@ import {
   emitOutbox,
   newId,
   type ApiState,
+  type BusinessClient,
   type BusinessOnboardingApplication,
   type BusinessOnboardingInvitation,
   type BusinessUserProfile,
   type OnboardingStepPayload
 } from "../../data.js";
+import { postgresUrlFromEnv } from "../../db/connection.js";
+import { withPostgresTransaction } from "../../db/transaction.js";
 import { badRequest, unauthorized, type JsonResponse } from "../../http/index.js";
 
 interface AuthenticatedBusinessUser {
@@ -193,9 +196,14 @@ export const handleSubmitMyOnboarding = async (
   bundle.application.currentStep = "pending_review";
   bundle.application.submittedAt = now;
   bundle.application.updatedAt = now;
+  const stepPayloads = await hydrateOnboardingStepPayloads(state, bundle.application);
+  const businessClient = businessClientFromOnboarding(state, bundle.application, stepPayloads, now);
+  upsertRuntimeBusinessClient(state, businessClient);
   await persistOnboardingBundle(state, auth, bundle);
+  await persistSubmittedBusinessClient(businessClient, bundle.application);
   emitOutbox(state, "business_user.onboarding_submitted", {
     applicationId: bundle.application.id,
+    businessClientId: businessClient.id,
     authUserId: auth.authUserId,
     email: auth.email
   });
@@ -205,7 +213,8 @@ export const handleSubmitMyOnboarding = async (
     body: {
       status: "pending_review",
       redirectTo: "/submission-confirmed",
-      application: bundle.application
+      application: bundle.application,
+      businessClient
     }
   };
 };
@@ -380,6 +389,40 @@ const upsertRuntimeStepPayload = (state: ApiState, stepPayload: OnboardingStepPa
   state.onboardingStepPayloads.push(stepPayload);
 };
 
+const upsertRuntimeBusinessClient = (state: ApiState, businessClient: BusinessClient): void => {
+  const index = state.businessClients.findIndex((item) => item.id === businessClient.id);
+  if (index >= 0) {
+    state.businessClients[index] = {
+      ...state.businessClients[index],
+      ...businessClient
+    };
+    return;
+  }
+  state.businessClients.push(businessClient);
+};
+
+const businessClientFromOnboarding = (
+  state: ApiState,
+  application: BusinessOnboardingApplication,
+  stepPayloads: Record<string, Record<string, unknown>>,
+  now: string
+): BusinessClient => {
+  const step2 = stepPayloads.step_2 ?? {};
+  const legalName =
+    stringPayload(step2, "legalBusinessName") ??
+    stringPayload(step2, "legalName") ??
+    application.email.split("@")[0] ??
+    "Submitted Business Client";
+  return {
+    id: uuidFromRuntimeId(application.id) ?? newId("client"),
+    tenantId: persistentTenantId(state),
+    legalName,
+    country: countryCodeFromPayload(step2),
+    onboardingStatus: "submitted",
+    createdAt: application.createdAt || now
+  };
+};
+
 const createOrReuseInvitation = (state: ApiState, email: string): BusinessOnboardingInvitation => {
   const existing = state.businessOnboardingInvitations.find(
     (item) => item.email === email && ["requested", "sent", "accepted"].includes(item.status)
@@ -477,7 +520,7 @@ const isOnboardingStep = (value: string): value is BusinessOnboardingApplication
   ["step_1", "step_2", "step_3", "step_4", "pending_review", "reviewd"].includes(value);
 
 const isOnboardingStatus = (value: unknown): value is BusinessOnboardingApplication["status"] =>
-  typeof value === "string" && ["draft", "submitted", "pending_review", "approved", "rejected"].includes(value);
+  typeof value === "string" && ["draft", "submitted", "pending_review", "needs_information", "approved", "rejected"].includes(value);
 
 const isBusinessUserProfileStatus = (value: unknown): value is BusinessUserProfile["status"] =>
   typeof value === "string" && ["invited", "active", "disabled"].includes(value);
@@ -590,6 +633,46 @@ const persistOnboardingApplication = async (application: BusinessOnboardingAppli
   if (error) throw new Error(`business_onboarding_applications_upsert_failed: ${error.message}`);
 };
 
+const persistSubmittedBusinessClient = async (
+  businessClient: BusinessClient,
+  application: BusinessOnboardingApplication
+): Promise<void> => {
+  if (!postgresUrlFromEnv()) return;
+  const id = uuidFromRuntimeId(businessClient.id);
+  const tenantId = uuidFromRuntimeId(businessClient.tenantId);
+  if (!id || !tenantId) return;
+
+  await withPostgresTransaction(async (client) => {
+    await client.query(
+      `insert into platform_tenants (id, tenant_name)
+       values ($1, 'Demo Tenant')
+       on conflict (id) do nothing`,
+      [tenantId]
+    );
+    await client.query(
+      `insert into business_clients
+        (id, platform_tenant_id, legal_name, country, onboarding_status, correlation_id, created_at, updated_at)
+       values ($1, $2, $3, $4, 'submitted', $5, $6, $7)
+       on conflict (id) do update set
+         platform_tenant_id = excluded.platform_tenant_id,
+         legal_name = excluded.legal_name,
+         country = excluded.country,
+         onboarding_status = excluded.onboarding_status,
+         correlation_id = excluded.correlation_id,
+         updated_at = excluded.updated_at`,
+      [
+        id,
+        tenantId,
+        businessClient.legalName,
+        businessClient.country,
+        `business_onboarding:${uuidFromRuntimeId(application.id) ?? application.id}`,
+        businessClient.createdAt,
+        application.updatedAt
+      ]
+    );
+  });
+};
+
 const persistOnboardingStepPayload = async (step: OnboardingStepPayload): Promise<void> => {
   const id = uuidFromRuntimeId(step.id);
   const applicationId = uuidFromRuntimeId(step.applicationId);
@@ -611,4 +694,24 @@ const persistOnboardingStepPayload = async (step: OnboardingStepPayload): Promis
       { onConflict: "application_id,step_key" }
     );
   if (error) throw new Error(`onboarding_step_payloads_upsert_failed: ${error.message}`);
+};
+
+const persistentTenantId = (state: ApiState): string => {
+  if (uuidFromRuntimeId(state.tenantId)) return state.tenantId;
+  return process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001";
+};
+
+const countryCodeFromPayload = (payload: Record<string, unknown>): string => {
+  const country = stringPayload(payload, "formationCountry") ?? stringPayload(payload, "country") ?? "US";
+  const normalized = country.trim().toLowerCase();
+  const mapped: Record<string, string> = {
+    "germany": "DE",
+    "select jurisdiction": "US",
+    "singapore": "SG",
+    "united kingdom": "GB",
+    "united states": "US",
+    "us": "US",
+    "usa": "US"
+  };
+  return mapped[normalized] ?? (country.trim().slice(0, 2).toUpperCase() || "US");
 };

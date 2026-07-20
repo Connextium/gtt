@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseRequestUrl } from "./server.js";
+import { parseRequestUrl } from "../../src/server.js";
 
 test("parses double-leading-slash request URLs as local API paths", () => {
   const url = parseRequestUrl("//onboarding/me");

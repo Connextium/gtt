@@ -1,6 +1,7 @@
 import { invariant } from "./errors.js";
 import { nextId, nowIso } from "./ids.js";
 import { assertPositiveMinorUnits } from "./money.js";
+import { requireActivePostingRule } from "./posting-rules.js";
 import type {
   ActorContext,
   AuditMetadata,
@@ -23,8 +24,8 @@ export interface PostOpeningJournalInput {
   accountOfDigitalAssetId: string;
   description: string;
   idempotencyKey: string;
-  debitLedgerAccountCode: string;
-  creditLedgerAccountCode: string;
+  debitLedgerAccountCode?: string;
+  creditLedgerAccountCode?: string;
   amountMinorUnits: bigint;
 }
 
@@ -70,10 +71,22 @@ export const postOpeningJournal = (
   });
   invariant(account?.tenantId === input.tenantId, "tenant_access_denied");
 
-  const debitAccount = state.ledgerAccounts.get(input.debitLedgerAccountCode);
-  const creditAccount = state.ledgerAccounts.get(input.creditLedgerAccountCode);
-  invariant(Boolean(debitAccount), "debit_ledger_account_not_found", { code: input.debitLedgerAccountCode });
-  invariant(Boolean(creditAccount), "credit_ledger_account_not_found", { code: input.creditLedgerAccountCode });
+  const eventType = "treasury.opening_journal.posted";
+  const postingRule = requireActivePostingRule(state.postingRules, eventType);
+  invariant(
+    !input.debitLedgerAccountCode || input.debitLedgerAccountCode === postingRule.debitLedgerAccountCode,
+    "posting_rule_debit_account_mismatch",
+    { expected: postingRule.debitLedgerAccountCode, received: input.debitLedgerAccountCode }
+  );
+  invariant(
+    !input.creditLedgerAccountCode || input.creditLedgerAccountCode === postingRule.creditLedgerAccountCode,
+    "posting_rule_credit_account_mismatch",
+    { expected: postingRule.creditLedgerAccountCode, received: input.creditLedgerAccountCode }
+  );
+  const debitAccount = state.ledgerAccounts.get(postingRule.debitLedgerAccountCode);
+  const creditAccount = state.ledgerAccounts.get(postingRule.creditLedgerAccountCode);
+  invariant(Boolean(debitAccount), "debit_ledger_account_not_found", { code: postingRule.debitLedgerAccountCode });
+  invariant(Boolean(creditAccount), "credit_ledger_account_not_found", { code: postingRule.creditLedgerAccountCode });
   const resolvedDebitAccount = debitAccount!;
   const resolvedCreditAccount = creditAccount!;
 
@@ -114,7 +127,7 @@ export const postOpeningJournal = (
     id: journalEntryId,
     tenantId: input.tenantId,
     sourceEventId,
-    accountingEventType: "treasury.opening_journal.posted",
+    accountingEventType: eventType,
     description: input.description,
     postedAt,
     audit,
@@ -122,7 +135,8 @@ export const postOpeningJournal = (
   };
 
   state.journalEntries.set(journalEntry.id, journalEntry);
-  state.outboxEvents.set(nextId("outbox"), makeOutboxEvent(context, "treasury.journal_entry.posted", journalEntry));
+  const outboxEvent = makeOutboxEvent(context, "treasury.journal_entry.posted", journalEntry);
+  state.outboxEvents.set(outboxEvent.id, outboxEvent);
   return journalEntry;
 };
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allowedCorsOrigin, corsHeaders } from "./index.js";
+import { allowedCorsOrigin, corsHeaders } from "../../src/http/index.js";
 
 const withCorsAllowedOrigin = (value: string | undefined, callback: () => void): void => {
   const previous = process.env.CORS_ALLOWED_ORIGIN;

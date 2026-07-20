@@ -35,8 +35,6 @@ const journal = app.postOpeningJournal(operator, {
   accountOfDigitalAssetId: account.id,
   description: "Sprint 1 balanced opening journal",
   idempotencyKey: "demo_opening_journal",
-  debitLedgerAccountCode: "10020",
-  creditLedgerAccountCode: "20400",
   amountMinorUnits: "250000000"
 });
 
@@ -46,8 +44,6 @@ try {
     accountOfDigitalAssetId: account.id,
     description: "Invalid fractional journal",
     idempotencyKey: "demo_invalid_journal",
-    debitLedgerAccountCode: "10020",
-    creditLedgerAccountCode: "20400",
     amountMinorUnits: "1.5"
   });
 } catch {
@@ -58,8 +54,6 @@ const retriedJournal = app.postOpeningJournal(operator, {
   accountOfDigitalAssetId: account.id,
   description: "Sprint 1 balanced opening journal",
   idempotencyKey: "demo_opening_journal",
-  debitLedgerAccountCode: "10020",
-  creditLedgerAccountCode: "20400",
   amountMinorUnits: "250000000"
 });
 

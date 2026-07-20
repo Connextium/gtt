@@ -40,8 +40,8 @@ const assertions = [
   [apiSource.includes("applicationManifest"), "api manifest missing"],
   [webSource.includes("Release Readiness"), "web release readiness navigation missing"],
   [webSource.includes("contract_ready"), "web app shell status missing"],
-  [migrationFiles.length === 12, `expected 12 migration files, found ${migrationFiles.length}`],
-  [migrationFiles.at(-1)?.startsWith("0012_"), "latest migration should be 0012"]
+  [migrationFiles.length === 15, `expected 15 migration files, found ${migrationFiles.length}`],
+  [migrationFiles.at(-1)?.startsWith("0015_"), "latest migration should be 0015"]
 ];
 
 const failures = assertions.filter(([condition]) => !condition).map(([, message]) => message);

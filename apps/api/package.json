@@ -7,8 +7,9 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "dev": "tsx src/server.ts",
+    "bootstrap:super-admin": "tsx src/cli/provision-super-admin.ts",
     "smoke": "tsx src/smoke-test.ts",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "worker": "tsx src/workers/index.ts",
     "scheduler": "tsx src/workers/scheduler.ts",
     "start": "node dist/server.js"

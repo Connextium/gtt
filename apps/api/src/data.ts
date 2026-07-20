@@ -13,6 +13,9 @@ import {
 
 export type EntityStatus = "draft" | "active" | "restricted" | "closed";
 export type EventStatus = "pending" | "processed" | "dead_letter";
+export type UserType = "business_user" | "internal_user";
+export type UserStatus = "invited" | "active" | "disabled";
+export type RoleCode = "business_user" | "super_admin" | "platform_admin" | "platform_operator" | "treasury_operator" | "auditor";
 
 export interface BusinessClient {
   id: string;
@@ -50,13 +53,66 @@ export interface BusinessUserProfile {
   updatedAt: string;
 }
 
+export interface AppUser {
+  id: string;
+  tenantId: string;
+  authUserId: string;
+  email: string;
+  displayName: string;
+  userType: UserType;
+  status: UserStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoleRecord {
+  id: string;
+  roleCode: RoleCode;
+  roleName: string;
+}
+
+export interface UserRoleAssignment {
+  userId: string;
+  roleId: string;
+  assignedByUserId: string;
+  assignedAt: string;
+}
+
+export interface InternalUserInvitation {
+  id: string;
+  tenantId: string;
+  email: string;
+  displayName: string;
+  roleCode: Exclude<RoleCode, "business_user">;
+  status: "requested" | "sent" | "accepted" | "expired" | "cancelled";
+  supabaseUserId?: string;
+  idempotencyKey: string;
+  invitedByUserId: string;
+  invitedAt: string;
+  acceptedAt?: string;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InternalAccessSecret {
+  userId?: string;
+  invitationId?: string;
+  email?: string;
+  setupTokenHash?: string;
+  passwordHash?: string;
+  initializedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BusinessOnboardingApplication {
   id: string;
   tenantId: string;
   authUserId: string;
   email: string;
   currentStep: "step_1" | "step_2" | "step_3" | "step_4" | "pending_review" | "reviewd";
-  status: "draft" | "submitted" | "pending_review" | "approved" | "rejected";
+  status: "draft" | "submitted" | "pending_review" | "needs_information" | "approved" | "rejected";
   submittedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -247,6 +303,11 @@ export interface ApiState {
   apiKeys: ApiKeyRecord[];
   businessOnboardingInvitations: BusinessOnboardingInvitation[];
   businessUserProfiles: BusinessUserProfile[];
+  appUsers: AppUser[];
+  roles: RoleRecord[];
+  userRoleAssignments: UserRoleAssignment[];
+  internalUserInvitations: InternalUserInvitation[];
+  internalAccessSecrets: InternalAccessSecret[];
   businessOnboardingApplications: BusinessOnboardingApplication[];
   onboardingStepPayloads: OnboardingStepPayload[];
   businessClients: BusinessClient[];
@@ -314,12 +375,63 @@ export const createApiClientAndKey = (
 };
 
 export const createInitialState = (): ApiState => {
+  const roles: RoleRecord[] = [
+    { id: "role_business_user", roleCode: "business_user", roleName: "Business User" },
+    { id: "role_super_admin", roleCode: "super_admin", roleName: "Super Admin" },
+    { id: "role_platform_admin", roleCode: "platform_admin", roleName: "Platform Admin" },
+    { id: "role_platform_operator", roleCode: "platform_operator", roleName: "Platform Operator" },
+    { id: "role_treasury_operator", roleCode: "treasury_operator", roleName: "Treasury Operator" },
+    { id: "role_auditor", roleCode: "auditor", roleName: "Auditor" }
+  ];
   const state: ApiState = {
     tenantId: "tenant_demo",
     apiClients: [],
     apiKeys: [],
     businessOnboardingInvitations: [],
     businessUserProfiles: [],
+    appUsers: [
+      {
+        id: "user_platform_admin",
+        tenantId: "tenant_demo",
+        authUserId: "auth_platform_admin",
+        email: "admin@gtt.example",
+        displayName: "Mira Tan",
+        userType: "internal_user",
+        status: "active",
+        createdAt: now(),
+        updatedAt: now()
+      },
+      {
+        id: "user_treasury",
+        tenantId: "tenant_demo",
+        authUserId: "auth_treasury",
+        email: "treasury@gtt.example",
+        displayName: "Priya Shah",
+        userType: "internal_user",
+        status: "active",
+        createdAt: now(),
+        updatedAt: now()
+      },
+      {
+        id: "user_business",
+        tenantId: "tenant_demo",
+        authUserId: "auth_business",
+        email: "client@example.com",
+        displayName: "Client Applicant",
+        userType: "business_user",
+        status: "active",
+        createdAt: now(),
+        updatedAt: now()
+      }
+    ],
+    roles,
+    userRoleAssignments: [
+      { userId: "user_platform_admin", roleId: "role_platform_admin", assignedByUserId: "system", assignedAt: now() },
+      { userId: "user_treasury", roleId: "role_treasury_operator", assignedByUserId: "user_platform_admin", assignedAt: now() },
+      { userId: "user_business", roleId: "role_business_user", assignedByUserId: "system", assignedAt: now() }
+    ],
+    internalUserInvitations: [],
+    internalAccessSecrets: [],
     businessOnboardingApplications: [],
     onboardingStepPayloads: [],
     businessClients: [
