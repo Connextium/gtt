@@ -3,6 +3,7 @@ import { publicApiKey, type ApiScope } from "../auth/index.js";
 import { invokeCircle, verifyCircleWebhook } from "../modules/circle/index.js";
 import {
   handleGetOrCreateMyOnboarding,
+  handleRespondToMyOnboardingRfi,
   handleSaveMyOnboardingStep,
   handleSelfRegistrationInvitation,
   handleSubmitMyOnboarding
@@ -29,6 +30,7 @@ import {
   trialBalance,
   type ApiState,
   type AppUser,
+  type EntityStatus,
   type InternalUserInvitation,
   type RoleCode
 } from "../data.js";
@@ -45,7 +47,7 @@ export interface RouteInput {
 
 export const routeMetadata = (method: string, pathname: string): { public?: boolean; requiredScopes?: ApiScope[] } => {
   if (method === "GET" && ["/health", "/manifest", "/version", "/readiness"].includes(pathname)) return { public: true };
-  if (method === "POST" && pathname === "/webhooks/circle") return { public: true };
+  if (method === "POST" && (pathname === "/webhooks/circle" || pathname === "/webhooks/circle/onboarding")) return { public: true };
   if (method === "POST" && pathname === "/auth/invitations") return { public: true };
   if (method === "GET" && pathname === "/auth/me") return { public: true };
   if (method === "POST" && pathname === "/admin/bootstrap/super-admin") return { public: true };
@@ -115,6 +117,9 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   if (method === "POST" && pathname === "/onboarding/me/submit") {
     return handleSubmitMyOnboarding(state, input.headers ?? {});
   }
+  if (method === "POST" && pathname === "/onboarding/me/rfi-response") {
+    return handleRespondToMyOnboardingRfi(state, { headers: input.headers ?? {}, payload: body });
+  }
 
   if (method === "POST" && pathname === "/api-keys") {
     return created(createApiClientAndKey(state, {
@@ -144,6 +149,8 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
     const application = await decideBusinessOnboardingApplication(state, {
       action,
       actorEmail: optionalStringBody(body, "actorEmail"),
+      assigneeEmail: optionalStringBody(body, "assigneeEmail"),
+      dueAt: optionalStringBody(body, "dueAt"),
       applicationId: decodeURIComponent(adminOnboardingActionMatch[1]!),
       note: optionalStringBody(body, "note"),
       requestedFields: (arrayBody(body, "requestedFields") ?? []).map(String)
@@ -471,7 +478,7 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
       businessClientId,
       accountName: stringBody(body, "accountName", "New ADA"),
       usePurpose: "settlement" as const,
-      status: "active" as const,
+      status: "pending_activation" as const,
       createdAt: new Date().toISOString()
     };
     state.accounts.push(account);
@@ -484,18 +491,20 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   const provisionMatch = pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/provision-circle$/);
   if (method === "POST" && provisionMatch) {
     const account = requireItem(state.accounts, provisionMatch[1]!, "account_not_found");
+    if (["restricted", "frozen", "closed"].includes(account.status)) return badRequest("account_status_blocks_circle_provisioning");
     const circle = await invokeCircle(state, { tenantId: state.tenantId, operationType: "account_provision", payload: { accountId: account.id } });
     account.circleAccountId = circle.providerReferenceId;
     account.circleSubAccountId = `${circle.providerReferenceId}_sub`;
     emitOutbox(state, "account_of_digital_asset.provisioned", { accountOfDigitalAssetId: account.id, circleOperationId: circle.id });
     return ok({ account, circleOperation: circle });
   }
-  const accountRestrictionMatch = pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/(restrict|unrestrict)$/);
+  const accountRestrictionMatch = pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/(activate|restrict|unrestrict|freeze|unfreeze|close)$/);
   if (method === "POST" && accountRestrictionMatch) {
     const account = requireItem(state.accounts, accountRestrictionMatch[1]!, "account_not_found");
-    const nextStatus = accountRestrictionMatch[2] === "restrict" ? "restricted" as const : "active" as const;
+    const nextStatus = accountNextStatus(accountRestrictionMatch[2]!, account.status);
     const transitionError = validateAccountTransition(account.status, nextStatus);
     if (transitionError) return badRequest(transitionError);
+    if (accountRestrictionMatch[2] === "activate" && !account.circleAccountId) return badRequest("circle_mapping_required");
     account.status = nextStatus;
     return ok({ account });
   }
@@ -759,7 +768,7 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   if (method === "GET" && ["/audit-log", "/audit-events"].includes(pathname)) return ok({ auditEvents: state.auditEvents });
   if (method === "GET" && pathname === "/internal/operations/commandcentre") return ok({ dailyClose: dailyClose(state), recommendations: state.recommendations, breaks: state.reconciliationBreaks });
 
-  if (method === "POST" && pathname === "/webhooks/circle") {
+  if (method === "POST" && (pathname === "/webhooks/circle" || pathname === "/webhooks/circle/onboarding")) {
     const verification = verifyCircleWebhook(input.rawBody ?? JSON.stringify(body), input.headers?.["circle-signature"]);
     const existing = state.circleWebhooks.find((item) => item.providerEventId === verification.providerEventId);
     if (existing) return ok({ webhook: existing, duplicate: true });
@@ -1145,14 +1154,25 @@ const businessClientTransitions: Record<string, string[]> = {
 };
 
 const accountTransitions: Record<string, string[]> = {
-  draft: ["active"],
-  active: ["restricted", "closed"],
-  restricted: ["active"],
+  draft: ["pending_activation", "closed"],
+  pending_activation: ["active", "restricted", "frozen", "closed"],
+  active: ["restricted", "frozen", "closed"],
+  restricted: ["active", "frozen", "closed"],
+  frozen: ["active", "restricted", "closed"],
   closed: []
 };
 
 const validateBusinessClientTransition = (from: string, to: string): string | undefined => {
   return businessClientTransitions[from]?.includes(to) ? undefined : "business_client_invalid_status_transition";
+};
+
+const accountNextStatus = (action: string, currentStatus: EntityStatus): EntityStatus => {
+  if (action === "activate" || action === "unrestrict") return "active";
+  if (action === "restrict") return "restricted";
+  if (action === "freeze") return "frozen";
+  if (action === "close") return "closed";
+  if (action === "unfreeze") return currentStatus === "frozen" ? "active" : currentStatus;
+  return currentStatus;
 };
 
 const validateAccountTransition = (from: string, to: string): string | undefined => {

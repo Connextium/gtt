@@ -7,6 +7,7 @@ import {
   type BusinessOnboardingApplication,
   type BusinessOnboardingInvitation,
   type BusinessUserProfile,
+  type OnboardingRfiTask,
   type OnboardingStepPayload
 } from "../../data.js";
 import { postgresUrlFromEnv } from "../../db/connection.js";
@@ -127,12 +128,14 @@ export const handleGetOrCreateMyOnboarding = async (
   const persisted = await hydrateBusinessUserOnboarding(state, auth);
   const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
   const stepPayloads = await hydrateOnboardingStepPayloads(state, bundle.application);
+  const rfiTasks = await hydrateOnboardingRfiTasks(state, bundle.application);
   await persistOnboardingBundle(state, auth, bundle);
   return {
     status: 200,
     body: {
       ...bundle,
-      stepPayloads
+      stepPayloads,
+      rfiTasks
     }
   };
 };
@@ -219,6 +222,55 @@ export const handleSubmitMyOnboarding = async (
   };
 };
 
+export const handleRespondToMyOnboardingRfi = async (
+  state: ApiState,
+  input: { headers: Record<string, string | undefined>; payload?: unknown }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const persisted = await hydrateBusinessUserOnboarding(state, auth);
+  const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
+  if (bundle.application.status !== "needs_information") return badRequest("rfi_not_open");
+
+  const now = new Date().toISOString();
+  const payload = isRecord(input.payload) ? input.payload : {};
+  const responseStep: OnboardingStepPayload = {
+    id: newId("onboarding_step"),
+    tenantId: state.tenantId,
+    applicationId: bundle.application.id,
+    stepKey: "rfi_response",
+    payload,
+    savedAt: now
+  };
+  upsertRuntimeStepPayload(state, responseStep);
+  for (const task of state.onboardingRfiTasks.filter((item) => item.applicationId === bundle.application.id && item.status === "open")) {
+    task.status = "responded";
+    task.resolvedAt = now;
+    task.updatedAt = now;
+  }
+  bundle.application.status = "pending_review";
+  bundle.application.currentStep = "pending_review";
+  bundle.application.updatedAt = now;
+  await persistOnboardingBundle(state, auth, bundle);
+  await persistOnboardingStepPayload(responseStep);
+  await persistRfiResponse(bundle.application, payload, now);
+  const rfiTasks = await hydrateOnboardingRfiTasks(state, bundle.application);
+  emitOutbox(state, "business_user.onboarding_rfi_responded", {
+    applicationId: bundle.application.id,
+    authUserId: auth.authUserId,
+    email: auth.email
+  });
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      status: "pending_review",
+      application: bundle.application,
+      rfiTasks
+    }
+  };
+};
+
 const ensureBusinessUserOnboarding = (
   state: ApiState,
   auth: AuthenticatedBusinessUser
@@ -274,6 +326,33 @@ const hydrateBusinessUserOnboarding = async (
   auth: AuthenticatedBusinessUser
 ): Promise<{ profile: BusinessUserProfile; application: BusinessOnboardingApplication } | undefined> => {
   const authUserId = uuidFromRuntimeId(auth.authUserId);
+  if (postgresUrlFromEnv() && authUserId) {
+    return withPostgresTransaction(async (client) => {
+      const [profileResult, applicationResult] = await Promise.all([
+        client.query(
+        `select id, tenant_id, auth_user_id, email, role, status, created_at, updated_at
+         from business_user_profiles
+         where auth_user_id = $1
+         limit 1`,
+          [authUserId]
+        ),
+        client.query(
+        `select id, tenant_id, auth_user_id, email, current_step, status, submitted_at, created_at, updated_at
+         from business_onboarding_applications
+         where auth_user_id = $1
+         limit 1`,
+          [authUserId]
+        )
+      ]);
+      if (!profileResult.rows[0] || !applicationResult.rows[0]) return undefined;
+      const profile = mapStoredProfile(profileResult.rows[0] as Record<string, unknown>);
+      const application = mapStoredApplication(applicationResult.rows[0] as Record<string, unknown>);
+      upsertRuntimeProfile(state, profile);
+      upsertRuntimeApplication(state, application);
+      return { profile, application };
+    });
+  }
+
   const supabase = supabaseAdminClient();
   if (!supabase || !authUserId) return undefined;
 
@@ -304,6 +383,31 @@ const hydrateOnboardingStepPayloads = async (
   application: BusinessOnboardingApplication
 ): Promise<Record<string, Record<string, unknown>>> => {
   const applicationId = uuidFromRuntimeId(application.id);
+  if (postgresUrlFromEnv() && applicationId) {
+    return withPostgresTransaction(async (client) => {
+      const result = await client.query(
+      `select id, tenant_id, application_id, step_key, payload, saved_at
+       from onboarding_step_payloads
+       where application_id = $1`,
+        [applicationId]
+      );
+      const payloads: Record<string, Record<string, unknown>> = {};
+      for (const row of result.rows) {
+        const stepPayload = mapStoredStepPayload(row as Record<string, unknown>);
+        payloads[stepPayload.stepKey] = stepPayload.payload;
+        upsertRuntimeStepPayload(state, stepPayload);
+      }
+      if (!Object.keys(payloads).length) {
+        return Object.fromEntries(
+          state.onboardingStepPayloads
+            .filter((item) => item.applicationId === application.id)
+            .map((item) => [item.stepKey, item.payload])
+        );
+      }
+      return payloads;
+    });
+  }
+
   const supabase = supabaseAdminClient();
   if (!supabase || !applicationId) {
     return Object.fromEntries(
@@ -326,6 +430,52 @@ const hydrateOnboardingStepPayloads = async (
     upsertRuntimeStepPayload(state, stepPayload);
   }
   return payloads;
+};
+
+const hydrateOnboardingRfiTasks = async (
+  state: ApiState,
+  application: BusinessOnboardingApplication
+): Promise<OnboardingRfiTask[]> => {
+  const applicationId = uuidFromRuntimeId(application.id);
+  if (postgresUrlFromEnv() && applicationId) {
+    return withPostgresTransaction(async (client) => {
+      const result = await client.query(
+        `select id, platform_tenant_id, onboarding_application_id, business_client_id, status, requested_fields, note, requester_email, assignee_email, due_at, resolved_at, created_at, updated_at
+         from onboarding_rfi_tasks
+         where onboarding_application_id = $1
+         order by created_at desc`,
+        [applicationId]
+      ).catch((error: unknown) => {
+        if (isMissingTableError(error, "onboarding_rfi_tasks")) return { rows: [] };
+        throw error;
+      });
+      return result.rows.map((row) => ({
+        id: `onboarding_rfi_task_${String(row.id)}`,
+        tenantId: String(row.platform_tenant_id),
+        applicationId: `business_onboarding_application_${String(row.onboarding_application_id)}`,
+        businessClientId: row.business_client_id ? String(row.business_client_id) : undefined,
+        status: isRfiTaskStatus(row.status) ? row.status : "open",
+        requestedFields: Array.isArray(row.requested_fields) ? row.requested_fields.map(String) : [],
+        note: row.note ? String(row.note) : undefined,
+        requesterEmail: row.requester_email ? String(row.requester_email) : undefined,
+        assigneeEmail: row.assignee_email ? String(row.assignee_email) : undefined,
+        dueAt: row.due_at ? String(row.due_at) : undefined,
+        resolvedAt: row.resolved_at ? String(row.resolved_at) : undefined,
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at)
+      }));
+    });
+  }
+  return state.onboardingRfiTasks
+    .filter((task) => task.applicationId === application.id)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+};
+
+const isMissingTableError = (error: unknown, tableName: string): boolean => {
+  if (!error || typeof error !== "object") return false;
+  const record = error as { code?: unknown; message?: unknown };
+  const message = typeof record.message === "string" ? record.message : "";
+  return record.code === "42P01" || (message.includes(tableName) && message.includes("does not exist"));
 };
 
 const mapStoredStepPayload = (row: Record<string, unknown>): OnboardingStepPayload => ({
@@ -525,6 +675,9 @@ const isOnboardingStatus = (value: unknown): value is BusinessOnboardingApplicat
 const isBusinessUserProfileStatus = (value: unknown): value is BusinessUserProfile["status"] =>
   typeof value === "string" && ["invited", "active", "disabled"].includes(value);
 
+const isRfiTaskStatus = (value: unknown): value is OnboardingRfiTask["status"] =>
+  typeof value === "string" && ["open", "responded", "closed", "cancelled"].includes(value);
+
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const uuidFromRuntimeId = (value?: string): string | undefined => {
@@ -537,6 +690,45 @@ const persistInvitation = async (invitation?: BusinessOnboardingInvitation): Pro
   if (!invitation) return;
   const id = uuidFromRuntimeId(invitation.id);
   if (!id) return;
+  if (postgresUrlFromEnv()) {
+    await withPostgresTransaction(async (client) => {
+      const existing = await client.query<{ id: string }>(
+        `select id
+         from business_onboarding_invitations
+         where tenant_id = $1
+           and lower(email) = lower($2)
+           and status = any($3::text[])
+         limit 1`,
+        [invitation.tenantId, invitation.email, ["requested", "sent", "accepted"]]
+      );
+      await client.query(
+        `insert into business_onboarding_invitations
+          (id, tenant_id, email, status, supabase_user_id, idempotency_key, invited_at, accepted_at, expires_at, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         on conflict (id) do update set
+           status = excluded.status,
+           supabase_user_id = excluded.supabase_user_id,
+           invited_at = excluded.invited_at,
+           accepted_at = excluded.accepted_at,
+           expires_at = excluded.expires_at,
+           updated_at = excluded.updated_at`,
+        [
+          existing.rows[0]?.id ?? id,
+          invitation.tenantId,
+          invitation.email,
+          invitation.status,
+          uuidFromRuntimeId(invitation.supabaseUserId) ?? null,
+          invitation.idempotencyKey,
+          invitation.invitedAt ?? null,
+          invitation.acceptedAt ?? null,
+          invitation.expiresAt ?? null,
+          invitation.createdAt,
+          invitation.updatedAt
+        ]
+      );
+    });
+    return;
+  }
   const supabase = supabaseAdminClient();
   if (!supabase) return;
 
@@ -586,6 +778,22 @@ const persistBusinessUserProfile = async (profile: BusinessUserProfile): Promise
   const id = uuidFromRuntimeId(profile.id);
   const authUserId = uuidFromRuntimeId(profile.authUserId);
   if (!id || !authUserId) return;
+  if (postgresUrlFromEnv()) {
+    await withPostgresTransaction(async (client) => {
+      await client.query(
+        `insert into business_user_profiles
+          (id, tenant_id, auth_user_id, email, role, status, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)
+         on conflict (auth_user_id) do update set
+           email = excluded.email,
+           role = excluded.role,
+           status = excluded.status,
+           updated_at = excluded.updated_at`,
+        [id, profile.tenantId, authUserId, profile.email, profile.role, profile.status, profile.createdAt, profile.updatedAt]
+      );
+    });
+    return;
+  }
   const supabase = supabaseAdminClient();
   if (!supabase) return;
 
@@ -611,6 +819,33 @@ const persistOnboardingApplication = async (application: BusinessOnboardingAppli
   const id = uuidFromRuntimeId(application.id);
   const authUserId = uuidFromRuntimeId(application.authUserId);
   if (!id || !authUserId) return;
+  if (postgresUrlFromEnv()) {
+    await withPostgresTransaction(async (client) => {
+      await client.query(
+        `insert into business_onboarding_applications
+          (id, tenant_id, auth_user_id, email, current_step, status, submitted_at, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         on conflict (auth_user_id) do update set
+           email = excluded.email,
+           current_step = excluded.current_step,
+           status = excluded.status,
+           submitted_at = excluded.submitted_at,
+           updated_at = excluded.updated_at`,
+        [
+          id,
+          application.tenantId,
+          authUserId,
+          application.email,
+          application.currentStep,
+          application.status,
+          application.submittedAt ?? null,
+          application.createdAt,
+          application.updatedAt
+        ]
+      );
+    });
+    return;
+  }
   const supabase = supabaseAdminClient();
   if (!supabase) return;
 
@@ -677,6 +912,20 @@ const persistOnboardingStepPayload = async (step: OnboardingStepPayload): Promis
   const id = uuidFromRuntimeId(step.id);
   const applicationId = uuidFromRuntimeId(step.applicationId);
   if (!id || !applicationId) return;
+  if (postgresUrlFromEnv()) {
+    await withPostgresTransaction(async (client) => {
+      await client.query(
+        `insert into onboarding_step_payloads
+          (id, tenant_id, application_id, step_key, payload, saved_at)
+         values ($1, $2, $3, $4, $5, $6)
+         on conflict (application_id, step_key) do update set
+           payload = excluded.payload,
+           saved_at = excluded.saved_at`,
+        [id, step.tenantId, applicationId, step.stepKey, JSON.stringify(step.payload), step.savedAt]
+      );
+    });
+    return;
+  }
   const supabase = supabaseAdminClient();
   if (!supabase) return;
 
@@ -694,6 +943,43 @@ const persistOnboardingStepPayload = async (step: OnboardingStepPayload): Promis
       { onConflict: "application_id,step_key" }
     );
   if (error) throw new Error(`onboarding_step_payloads_upsert_failed: ${error.message}`);
+};
+
+const persistRfiResponse = async (
+  application: BusinessOnboardingApplication,
+  payload: Record<string, unknown>,
+  now: string
+): Promise<void> => {
+  if (!postgresUrlFromEnv()) return;
+  const applicationId = uuidFromRuntimeId(application.id);
+  if (!applicationId) return;
+  await withPostgresTransaction(async (client) => {
+    const businessClientId = await client.query<{ id: string }>(
+      `select id from business_clients where id = $1 or correlation_id = $2 limit 1`,
+      [applicationId, `business_onboarding:${applicationId}`]
+    );
+    const clientId = businessClientId.rows[0]?.id ?? null;
+    await client.query(
+      `update onboarding_rfi_tasks
+       set status = 'responded', resolved_at = $2, updated_at = $2
+       where onboarding_application_id = $1 and status = 'open'`,
+      [applicationId, now]
+    ).catch(() => undefined);
+    await client.query(
+      `insert into onboarding_status_events
+        (id, platform_tenant_id, onboarding_application_id, business_client_id, previous_status, next_status, source, actor_email, payload, created_at)
+       values ($1, $2, $3, $4, 'needs_information', 'pending_review', 'applicant', $5, $6, $7)`,
+      [
+        newId("onboarding_status_event").split("_").at(-1),
+        uuidFromRuntimeId(application.tenantId) ?? process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001",
+        applicationId,
+        clientId,
+        application.email,
+        JSON.stringify(payload),
+        now
+      ]
+    ).catch(() => undefined);
+  });
 };
 
 const persistentTenantId = (state: ApiState): string => {

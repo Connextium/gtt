@@ -4,9 +4,13 @@ import { NewApiKeyContent } from "./api-management/NewApiKeyContent.js";
 import { InviteUser, OnboardingSuccess } from "./admin/AdminRoutes.js";
 import SaveUserManagement from "./admin/SaveUserManagement.js";
 import { InternalUsersContent } from "./admin/UserManagement.js";
+import { AdaManagementContent } from "./ada-management/AdaManagementContent.js";
 import { InternalAccessInitialization, InternalOperationGateway } from "./auth/InternalAuthRoutes.js";
-import { BusinessClientReview } from "./business-clients/BusinessClientReview.js";
+import { BusinessClientManagementContent } from "./business-clients/BusinessClientManagementContent.js";
+import { EvidenceMonitorContent } from "./evidence/EvidenceMonitorContent.js";
 import { InternalShell } from "./InternalShell.js";
+import { LedgerOperationsContent } from "./ledger/LedgerOperationsContent.js";
+import { LedgerRegistryContent } from "./ledger/LedgerRegistryContent.js";
 import { InternalCommandCenterContent } from "./operations/InternalCommandCenterContent.js";
 import type { AppUser, RoleCode, UserStatus } from "../identity.js";
 import { isTreasuryWorksRoute, TreasuryWorksContent } from "./treasury-works/TreasuryWorksApp.js";
@@ -288,10 +292,82 @@ export const InternalApp = ({
     );
   }
 
-  if (path === "/internal/operations/business-clients" || path.startsWith("/internal/operations/business-clients/")) {
+  if (path === "/internal/operations/business-clients" || /^\/internal\/operations\/business-clients\/[^/]+$/.test(path)) {
     return (
       <InternalShell activePath={path} currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
-        <BusinessClientReview currentUser={currentInternalUser} navigate={navigate} path={path} />
+        <BusinessClientManagementContent navigate={navigate} path={path} />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/ledger/chart-of-accounts" || path === "/internal/operations/ledger/posting-rules") {
+    return (
+      <InternalShell activePath={path} currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <LedgerRegistryContent
+          mode={path.endsWith("/posting-rules") ? "postingRules" : "chart"}
+          navigate={navigate}
+        />
+      </InternalShell>
+    );
+  }
+
+  if (
+    path === "/internal/operations/ledger/active-ledgers"
+    || path === "/internal/operations/ledger/register"
+    || path === "/internal/operations/ledger/register/success"
+    || path === "/internal/operations/ledger/opening-journal"
+    || path === "/internal/operations/ledger/opening-journal/success"
+  ) {
+    return (
+      <InternalShell activePath={path} currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <LedgerOperationsContent
+          mode={
+            path.endsWith("/register/success")
+              ? "registerLedgerSuccess"
+              : path.endsWith("/register")
+                ? "registerLedger"
+                : path.endsWith("/opening-journal/success")
+                  ? "openingJournalSuccess"
+                  : path.endsWith("/opening-journal")
+                    ? "openingJournal"
+                    : "dashboard"
+          }
+          navigate={navigate}
+        />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/audit" || path === "/internal/operations/events/outbox" || path === "/internal/operations/events/inbox") {
+    return (
+      <InternalShell activePath={path} currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <EvidenceMonitorContent
+          mode={path.endsWith("/events/outbox") ? "outbox" : path.endsWith("/events/inbox") ? "inbox" : "audit"}
+        />
+      </InternalShell>
+    );
+  }
+
+  const adaDetailMatch = path.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)(?:\/(instruments|linked-instruments)(?:\/(new|success))?)?$/);
+  if (path === "/internal/operations/accounts-of-digital-asset" || path === "/internal/operations/accounts-of-digital-asset/new" || path === "/internal/operations/accounts-of-digital-asset/success" || adaDetailMatch) {
+    const mode =
+      path === "/internal/operations/accounts-of-digital-asset/new"
+        ? "new"
+        : path === "/internal/operations/accounts-of-digital-asset/success"
+          ? "success"
+          : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "new"
+            ? "linkRail"
+            : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "success"
+              ? "linkRailSuccess"
+              : adaDetailMatch?.[2] === "instruments" || adaDetailMatch?.[2] === "linked-instruments"
+            ? "instruments"
+            : adaDetailMatch
+              ? "detail"
+              : "list";
+
+    return (
+      <InternalShell activePath="/internal/operations/accounts-of-digital-asset" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <AdaManagementContent accountId={adaDetailMatch?.[1]} mode={mode} navigate={navigate} />
       </InternalShell>
     );
   }

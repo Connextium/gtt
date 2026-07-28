@@ -1,10 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config as loadEnv } from "dotenv";
 import type { ApiAuthContext } from "./auth/index.js";
-import { authenticateApiRequest } from "./auth/middleware.js";
+import { authenticateApiRequestWithDatabaseFallback } from "./auth/middleware.js";
 import { createInitialState, emitAudit } from "./data.js";
 import { postgresUrlFromEnv } from "./db/connection.js";
-import { handleSprint1PostgresCommand, isSprint1PostgresCommand } from "./db/sprint1-postgres-unit-of-work.js";
+import { handleSprint1PostgresRoute, isSprint1PostgresRoute } from "./db/sprint1-postgres-unit-of-work.js";
 import { withApiStateTransaction } from "./db/state-transaction.js";
 import { loadApiStateSnapshot, saveApiStateSnapshot } from "./db/state-store.js";
 import { persistInternalIdentityTables, refreshInternalIdentityStateFromTables, shouldPersistInternalIdentity, shouldRefreshInternalIdentity } from "./db/internal-identity-store.js";
@@ -41,7 +41,7 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
       const metadata = routeMetadata(request.method ?? "GET", url.pathname);
       let authContext: ApiAuthContext | undefined;
       if (!metadata.public) {
-        const auth = authenticateApiRequest(state, request, metadata.requiredScopes);
+        const auth = await authenticateApiRequestWithDatabaseFallback(state, request, metadata.requiredScopes);
         if (auth.error) {
           sendJson(response, auth.error, request);
           return;
@@ -51,8 +51,8 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
       const headers = Object.fromEntries(Object.entries(request.headers).map(([key, value]) => [key, Array.isArray(value) ? value[0] : value]));
       const correlationId = headers["x-correlation-id"] ?? `corr_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       const idempotencyKey = request.method === "POST" ? headers["idempotency-key"] ?? stringFromBody(body, "idempotencyKey") : undefined;
-      if (postgresUrlFromEnv() && isSprint1PostgresCommand(request.method ?? "GET", url.pathname)) {
-        const result = await handleSprint1PostgresCommand({
+      if (postgresUrlFromEnv() && isSprint1PostgresRoute(request.method ?? "GET", url.pathname)) {
+        const result = await handleSprint1PostgresRoute({
           method: request.method ?? "GET",
           pathname: url.pathname,
           body,

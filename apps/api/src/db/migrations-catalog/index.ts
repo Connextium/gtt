@@ -121,6 +121,21 @@ export const migrationCatalog: MigrationCatalogEntry[] = [
     version: "0019",
     fileName: "0019_business_onboarding_review_actions.sql",
     domainModules: ["client-onboarding"]
+  },
+  {
+    version: "0020",
+    fileName: "0020_sprint1_3_direct_database_completion.sql",
+    domainModules: ["api-auth", "events", "ledger", "client-onboarding", "digital-accounts"]
+  },
+  {
+    version: "0021",
+    fileName: "0021_sprint2_onboarding_kyb_evidence_completion.sql",
+    domainModules: ["client-onboarding", "circle-integration", "events"]
+  },
+  {
+    version: "0022",
+    fileName: "0022_sprint3_ada_lifecycle_circle_mapping.sql",
+    domainModules: ["digital-accounts", "circle-integration", "events"]
   }
 ];
 

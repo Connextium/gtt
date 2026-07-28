@@ -10,7 +10,9 @@ import {
   RefreshCw,
   ShieldCheck,
   UserCheck,
-  Users
+  Users,
+  Wallet,
+  Workflow
 } from "lucide-react";
 import type { ComponentType } from "react";
 
@@ -31,6 +33,7 @@ export interface InternalRouteDefinition {
   description: string;
   workflow: InternalWorkflow;
   icon: ComponentType<{ size?: number }>;
+  children?: InternalRouteDefinition[];
   navTarget?: string;
   showInShellNav?: boolean;
 }
@@ -74,6 +77,24 @@ export const internalRoutes: InternalRouteDefinition[] = [
     description: "Review business onboarding applications, KYB evidence, approvals, and RFIs.",
     workflow: "client-operations",
     icon: UserCheck,
+    children: [
+      {
+        label: "Onboarding Queue",
+        path: "/internal/operations/business-clients",
+        description: "Review business onboarding applications, approvals, RFIs, and KYB evidence.",
+        workflow: "client-operations",
+        icon: UserCheck,
+        showInShellNav: true
+      },
+      {
+        label: "ADA Accounts",
+        path: "/internal/operations/accounts-of-digital-asset",
+        description: "Manage accounts of digital assets linked to approved business clients.",
+        workflow: "client-operations",
+        icon: Wallet,
+        showInShellNav: true
+      }
+    ],
     showInShellNav: true
   },
   {
@@ -82,6 +103,32 @@ export const internalRoutes: InternalRouteDefinition[] = [
     description: "Inspect ledger access, posting rules, and statement shortcuts.",
     workflow: "ledger",
     icon: Landmark,
+    children: [
+      {
+        label: "Chart of Accounts",
+        path: "/internal/operations/ledger/chart-of-accounts",
+        description: "Inspect account codes, classifications, normal balances, and ledger status.",
+        workflow: "ledger",
+        icon: Landmark,
+        showInShellNav: true
+      },
+      {
+        label: "Active Ledgers",
+        path: "/internal/operations/ledger/active-ledgers",
+        description: "Monitor active ADA-backed ledgers, rail status, and reconciliation posture.",
+        workflow: "ledger",
+        icon: Landmark,
+        showInShellNav: true
+      },
+      {
+        label: "Opening Journal",
+        path: "/internal/operations/ledger/opening-journal",
+        description: "Post controlled opening journal events to approved ADA accounts.",
+        workflow: "ledger",
+        icon: ClipboardCheck,
+        showInShellNav: true
+      }
+    ],
     showInShellNav: true
   },
   {
@@ -126,6 +173,40 @@ export const internalRoutes: InternalRouteDefinition[] = [
     showInShellNav: true
   },
   {
+    label: "Evidence",
+    path: "/internal/operations/audit",
+    description: "Inspect audit events, outbox delivery, and inbox processing evidence.",
+    workflow: "audit",
+    icon: ShieldCheck,
+    children: [
+      {
+        label: "Audit Events",
+        path: "/internal/operations/audit",
+        description: "Search audit events by actor, tenant, correlation ID, idempotency key, and event type.",
+        workflow: "audit",
+        icon: ShieldCheck,
+        showInShellNav: true
+      },
+      {
+        label: "Outbox",
+        path: "/internal/operations/events/outbox",
+        description: "Monitor outbound event status, attempts, publish timestamps, errors, and payload evidence.",
+        workflow: "audit",
+        icon: Workflow,
+        showInShellNav: true
+      },
+      {
+        label: "Inbox",
+        path: "/internal/operations/events/inbox",
+        description: "Monitor inbound provider events, dedupe status, processing timestamps, errors, and payload evidence.",
+        workflow: "audit",
+        icon: Workflow,
+        showInShellNav: true
+      }
+    ],
+    showInShellNav: true
+  },
+  {
     label: "UAT Evidence",
     path: "/internal/operations/uat",
     description: "Review pilot scenario outcomes and stakeholder evidence.",
@@ -146,4 +227,7 @@ export const internalRoutes: InternalRouteDefinition[] = [
 export const internalShellNavItems = internalRoutes.filter((route) => route.showInShellNav);
 
 export const internalRouteForPath = (path: string): InternalRouteDefinition | undefined =>
-  internalRoutes.find((route) => path === route.path || path.startsWith(`${route.path}/`));
+  flattenInternalRoutes(internalRoutes).find((route) => path === route.path || path.startsWith(`${route.path}/`));
+
+const flattenInternalRoutes = (routes: InternalRouteDefinition[]): InternalRouteDefinition[] =>
+  routes.flatMap((route) => [route, ...(route.children ? flattenInternalRoutes(route.children) : [])]);

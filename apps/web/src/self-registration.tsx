@@ -2,9 +2,12 @@ import { createClient, type Session } from "@supabase/supabase-js";
 import {
   ArrowLeft,
   ArrowRight,
+  AlertCircle,
+  ArrowLeftRight,
   BarChart2,
   Bell,
   Building2,
+  Calendar,
   Check,
   CheckCircle2,
   Circle,
@@ -34,12 +37,18 @@ import {
   Headphones,
   Wallet,
   FileText,
-  TrendingUp
+  Filter,
+  Factory,
+  PlusSquare,
+  RefreshCcw,
+  TrendingUp,
+  X
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import applicationPendingGraphic from "./assets/application-pending-graphic.svg";
 import headquartersBuilding from "./assets/headquarters-building.jpg";
 import officeInhouse from "./assets/office-inhouse.jpg";
+import rfiScreenA from "./assets/rfi-screen-a.png";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 
@@ -112,13 +121,28 @@ interface OnboardingApplication {
   email: string;
   currentStep: OnboardingStepKey;
   status: OnboardingStatus;
+  createdAt?: string;
   submittedAt?: string;
+  updatedAt: string;
+}
+
+interface OnboardingRfiTask {
+  id: string;
+  status: "open" | "responded" | "closed" | "cancelled";
+  requestedFields: string[];
+  note?: string;
+  requesterEmail?: string;
+  assigneeEmail?: string;
+  dueAt?: string;
+  resolvedAt?: string;
+  createdAt: string;
   updatedAt: string;
 }
 
 interface MyOnboardingResponse {
   application: OnboardingApplication;
   stepPayloads?: Record<string, OnboardingDraftPayload>;
+  rfiTasks?: OnboardingRfiTask[];
 }
 
 interface InvitationResponse {
@@ -139,6 +163,8 @@ export const selfRegistrationRoutes = new Set([
   "/onboarding/step-4",
   "/submission-confirmed",
   "/application-pending",
+  "/rfi-response",
+  "/treasury",
   "/welcome"
 ]);
 
@@ -176,6 +202,8 @@ export function SelfRegistrationRouter({ path, navigate }: { path: string; navig
   if (path === "/auth/set-password") return <SetPasswordScreen navigate={navigate} session={session} />;
   if (path === "/submission-confirmed") return <Protected loading={loading} session={session} navigate={navigate}><SubmissionConfirmedScreen navigate={navigate} session={session} /></Protected>;
   if (path === "/application-pending") return <Protected loading={loading} session={session} navigate={navigate}><PendingReviewScreen navigate={navigate} session={session} /></Protected>;
+  if (path === "/rfi-response") return <Protected loading={loading} session={session} navigate={navigate}><RfiResponseScreen navigate={navigate} session={session} /></Protected>;
+  if (path === "/treasury") return <Protected loading={loading} session={session} navigate={navigate}><SovereignTreasuryScreen navigate={navigate} session={session} /></Protected>;
   if (path === "/welcome") return <Protected loading={loading} session={session} navigate={navigate}><WelcomeLandingScreen navigate={navigate} session={session} /></Protected>;
   if (path.startsWith("/onboarding/")) {
     return (
@@ -1153,6 +1181,7 @@ function HourglassIcon() {
 
 function PendingReviewScreen({ navigate, session }: { navigate: Navigate; session: Session | null }) {
   const [application, setApplication] = useState<OnboardingApplication | undefined>();
+  const [rfiTasks, setRfiTasks] = useState<OnboardingRfiTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
 
@@ -1165,6 +1194,7 @@ function PendingReviewScreen({ navigate, session }: { navigate: Navigate; sessio
       .then((result) => {
         if (!active) return;
         setApplication(result.application);
+        setRfiTasks(result.rfiTasks ?? []);
         setError(undefined);
       })
       .catch((caught) => {
@@ -1273,6 +1303,10 @@ function PendingReviewScreen({ navigate, session }: { navigate: Navigate; sessio
                   </article>
                 </div>
               </section>
+
+              {status === "needs_information" ? (
+                <ClientRfiStatusCard onOpen={() => navigate("/rfi-response")} rfiTasks={rfiTasks} />
+              ) : null}
             </div>
 
             <div className="gtt-pending-right-column">
@@ -1365,6 +1399,289 @@ function TimelineItem({ active, copy, index, muted, title }: { active?: boolean;
   );
 }
 
+function ClientRfiStatusCard({ onOpen, rfiTasks }: { onOpen: () => void; rfiTasks: OnboardingRfiTask[] }) {
+  const openTasks = rfiTasks.filter((task) => task.status === "open");
+  const task = openTasks[0] ?? fallbackRfiTask();
+  return (
+    <section className="gtt-client-rfi-status-card">
+      <header>
+        <div>
+          <span>Request for Information</span>
+          <h3>{rfiTitle(task)}</h3>
+        </div>
+        <code>{rfiDisplayId(task, 0)}</code>
+      </header>
+      <p>{task.note ?? "The compliance desk has requested additional information before approval can continue."}</p>
+      <div className="gtt-client-rfi-fields">
+        {task.requestedFields.length ? task.requestedFields.slice(0, 3).map((field) => <small key={field}>{field}</small>) : <small>General clarification</small>}
+      </div>
+      <button onClick={onOpen} type="button">
+        Open
+        <ArrowRight size={15} />
+      </button>
+    </section>
+  );
+}
+
+function RfiResponseScreen({ navigate, session }: { navigate: Navigate; session: Session | null }) {
+  const [application, setApplication] = useState<OnboardingApplication | undefined>();
+  const [rfiTasks, setRfiTasks] = useState<OnboardingRfiTask[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | undefined>();
+  const [rfiResponse, setRfiResponse] = useState("");
+  const [rfiDocumentType, setRfiDocumentType] = useState("Certificate of Incorporation");
+  const [rfiSubmitting, setRfiSubmitting] = useState(false);
+
+  useEffect(() => {
+    const token = session?.access_token;
+    if (!token) return;
+    let active = true;
+    setLoading(true);
+    apiRequest<MyOnboardingResponse>("/onboarding/me", { token })
+      .then((result) => {
+        if (!active) return;
+        setApplication(result.application);
+        setRfiTasks(result.rfiTasks ?? []);
+        setError(undefined);
+      })
+      .catch((caught) => {
+        if (!active) return;
+        setError(caught instanceof Error ? caught.message : "Unable to retrieve RFI request.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [session?.access_token]);
+
+  async function submitRfiResponse() {
+    const token = session?.access_token;
+    if (!token || !rfiResponse.trim()) return;
+    setRfiSubmitting(true);
+    setError(undefined);
+    try {
+      const result = await apiRequest<MyOnboardingResponse>("/onboarding/me/rfi-response", {
+        method: "POST",
+        token,
+        body: { documentType: rfiDocumentType, response: rfiResponse.trim(), submittedAt: new Date().toISOString() }
+      });
+      setApplication(result.application);
+      setRfiTasks(result.rfiTasks ?? []);
+      setRfiResponse("");
+      navigate("/application-pending");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to submit requested information.");
+    } finally {
+      setRfiSubmitting(false);
+    }
+  }
+
+  const terminalId = application?.id ? `8842-${application.id.slice(-6).toUpperCase()}` : "8842-X-RFI";
+
+  return (
+    <div className="gtt-pending-shell gtt-rfi-response-page">
+      <aside className="gtt-pending-sidebar">
+        <div className="gtt-pending-brand">
+          <div>GTT</div>
+          <span>USDC Treasury</span>
+        </div>
+        <nav className="gtt-pending-nav" aria-label="RFI response navigation">
+          <span>Operational Hub</span>
+          <a className="active" href="#"><BriefcaseIcon /> RFI Workspace</a>
+          <a aria-disabled="true" href="#"><Building2 size={20} /> Accounts</a>
+          <a aria-disabled="true" href="#"><Gavel size={20} /> Trade Ledgers</a>
+          <a aria-disabled="true" href="#"><CreditCard size={20} /> Treasury</a>
+        </nav>
+        <div className="gtt-pending-identity">
+          <BusinessAvatarMenu direction="up" email={application?.email ?? session?.user.email} onLogout={() => logoutBusinessUser(navigate)} />
+          <div>
+            <strong>Terminal ID</strong>
+            <span>{terminalId}</span>
+          </div>
+        </div>
+      </aside>
+
+      <main className="gtt-pending-main">
+        <header className="gtt-pending-topbar">
+          <div>
+            <h1>Global Trade Treasury</h1>
+            <nav aria-label="RFI response links">
+              <a href="#">Markets</a>
+              <a href="#">Insights</a>
+              <a href="#">Regulatory</a>
+            </nav>
+          </div>
+          <div className="gtt-pending-tools">
+            <button className="gtt-rfi-back" onClick={() => navigate("/application-pending")} type="button"><ArrowLeft size={15} /> Application Status</button>
+            <Bell size={21} />
+            <Settings size={21} />
+          </div>
+        </header>
+
+        <section className="gtt-pending-content">
+          <section className="gtt-rfi-response-header">
+            <div>
+              <span>Compliance Workspace</span>
+              <h2>Onboarding: Request for Information</h2>
+              <p>{loading ? "Loading active compliance request." : "Respond to the open RFI so your application can return to review."}</p>
+              {error ? <div className="form-error">{error}</div> : null}
+            </div>
+            <button disabled type="button">Information Required</button>
+          </section>
+
+          <div className="gtt-rfi-response-grid">
+            <ClientRfiResponseWorkspace
+              documentType={rfiDocumentType}
+              onDocumentTypeChange={setRfiDocumentType}
+              onResponseChange={setRfiResponse}
+              onSubmit={submitRfiResponse}
+              response={rfiResponse}
+              rfiTasks={rfiTasks}
+              submitting={rfiSubmitting}
+            />
+            <aside className="gtt-rfi-response-aside">
+              <ClientRfiTimeline application={application} rfiTasks={rfiTasks} />
+              <section className="gtt-rfi-global-standards">
+                <h3>Global Standards</h3>
+                <img src={rfiScreenA} alt="RFI response compliance workspace" />
+                <p>Transparency is the foundation of institutional trust. All requests are handled through controlled compliance review.</p>
+              </section>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function BriefcaseIcon() {
+  return <FileText size={20} />;
+}
+
+function ClientRfiResponseWorkspace({
+  documentType,
+  onDocumentTypeChange,
+  onResponseChange,
+  onSubmit,
+  response,
+  rfiTasks,
+  submitting
+}: {
+  documentType: string;
+  onDocumentTypeChange: (value: string) => void;
+  onResponseChange: (value: string) => void;
+  onSubmit: () => void;
+  response: string;
+  rfiTasks: OnboardingRfiTask[];
+  submitting: boolean;
+}) {
+  const openTasks = rfiTasks.filter((task) => task.status === "open");
+  const latestOpen = openTasks[0];
+  const reviewTasks = rfiTasks.filter((task) => task.status === "responded" || task.status === "closed");
+  return (
+    <div className="gtt-client-rfi-workspace">
+      <section className="gtt-client-rfi-active">
+        <h3><Calendar size={17} /> Active Requests</h3>
+        {(openTasks.length ? openTasks : [fallbackRfiTask()]).map((task, index) => (
+          <article className={task.status === "open" ? "open" : ""} key={task.id}>
+            <header>
+              <code>{rfiDisplayId(task, index)}</code>
+              <span>{formatRfiStatus(task.status)}</span>
+            </header>
+            <h4>{rfiTitle(task)}</h4>
+            <blockquote>{task.note ?? "Please provide the requested compliance clarification or supporting document."}</blockquote>
+            <div className="gtt-client-rfi-fields">
+              {task.requestedFields.length ? task.requestedFields.map((field) => <small key={field}>{field}</small>) : <small>General clarification</small>}
+            </div>
+          </article>
+        ))}
+        {reviewTasks.map((task, index) => (
+          <article className="review" key={task.id}>
+            <header>
+              <code>{rfiDisplayId(task, index + openTasks.length)}</code>
+              <span>In Review</span>
+            </header>
+            <h4>{rfiTitle(task)}</h4>
+            <blockquote>{task.note ?? "Your submitted response is waiting for compliance review."}</blockquote>
+          </article>
+        ))}
+      </section>
+
+      <section className="gtt-client-rfi-upload">
+        <h3><Shield size={17} /> Secure Upload Portal</h3>
+        <div>
+          <div className="gtt-client-rfi-dropzone">
+            <UploadCloud size={30} />
+            <strong>Drop missing documents here</strong>
+            <span>PDF, PNG, JPG up to 50MB</span>
+          </div>
+          <div className="gtt-client-rfi-form">
+            <label>
+              <span>Document Type</span>
+              <select onChange={(event) => onDocumentTypeChange(event.target.value)} value={documentType}>
+                <option>Certificate of Incorporation</option>
+                <option>Tax ID</option>
+                <option>Proof of Address</option>
+                <option>Ownership Chart</option>
+                <option>Other Evidence</option>
+              </select>
+            </label>
+            <label>
+              <span>Notes for Officer</span>
+              <textarea onChange={(event) => onResponseChange(event.target.value)} placeholder={latestOpen?.note ? `Respond to: ${latestOpen.note}` : "Add additional context..."} rows={5} value={response} />
+            </label>
+            <button disabled={submitting || !response.trim()} onClick={onSubmit} type="button">
+              {submitting ? "Submitting..." : "Submit Response"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ClientRfiTimeline({ application, rfiTasks }: { application?: OnboardingApplication; rfiTasks: OnboardingRfiTask[] }) {
+  const latest = rfiTasks[0];
+  return (
+    <section className="gtt-client-rfi-timeline">
+      <h3>Compliance Timeline</h3>
+      <div>
+        <ClientRfiTimelineItem active icon={AlertCircle} meta={latest ? formatSubmittedAt(latest.createdAt) : "Today"} title="RFI Issued by Compliance Team" copy={latest?.requesterEmail ? `Officer: ${latest.requesterEmail}` : "Officer: Compliance Desk"} />
+        <ClientRfiTimelineItem icon={Check} meta={application?.submittedAt ? formatSubmittedAt(application.submittedAt) : "Submitted"} title="Business application submitted" copy="Action by business terminal" />
+        <ClientRfiTimelineItem icon={FileText} meta={application?.createdAt ? formatSubmittedAt(application.createdAt) : "Created"} title="Onboarding application initiated" copy="Status: Draft created" />
+      </div>
+    </section>
+  );
+}
+
+function ClientRfiTimelineItem({ active, copy, icon: Icon, meta, title }: { active?: boolean; copy: string; icon: typeof AlertCircle; meta: string; title: string }) {
+  return (
+    <article className={active ? "active" : ""}>
+      <div><Icon size={14} /></div>
+      <section>
+        <time>{meta}</time>
+        <strong>{title}</strong>
+        <span>{copy}</span>
+      </section>
+    </article>
+  );
+}
+
+const fallbackRfiTask = (): OnboardingRfiTask => ({
+  id: "rfi-fallback",
+  status: "open",
+  requestedFields: ["Document Missing", "Beneficial Ownership"],
+  note: "The compliance desk has requested additional information before approval can continue.",
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString()
+});
+
+const rfiDisplayId = (task: OnboardingRfiTask, index: number): string => `RFI-${task.id.slice(-6).toUpperCase()}-${String(index + 1).padStart(2, "0")}`;
+const rfiTitle = (task: OnboardingRfiTask): string => task.requestedFields.find((field) => field.toLowerCase().includes("section"))?.replace(/^Target Section:\s*/i, "") ?? "Beneficial Ownership Disclosure";
+const formatRfiStatus = (status: string): string => status.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+
 function WelcomeLandingScreen({ navigate, session }: { navigate: Navigate; session: Session | null }) {
   const [application, setApplication] = useState<OnboardingApplication | undefined>();
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -1407,7 +1724,7 @@ function WelcomeLandingScreen({ navigate, session }: { navigate: Navigate; sessi
           <a className="active" href="#"><Building2 size={20} /> Accounts</a>
           <a href="#"><Gavel size={20} /> Trade Ledgers</a>
           <a href="#"><ArrowRight size={20} /> Netting</a>
-          <a href="#"><Wallet size={20} /> Treasury</a>
+          <button onClick={() => navigate("/treasury")} type="button"><Wallet size={20} /> Treasury</button>
           <a href="#"><BarChart2 size={20} /> Analytics</a>
         </nav>
         <div className="gtt-welcome-profile">
@@ -1581,6 +1898,318 @@ function ActivityItem({ active, copy, icon: Icon, meta, title }: { active?: bool
         <span>{meta}</span>
       </section>
     </article>
+  );
+}
+
+type SovereignView = "dashboard" | "detail";
+
+function SovereignTreasuryScreen({ navigate, session }: { navigate: Navigate; session: Session | null }) {
+  const [application, setApplication] = useState<OnboardingApplication | undefined>();
+  const [view, setView] = useState<SovereignView>("dashboard");
+  const [moveMoneyOpen, setMoveMoneyOpen] = useState(false);
+
+  useEffect(() => {
+    const token = session?.access_token;
+    if (!token) return;
+    let active = true;
+    apiRequest<MyOnboardingResponse>("/onboarding/me", { token })
+      .then((result) => {
+        if (!active) return;
+        if (result.application.status !== "approved") {
+          navigate(routeForApplication(result.application));
+          return;
+        }
+        setApplication(result.application);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [navigate, session?.access_token]);
+
+  const terminalId = application?.id ? `8842-${application.id.slice(-6).toUpperCase()}` : "8842-X";
+  const email = application?.email ?? session?.user.email ?? "treasury@gtt.example";
+
+  return (
+    <div className="gtt-sovereign-shell">
+      <aside className="gtt-sovereign-sidebar">
+        <div className="gtt-sovereign-brand">
+          <button onClick={() => setView("dashboard")} type="button">GTT</button>
+          <span>USDC Treasury</span>
+          <small>Terminal ID: {terminalId}</small>
+        </div>
+
+        <nav className="gtt-sovereign-nav" aria-label="Business treasury navigation">
+          <button onClick={() => navigate("/welcome")} type="button"><Building2 size={18} /> Accounts</button>
+          <button type="button"><FileText size={18} /> Trade Ledgers</button>
+          <button type="button"><ArrowLeftRight size={18} /> Netting</button>
+          <button className="active" onClick={() => setView("dashboard")} type="button"><Wallet size={18} /> Treasury</button>
+          <button type="button"><LineChart size={18} /> Analytics</button>
+        </nav>
+
+        <div className="gtt-sovereign-sidebar-footer">
+          <button onClick={() => setMoveMoneyOpen(true)} type="button">New Transaction</button>
+        </div>
+      </aside>
+
+      <main className="gtt-sovereign-main">
+        <header className="gtt-sovereign-topbar">
+          <button onClick={() => setView("dashboard")} type="button">Global Trade Treasury</button>
+          <nav aria-label="Treasury links">
+            <a className="active" href="#">Markets</a>
+            <a href="#">Insights</a>
+            <a href="#">Regulatory</a>
+          </nav>
+          <div>
+            <Bell size={19} />
+            <Settings size={19} />
+            <span title={email}>{email.slice(0, 2).toUpperCase()}</span>
+          </div>
+        </header>
+
+        <section className="gtt-sovereign-body">
+          {view === "dashboard" ? <SovereignDashboard onOpenDetail={() => setView("detail")} /> : <SovereignDaaDetail onBack={() => setView("dashboard")} />}
+        </section>
+
+        <footer className="gtt-sovereign-footer">
+          <div>Global Trade Treasury</div>
+          <nav aria-label="Treasury policies">
+            <a href="#">Terms</a>
+            <a href="#">Privacy</a>
+            <a href="#">Compliance</a>
+            <a href="#">API Documentation</a>
+          </nav>
+          <p>2026 Global Trade Treasury. All rights reserved. Member SIPC.</p>
+        </footer>
+      </main>
+
+      <SovereignMoveMoneyModal isOpen={moveMoneyOpen} onClose={() => setMoveMoneyOpen(false)} />
+    </div>
+  );
+}
+
+function SovereignDashboard({ onOpenDetail }: { onOpenDetail: () => void }) {
+  return (
+    <div className="gtt-sovereign-page">
+      <section className="gtt-sovereign-hero">
+        <div>
+          <h1>The Sovereign Ledger.</h1>
+          <p>Unified liquidity management for high-velocity trade ecosystems. Managing Digital Asset Accounts with bank-grade finality and regulatory transparency.</p>
+        </div>
+        <aside>
+          <span>Total Ecosystem Value</span>
+          <strong>$1,242,088,410.00</strong>
+          <small><i /> Real-time sync active</small>
+        </aside>
+      </section>
+
+      <section className="gtt-sovereign-section-head">
+        <div>
+          <h2>Digital Asset Accounts</h2>
+          <p>Liquidity sub-ledgers partitioned by role and purpose.</p>
+        </div>
+        <button type="button">View All DAAs</button>
+      </section>
+
+      <section className="gtt-sovereign-daa-grid">
+        <button className="gtt-sovereign-daa-card primary" onClick={onOpenDetail} type="button">
+          <header>
+            <div><mark>Anchor / Buyer</mark><h3>Global Logistics Corp</h3><code>DAA-8842-USDC</code></div>
+            <ShieldCheck size={24} />
+          </header>
+          <dl>
+            <div><dt>Available</dt><dd>$420,000,000.00</dd></div>
+            <div><dt>Pending Netting</dt><dd>$12,450,000.00</dd></div>
+            <div><dt>Locked (Margin)</dt><dd>$5,000,000.00</dd></div>
+          </dl>
+          <footer><span><i /></span><div><em>Capacity Utilization</em><b>85.2%</b></div></footer>
+        </button>
+
+        <article className="gtt-sovereign-daa-card">
+          <header>
+            <div><mark>Vendor / Supplier</mark><h3>TechFab Shenzhen</h3><code>DAA-9910-USDC</code></div>
+            <Factory size={24} />
+          </header>
+          <dl>
+            <div><dt>Available</dt><dd>$18,245,600.00</dd></div>
+            <div><dt>Inbound Invoices</dt><dd>$4,120,000.00</dd></div>
+            <div><dt>Settlement Wait</dt><dd>2.4 Days</dd></div>
+          </dl>
+          <button type="button">Draw Down Funds</button>
+        </article>
+
+        <article className="gtt-sovereign-daa-card empty">
+          <PlusSquare size={38} />
+          <h3>Provision New DAA</h3>
+          <p>Instantly deploy a role-specific treasury ledger.</p>
+        </article>
+      </section>
+
+      <section className="gtt-sovereign-ledger">
+        <header>
+          <div><RefreshCcw size={18} /><h2>Netting Ledger: Real-Time Timeline</h2></div>
+          <code>REF: TX-NET-88421990</code>
+        </header>
+        <div>
+          <table>
+            <thead><tr><th>Timestamp</th><th>Invoice ID</th><th>Entity</th><th>Amount</th><th>Lifecycle Status</th><th>Action</th></tr></thead>
+            <tbody>
+              <SovereignLedgerRow amount="$1,200,000.00" entity="TechFab Shenzhen" invoice="#INV-882-B" status="Settled" time="14:02:11" />
+              <SovereignLedgerRow amount="$450,000.00" entity="Global Logistics" invoice="#INV-901-X" status="Factored" time="14:05:44" />
+              <SovereignLedgerRow amount="$2,890,000.00" entity="Apex Components" invoice="#INV-922-P" status="Reconciling" time="14:12:01" />
+              <SovereignLedgerRow amount="$98,000.00" entity="Silicon Ventures" invoice="#INV-940-L" status="Settled" time="14:15:30" />
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="gtt-sovereign-insights">
+        <article>
+          <h3>Treasury Velocity</h3>
+          <strong>4.2x <span>Turnover Index</span></strong>
+          <p>Capital efficiency has increased by 12% following automated netting cycles.</p>
+        </article>
+        <article>
+          <h3>Regulatory Compliance</h3>
+          <div><span>A+</span><p><b>Tier 1 Capital Ratio</b><small>Exceeding Basel III requirements</small></p></div>
+          <footer><i /><i /><i /><i /><i /></footer>
+        </article>
+      </section>
+    </div>
+  );
+}
+
+function SovereignLedgerRow({ amount, entity, invoice, status, time }: { amount: string; entity: string; invoice: string; status: string; time: string }) {
+  return (
+    <tr>
+      <td>{time}</td>
+      <td>{invoice}</td>
+      <td>{entity}</td>
+      <td>{amount}</td>
+      <td><span>{status}</span>{status === "Settled" ? <CheckCircle2 size={15} /> : status === "Factored" ? <RefreshCcw size={14} /> : <MoreHorizontal size={15} />}</td>
+      <td><button type="button"><FileText size={17} /></button></td>
+    </tr>
+  );
+}
+
+function SovereignDaaDetail({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="gtt-sovereign-page">
+      <div className="gtt-sovereign-breadcrumb">
+        <button onClick={onBack} type="button"><ArrowLeft size={15} /> Accounts</button>
+        <span>/</span>
+        <span>Digital Asset Account DAA-01</span>
+      </div>
+
+      <section className="gtt-sovereign-detail-hero">
+        <div>
+          <h1>Institutional DAA Ledger</h1>
+          <p>A sovereign digital asset account managed under the Global Trade Treasury framework. This ledger facilitates instant settlement for international trade netting and factoring operations.</p>
+          <dl>
+            <div><dt>Account Number</dt><dd>USDC-TR-8842-1002</dd></div>
+            <div><dt>Routing (USDC)</dt><dd>0x8B...F92A</dd></div>
+            <div><dt>Base Currency</dt><dd>USDC</dd></div>
+          </dl>
+        </div>
+        <aside>
+          <span>Available Liquidity</span>
+          <strong>12,450,280.00</strong>
+          <dl>
+            <div><dt>Pending In</dt><dd>+ 450,000.00</dd></div>
+            <div><dt>Locked/Margin</dt><dd>(2,000,000.00)</dd></div>
+          </dl>
+        </aside>
+      </section>
+
+      <section className="gtt-sovereign-detail-grid">
+        <aside>
+          <header><h2>Linked Accounts</h2><button type="button">Link New</button></header>
+          <SovereignLinkedAccount icon="bank" label="Fiat Wire" name="J.P. Morgan Chase N.A." reference="**** 8829 (USD)" status="Active Link" />
+          <SovereignLinkedAccount icon="circle" label="Circle Wallet" name="Liquidity Pool A-01" reference="0x442...99E1 (USDC)" status="Primary Wallet" />
+        </aside>
+
+        <section>
+          <header>
+            <h2>Internal Ledger Activity</h2>
+            <div><button type="button"><Filter size={18} /></button><button type="button"><Download size={18} /></button></div>
+          </header>
+          <table>
+            <thead><tr><th>Date</th><th>Counterparty / Description</th><th>Type</th><th>Amount (USDC)</th></tr></thead>
+            <tbody>
+              <SovereignActivityRow amount="- 120,500.00" date="OCT 24, 2026" detail="Ref: SG-M-99120" name="Factoring Payout: INV-9902" type="Debit" />
+              <SovereignActivityRow amount="+ 500,000.00" date="OCT 22, 2026" detail="Origin: JP Morgan Chase" name="Fiat Inflow: Mint Request" type="Credit" />
+              <SovereignActivityRow amount="- 45,000.00" date="OCT 19, 2026" detail="Batch #441-A" name="Trade Netting Settlement" type="Debit" />
+            </tbody>
+          </table>
+        </section>
+      </section>
+    </div>
+  );
+}
+
+function SovereignLinkedAccount({ icon, label, name, reference, status }: { icon: "bank" | "circle"; label: string; name: string; reference: string; status: string }) {
+  const Icon = icon === "bank" ? Building2 : Circle;
+  return (
+    <article className="gtt-sovereign-linked-account">
+      <header><Icon size={23} /><span>{label}</span></header>
+      <h3>{name}</h3>
+      <p>{reference}</p>
+      <footer><span>{status}</span><ArrowRight size={15} /></footer>
+    </article>
+  );
+}
+
+function SovereignActivityRow({ amount, date, detail, name, type }: { amount: string; date: string; detail: string; name: string; type: string }) {
+  return (
+    <tr>
+      <td>{date}</td>
+      <td><strong>{name}</strong><span>{detail}</span></td>
+      <td><mark>{type}</mark></td>
+      <td>{amount}</td>
+    </tr>
+  );
+}
+
+function SovereignMoveMoneyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const [transactionType, setTransactionType] = useState<"payment" | "mint" | "redeem">("payment");
+  if (!isOpen) return null;
+
+  return (
+    <div className="gtt-sovereign-modal" role="dialog" aria-modal="true" aria-label="Move Money">
+      <button aria-label="Close move money modal" className="gtt-sovereign-modal-backdrop" onClick={onClose} type="button" />
+      <section className="gtt-sovereign-modal-panel">
+        <header>
+          <div><h2>Move Money</h2><p>Transaction Initiation Terminal</p></div>
+          <button aria-label="Close" onClick={onClose} type="button"><X size={28} /></button>
+        </header>
+        <form onSubmit={(event) => { event.preventDefault(); onClose(); }}>
+          <div className="gtt-sovereign-move-types">
+            <SovereignMoveType active={transactionType === "payment"} icon={ArrowLeftRight} label="USDC Payment" onSelect={() => setTransactionType("payment")} />
+            <SovereignMoveType active={transactionType === "mint"} icon={Building2} label="Mint (Fiat-to-DAA)" onSelect={() => setTransactionType("mint")} />
+            <SovereignMoveType active={transactionType === "redeem"} icon={Download} label="Redeem (DAA-to-Fiat)" onSelect={() => setTransactionType("redeem")} />
+          </div>
+          <div className="gtt-sovereign-field-grid">
+            <label>Source Account<select><option>DAA-01 (USDC Treasury)</option><option>CHASE-8829 (Fiat USD)</option></select></label>
+            <label>Destination ID<input placeholder="0x..." type="text" /></label>
+            <label>Amount (USDC)<input placeholder="0.00" step="0.01" type="number" /></label>
+            <aside><div><span>Network Fee (est.)</span><b>0.15 USDC</b></div><div><span>Total Settlement</span><b>0.00 USDC</b></div></aside>
+          </div>
+          <footer>
+            <p><Shield size={15} /> Secured by Ledger Institutional</p>
+            <button type="submit">Execute Instruction</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function SovereignMoveType({ active, icon: Icon, label, onSelect }: { active: boolean; icon: typeof ArrowLeftRight; label: string; onSelect: () => void }) {
+  return (
+    <button className={active ? "active" : ""} onClick={onSelect} type="button">
+      <Icon size={23} />
+      <span>{label}</span>
+    </button>
   );
 }
 

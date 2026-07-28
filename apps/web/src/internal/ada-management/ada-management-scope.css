@@ -1,0 +1,1499 @@
+.ada-scope {
+  --ada-primary: #000000;
+  --ada-on-primary: #ffffff;
+  --ada-secondary: #5e5e5e;
+  --ada-hairline: #e0e0e0;
+  --ada-surface: #f9f9f9;
+  --ada-surface-container: #eeeeee;
+  --ada-surface-container-low: #f3f3f3;
+  --ada-canvas-soft: #f5f5f5;
+  --ada-font-display: "Libre Caslon Text", Georgia, serif;
+  --ada-font-body: "Libre Franklin", ui-sans-serif, system-ui, sans-serif;
+  --ada-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --ada-detail-page-width: 1400px;
+  --ada-instruments-page-width: 1040px;
+
+  color: var(--ada-primary);
+  font-family: var(--ada-font-body);
+}
+
+.ada-scope,
+.ada-scope * {
+  border-radius: 0;
+}
+
+.ada-scope .ada-management-content,
+.ada-scope .ada-provision-content,
+.ada-scope .ada-success-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 auto;
+  max-width: 1400px;
+  padding: 16px 20px 18px;
+  width: 100%;
+}
+
+.ada-scope .ada-management-content {
+  max-width: 1180px;
+}
+
+.ada-scope .ada-management-heading {
+  align-items: end;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.ada-scope .ada-management-heading h1,
+.ada-scope .ada-provision-content h1,
+.ada-scope .ada-success-hero h1 {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-display);
+  font-size: 30px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 34px;
+  margin: 0;
+}
+
+.ada-scope .ada-management-heading p,
+.ada-scope .ada-provision-content header p,
+.ada-scope .ada-provision-section > div:first-child p,
+.ada-scope .ada-provision-info p,
+.ada-scope .ada-success-hero p,
+.ada-scope .ada-success-actions p {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.ada-scope .ada-management-heading p,
+.ada-scope .ada-provision-content header p {
+  margin-top: 5px;
+  max-width: 680px;
+}
+
+.ada-scope .ada-management-heading > div:last-child {
+  display: flex;
+  gap: 8px;
+}
+
+.ada-scope .ada-management-heading button,
+.ada-scope .ada-management-filters button,
+.ada-scope .ada-management-table-card footer button,
+.ada-scope .ada-management-table button,
+.ada-scope .ada-provision-content nav button,
+.ada-scope .ada-provision-content form footer button,
+.ada-scope .ada-success-actions button,
+.ada-scope .ada-copy-line button {
+  align-items: center;
+  background: var(--ada-surface);
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  gap: 7px;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  min-height: 30px;
+  padding: 0 10px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-management-heading button.primary,
+.ada-scope .ada-provision-content form footer button.primary,
+.ada-scope .ada-success-actions button:first-of-type {
+  background: var(--ada-primary);
+  border-color: var(--ada-primary);
+  color: var(--ada-on-primary);
+}
+
+.ada-scope .ada-management-filters {
+  align-items: end;
+  background: var(--ada-surface);
+  border: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(220px, 1fr) 190px 150px 150px auto;
+  padding: 10px;
+}
+
+.ada-scope .ada-management-filters label,
+.ada-scope .ada-provision-section label {
+  display: grid;
+  gap: 5px;
+}
+
+.ada-scope .ada-management-filters span,
+.ada-scope .ada-provision-content nav,
+.ada-scope .ada-provision-section h2,
+.ada-scope .ada-provision-section label > span,
+.ada-scope .ada-provision-metadata span,
+.ada-scope .ada-success-grid h2,
+.ada-scope .ada-success-details span,
+.ada-scope .ada-copy-line span,
+.ada-scope .ada-trace-line span,
+.ada-scope .ada-management-table th,
+.ada-scope .ada-management-stats span,
+.ada-scope .ada-status {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-management-filters input,
+.ada-scope .ada-management-filters select,
+.ada-scope .ada-provision-section input,
+.ada-scope .ada-provision-section select,
+.ada-scope .ada-provision-section textarea {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 12px;
+  min-height: 32px;
+  outline: 0;
+  padding: 7px 9px;
+  width: 100%;
+}
+
+.ada-scope .ada-management-filters input:focus,
+.ada-scope .ada-management-filters select:focus,
+.ada-scope .ada-provision-section input:focus,
+.ada-scope .ada-provision-section select:focus,
+.ada-scope .ada-provision-section textarea:focus {
+  border-color: var(--ada-primary);
+}
+
+.ada-scope .ada-management-notice,
+.ada-scope .ada-inline-error {
+  background: #fff8e1;
+  border: 1px solid #d7b449;
+  color: #6f5200;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.ada-scope .ada-management-table-card,
+.ada-scope .ada-management-stats article,
+.ada-scope .ada-provision-section,
+.ada-scope .ada-provision-metadata,
+.ada-scope .ada-provision-info,
+.ada-scope .ada-success-grid article {
+  background: var(--ada-surface);
+  border: 1px solid var(--ada-hairline);
+}
+
+.ada-scope .ada-management-table-wrap {
+  overflow-x: auto;
+}
+
+.ada-scope .ada-management-table {
+  border-collapse: collapse;
+  min-width: 980px;
+  text-align: left;
+  width: 100%;
+}
+
+.ada-scope .ada-management-table thead {
+  background: var(--ada-surface-container);
+}
+
+.ada-scope .ada-management-table th,
+.ada-scope .ada-management-table td {
+  border-bottom: 1px solid var(--ada-hairline);
+  padding: 8px 10px;
+  vertical-align: middle;
+}
+
+.ada-scope .ada-management-table td {
+  font-size: 12px;
+}
+
+.ada-scope .ada-management-table tbody tr:hover {
+  background: var(--ada-canvas-soft);
+}
+
+.ada-scope .ada-management-table td strong,
+.ada-scope .ada-management-table td span {
+  display: block;
+}
+
+.ada-scope .ada-management-table td strong {
+  color: var(--ada-primary);
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.ada-scope .ada-management-table td span {
+  color: var(--ada-secondary);
+  font-family: var(--ada-font-mono);
+  font-size: 10px;
+}
+
+.ada-scope .ada-management-table td:last-child {
+  text-align: right;
+}
+
+.ada-scope .ada-management-table button {
+  min-height: 24px;
+  padding: 0 5px;
+}
+
+.ada-scope .ada-management-state-cell {
+  color: var(--ada-secondary);
+  padding: 22px 14px !important;
+  text-align: center;
+}
+
+.ada-scope .ada-status {
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-secondary);
+  display: inline-flex;
+  min-height: 20px;
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+
+.ada-scope .ada-status.active {
+  border-color: var(--ada-primary);
+  color: var(--ada-primary);
+}
+
+.ada-scope .ada-status.restricted,
+.ada-scope .ada-status.frozen,
+.ada-scope .ada-status.closed {
+  border-color: #8b2d2d;
+  color: #8b2d2d;
+}
+
+.ada-scope .ada-status.draft,
+.ada-scope .ada-status.pending_activation,
+.ada-scope .ada-status.pending_setup {
+  border-style: dashed;
+  color: var(--ada-secondary);
+}
+
+.ada-scope .ada-management-table-card footer {
+  align-items: center;
+  background: var(--ada-surface-container);
+  border-top: 1px solid var(--ada-hairline);
+  color: var(--ada-secondary);
+  display: flex;
+  font-size: 11px;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+
+.ada-scope .ada-management-table-card footer div {
+  display: flex;
+  gap: 8px;
+}
+
+.ada-scope .ada-management-table-card footer div span {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  padding: 4px 2px;
+}
+
+.ada-scope .ada-management-table-card footer button.active-page {
+  background: var(--ada-primary);
+  border-color: var(--ada-primary);
+  color: var(--ada-on-primary);
+}
+
+.ada-scope .ada-management-table-card footer button:disabled,
+.ada-scope .ada-provision-content form footer button:disabled,
+.ada-scope .ada-detail-header button:disabled,
+.ada-scope .ada-provider-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ada-scope .ada-management-stats {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ada-scope .ada-management-stats article {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+}
+
+.ada-scope .ada-management-stats strong {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-display);
+  font-size: 24px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.ada-scope .ada-management-stats small {
+  color: var(--ada-secondary);
+  font-size: 11px;
+}
+
+.ada-scope .ada-provision-content {
+  max-width: 960px;
+}
+
+.ada-scope .ada-provision-backdrop {
+  position: relative;
+}
+
+.ada-scope .ada-provision-backdrop::before {
+  background-image: linear-gradient(rgba(249, 249, 249, 0.96), rgba(249, 249, 249, 0.96)), url("../../assets-internal/internal-house.jpg");
+  background-position: center center;
+  background-size: cover;
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.ada-scope .ada-provision-backdrop > * {
+  position: relative;
+}
+
+.ada-scope .ada-provision-content header {
+  display: grid;
+  gap: 6px;
+}
+
+.ada-scope .ada-provision-content nav {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.ada-scope .ada-provision-content nav button {
+  border: 0;
+  min-height: auto;
+  padding: 0;
+}
+
+.ada-scope .ada-provision-content form {
+  display: grid;
+  gap: 14px;
+}
+
+.ada-scope .ada-provision-section {
+  border: 0;
+  border-top: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(220px, 4fr) minmax(0, 8fr);
+  padding: 14px;
+}
+
+.ada-scope .ada-provision-section h2,
+.ada-scope .ada-success-grid h2 {
+  color: var(--ada-primary);
+  margin: 0 0 5px;
+}
+
+.ada-scope .ada-provision-section > div:last-child {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-provision-section label.wide,
+.ada-scope .ada-provision-metadata,
+.ada-scope .ada-provision-info,
+.ada-scope .ada-inline-error {
+  grid-column: 1 / -1;
+}
+
+.ada-scope .ada-provision-section textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.ada-scope .ada-provision-metadata {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 10px;
+}
+
+.ada-scope .ada-provision-metadata div {
+  display: grid;
+  gap: 4px;
+}
+
+.ada-scope .ada-provision-metadata code,
+.ada-scope .ada-copy-line code,
+.ada-scope .ada-trace-line code {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-mono);
+  font-size: 11px;
+}
+
+.ada-scope .ada-provision-info {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+}
+
+.ada-scope .ada-provision-content form footer {
+  align-items: center;
+  border-top: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 14px;
+}
+
+.ada-scope .ada-provision-support {
+  align-items: center;
+  border-top: 1px solid var(--ada-hairline);
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  padding-top: 10px;
+}
+
+.ada-scope .ada-provision-support span {
+  color: var(--ada-primary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-provision-support p {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  margin: 0;
+  max-width: 760px;
+}
+
+.ada-scope .ada-provision-support nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.ada-scope .ada-provision-support a {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-provision-support a:hover {
+  color: var(--ada-primary);
+}
+
+.ada-scope .ada-success-content {
+  max-width: 960px;
+}
+
+.ada-scope .ada-success-backdrop {
+  position: relative;
+}
+
+.ada-scope .ada-success-backdrop::before {
+  background-image: linear-gradient(rgba(249, 249, 249, 0.7), rgba(249, 249, 249, 0.86)), url("../../assets-internal/internal-house.jpg");
+  background-position: center center;
+  background-size: cover;
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.ada-scope .ada-success-backdrop > * {
+  position: relative;
+}
+
+.ada-scope .ada-success-hero {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  padding: 8px 0 2px;
+  text-align: center;
+}
+
+.ada-scope .ada-success-hero > div {
+  align-items: center;
+  background: var(--ada-surface);
+  border: 2px solid var(--ada-primary);
+  display: flex;
+  height: 48px;
+  justify-content: center;
+  width: 48px;
+}
+
+.ada-scope .ada-success-hero h1 {
+  font-size: 34px;
+  line-height: 38px;
+}
+
+.ada-scope .ada-success-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.ada-scope .ada-success-grid article {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.ada-scope .ada-success-details {
+  grid-column: span 8;
+}
+
+.ada-scope .ada-success-actions {
+  background: var(--ada-primary) !important;
+  color: var(--ada-on-primary);
+  grid-column: span 4;
+}
+
+.ada-scope .ada-success-grid article:nth-child(3),
+.ada-scope .ada-success-grid article:nth-child(4) {
+  grid-column: span 6;
+}
+
+.ada-scope .ada-success-details header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ada-scope .ada-success-details > div {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-success-details p {
+  align-items: center;
+  color: var(--ada-primary);
+  display: flex;
+  font-size: 14px;
+  gap: 7px;
+  line-height: 1.25;
+  margin: 4px 0 0;
+}
+
+.ada-scope .ada-success-details .large p {
+  font-family: var(--ada-font-display);
+  font-size: 24px;
+  font-weight: 400;
+}
+
+.ada-scope .ada-success-actions h2,
+.ada-scope .ada-success-actions p {
+  color: var(--ada-on-primary);
+}
+
+.ada-scope .ada-success-actions button:first-of-type {
+  background: var(--ada-on-primary);
+  border-color: var(--ada-on-primary);
+  color: var(--ada-primary);
+  margin-top: 10px;
+}
+
+.ada-scope .ada-success-actions button:last-of-type {
+  background: transparent;
+  border-color: var(--ada-on-primary);
+  color: var(--ada-on-primary);
+}
+
+.ada-scope .ada-copy-line {
+  display: grid;
+  gap: 6px;
+}
+
+.ada-scope .ada-copy-line > div,
+.ada-scope .ada-trace-line {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.ada-scope .ada-copy-line code {
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 8px;
+}
+
+.ada-scope .ada-copy-line button {
+  border: 0;
+  min-height: 22px;
+  padding: 0;
+}
+
+.ada-scope .ada-trace-line {
+  border-bottom: 1px solid var(--ada-hairline);
+  padding-bottom: 8px;
+}
+
+.ada-scope .ada-success-support {
+  align-items: center;
+  border-top: 1px solid var(--ada-hairline);
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  padding-top: 10px;
+}
+
+.ada-scope .ada-success-support p {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  font-style: italic;
+  margin: 0;
+}
+
+.ada-scope .ada-success-support div {
+  display: flex;
+  gap: 14px;
+}
+
+.ada-scope .ada-success-support a {
+  color: var(--ada-primary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-detail-content,
+.ada-scope .ada-instruments-content {
+  display: grid;
+  gap: 12px;
+  margin: 0 auto;
+  max-width: var(--ada-detail-page-width);
+  padding: 14px 18px 18px;
+  width: 100%;
+}
+
+.ada-scope .ada-instruments-content {
+  max-width: var(--ada-instruments-page-width);
+}
+
+.ada-scope .ada-breadcrumbs {
+  align-items: center;
+  color: var(--ada-secondary);
+  display: flex;
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  font-weight: 700;
+  gap: 5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-breadcrumbs button,
+.ada-scope .ada-detail-header button,
+.ada-scope .ada-client-panel > button,
+.ada-scope .ada-journal-panel button,
+.ada-scope .ada-instrument-section > header button,
+.ada-scope .ada-instruments-table button,
+.ada-scope .ada-bank-grid button,
+.ada-scope .ada-activity-panel button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  font-weight: 700;
+  gap: 6px;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  min-height: 28px;
+  padding: 0 9px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-breadcrumbs button,
+.ada-scope .ada-journal-panel header button,
+.ada-scope .ada-profile-panel header button,
+.ada-scope .ada-instruments-table button,
+.ada-scope .ada-activity-panel button {
+  border: 0;
+  min-height: auto;
+  padding: 0;
+}
+
+.ada-scope .ada-detail-header {
+  align-items: end;
+  border-bottom: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding-bottom: 10px;
+}
+
+.ada-scope .ada-detail-header h1,
+.ada-scope .ada-instruments-summary h1 {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-display);
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 32px;
+  margin: 6px 0 0;
+}
+
+.ada-scope .ada-detail-header > div:last-child,
+.ada-scope .ada-journal-panel header > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
+}
+
+.ada-scope .ada-detail-header button.danger {
+  background: var(--ada-primary);
+  border-color: var(--ada-primary);
+  color: var(--ada-on-primary);
+}
+
+.ada-scope .ada-detail-meta,
+.ada-scope .ada-instruments-summary > div:first-child > div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.ada-scope .ada-detail-meta code,
+.ada-scope .ada-instruments-summary code,
+.ada-scope .ada-journal-table code,
+.ada-scope .ada-instruments-table code,
+.ada-scope .ada-bank-grid code,
+.ada-scope .ada-activity-line code,
+.ada-scope .ada-security-panel code {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-mono);
+  font-size: 10px;
+}
+
+.ada-scope .ada-detail-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+}
+
+.ada-scope .ada-detail-panel,
+.ada-scope .ada-instruments-summary,
+.ada-scope .ada-instrument-section > :not(header),
+.ada-scope .ada-bank-grid article {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+}
+
+.ada-scope .ada-detail-panel {
+  padding: 14px;
+}
+
+.ada-scope .ada-detail-panel > header,
+.ada-scope .ada-instrument-section > header {
+  align-items: center;
+  border-bottom: 1px solid var(--ada-hairline);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+}
+
+.ada-scope .ada-detail-panel h2,
+.ada-scope .ada-instrument-section h2 {
+  color: var(--ada-primary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-detail-data-grid {
+  display: grid;
+  gap: 14px 22px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-detail-data-grid > div,
+.ada-scope .ada-client-summary > div,
+.ada-scope .ada-detail-audit-grid article > div,
+.ada-scope .ada-instruments-summary .large,
+.ada-scope .ada-instruments-summary > div:last-child > div {
+  display: grid;
+  gap: 4px;
+}
+
+.ada-scope .ada-detail-data-grid span,
+.ada-scope .ada-client-summary span,
+.ada-scope .ada-detail-audit-grid span,
+.ada-scope .ada-instruments-summary span,
+.ada-scope .ada-bank-grid span,
+.ada-scope .ada-activity-line span {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-detail-data-grid p,
+.ada-scope .ada-client-summary p,
+.ada-scope .ada-detail-audit-grid p,
+.ada-scope .ada-instruments-summary p,
+.ada-scope .ada-bank-grid h2,
+.ada-scope .ada-activity-line p {
+  color: var(--ada-primary);
+  font-size: 12px;
+  margin: 0;
+}
+
+.ada-scope .ada-client-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.ada-scope .ada-client-summary {
+  display: grid;
+  flex: 1;
+  gap: 16px;
+}
+
+.ada-scope .ada-client-panel > button {
+  margin-top: 16px;
+  width: 100%;
+}
+
+.ada-scope .ada-journal-panel {
+  padding: 0;
+}
+
+.ada-scope .ada-journal-panel > header {
+  margin: 0;
+  padding: 12px 14px 9px;
+}
+
+.ada-scope .ada-journal-table-wrap,
+.ada-scope .ada-instruments-table-wrap {
+  overflow-x: auto;
+}
+
+.ada-scope .ada-journal-table,
+.ada-scope .ada-instruments-table {
+  border-collapse: collapse;
+  min-width: 900px;
+  width: 100%;
+}
+
+.ada-scope .ada-instruments-table {
+  table-layout: fixed;
+}
+
+.ada-scope .ada-journal-table th,
+.ada-scope .ada-journal-table td,
+.ada-scope .ada-instruments-table th,
+.ada-scope .ada-instruments-table td {
+  border-bottom: 1px solid var(--ada-hairline);
+  font-size: 12px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.ada-scope .ada-instruments-table td {
+  overflow-wrap: anywhere;
+}
+
+.ada-scope .ada-instruments-table td:nth-child(2) code {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ada-scope .ada-journal-table th,
+.ada-scope .ada-instruments-table th {
+  background: var(--ada-canvas-soft);
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-journal-table .numeric {
+  text-align: right;
+}
+
+.ada-scope .ada-journal-panel footer {
+  background: var(--ada-canvas-soft);
+  display: flex;
+  justify-content: center;
+  padding: 10px;
+}
+
+.ada-scope .ada-journal-panel footer svg {
+  transform: rotate(90deg);
+}
+
+.ada-scope .ada-detail-audit-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ada-scope .ada-detail-audit-grid article {
+  align-items: start;
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+}
+
+.ada-scope .ada-detail-audit-grid svg {
+  color: var(--ada-secondary);
+  margin-top: 2px;
+}
+
+.ada-scope .ada-instruments-summary {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding: 16px;
+}
+
+.ada-scope .ada-instruments-summary > div:last-child {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: repeat(2, max-content);
+  text-align: right;
+}
+
+.ada-scope .ada-instrument-section {
+  display: grid;
+  gap: 8px;
+}
+
+.ada-scope .ada-instrument-section > header {
+  margin: 0;
+}
+
+.ada-scope .ada-instruments-table td > span,
+.ada-scope .ada-bank-grid code {
+  border: 1px solid var(--ada-hairline);
+  display: inline-flex;
+  padding: 2px 5px;
+}
+
+.ada-scope .ada-bank-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-bank-grid article {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.ada-scope .ada-bank-grid h2 {
+  font-family: var(--ada-font-display);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1.1;
+  margin: 6px 0;
+}
+
+.ada-scope .ada-bank-grid p {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+}
+
+.ada-scope .ada-bank-grid article > div:last-child {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.ada-scope .ada-instruments-lower-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+}
+
+.ada-scope .ada-activity-panel {
+  display: grid;
+}
+
+.ada-scope .ada-activity-panel header {
+  align-items: center;
+  border-bottom: 1px solid var(--ada-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.ada-scope .ada-activity-line {
+  align-items: center;
+  border-bottom: 1px solid var(--ada-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.ada-scope .ada-activity-line > div {
+  display: grid;
+  gap: 3px;
+}
+
+.ada-scope .ada-activity-line > div:last-child {
+  text-align: right;
+}
+
+.ada-scope .ada-empty-line {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  margin: 0;
+  padding: 12px;
+}
+
+.ada-scope .ada-link-rail-content,
+.ada-scope .ada-link-success-content {
+  display: grid;
+  gap: 12px;
+  margin: 0 auto;
+  max-width: 960px;
+  padding: 14px 18px 18px;
+  width: 100%;
+}
+
+.ada-scope .ada-link-rail-card,
+.ada-scope .ada-link-success-card {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.ada-scope .ada-link-rail-card > header,
+.ada-scope .ada-link-success-card > header {
+  border-bottom: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 7px;
+  padding-bottom: 14px;
+}
+
+.ada-scope .ada-link-rail-card h1,
+.ada-scope .ada-link-success-card h1 {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-display);
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 34px;
+  margin: 0;
+}
+
+.ada-scope .ada-link-rail-card p,
+.ada-scope .ada-link-success-card p {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.ada-scope .ada-link-rail-card code,
+.ada-scope .ada-link-success-card code {
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-family: var(--ada-font-mono);
+  font-size: 10px;
+  padding: 2px 4px;
+}
+
+.ada-scope .ada-link-rail-section {
+  display: grid;
+  gap: 10px;
+}
+
+.ada-scope .ada-link-rail-section h2,
+.ada-scope .ada-link-success-card h2,
+.ada-scope .ada-link-rail-fields span,
+.ada-scope .ada-link-rail-card aside span {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-link-rail-section h2 {
+  border-bottom: 1px solid var(--ada-hairline);
+  padding-bottom: 7px;
+}
+
+.ada-scope .ada-link-rail-options {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-link-rail-option {
+  background: var(--ada-surface);
+  border: 1px solid var(--ada-hairline);
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.ada-scope .ada-link-rail-option.active {
+  background: var(--ada-canvas-soft);
+  border-color: var(--ada-primary);
+}
+
+.ada-scope .ada-link-rail-option input {
+  position: absolute;
+  opacity: 0;
+}
+
+.ada-scope .ada-link-rail-option > span {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ada-scope .ada-link-rail-option i {
+  align-items: center;
+  background: var(--ada-primary);
+  color: var(--ada-on-primary);
+  display: flex;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+.ada-scope .ada-link-rail-option b,
+.ada-scope .ada-link-toggle b {
+  color: var(--ada-primary);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.ada-scope .ada-link-rail-option small,
+.ada-scope .ada-link-rail-fields small,
+.ada-scope .ada-link-toggle small {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ada-scope .ada-link-rail-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-link-rail-fields label {
+  display: grid;
+  gap: 5px;
+}
+
+.ada-scope .ada-link-rail-fields label.wide {
+  grid-column: 1 / -1;
+}
+
+.ada-scope .ada-link-rail-fields input,
+.ada-scope .ada-link-rail-fields select {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 12px;
+  min-height: 32px;
+  outline: 0;
+  padding: 7px 9px;
+  width: 100%;
+}
+
+.ada-scope .ada-link-rail-fields input:focus,
+.ada-scope .ada-link-rail-fields select:focus {
+  border-color: var(--ada-primary);
+}
+
+.ada-scope .ada-link-toggle {
+  align-items: center;
+  background: var(--ada-surface);
+  border: 1px solid var(--ada-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.ada-scope .ada-link-toggle > span {
+  display: grid;
+  gap: 4px;
+}
+
+.ada-scope .ada-link-toggle input {
+  accent-color: var(--ada-primary);
+  height: 18px;
+  width: 18px;
+}
+
+.ada-scope .ada-link-rail-card > footer,
+.ada-scope .ada-link-success-card > footer {
+  align-items: center;
+  border-top: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding-top: 14px;
+}
+
+.ada-scope .ada-link-rail-card > footer div,
+.ada-scope .ada-link-success-card > footer {
+  display: flex;
+  gap: 8px;
+}
+
+.ada-scope .ada-link-rail-card button,
+.ada-scope .ada-link-success-card button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  min-height: 30px;
+  padding: 0 10px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-link-rail-card button.primary,
+.ada-scope .ada-link-success-card button.primary {
+  background: var(--ada-primary);
+  border-color: var(--ada-primary);
+  color: var(--ada-on-primary);
+}
+
+.ada-scope .ada-link-rail-card button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ada-scope .ada-link-rail-card aside {
+  border-top: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  opacity: 0.7;
+  padding-top: 12px;
+}
+
+.ada-scope .ada-link-rail-card aside > div {
+  display: grid;
+  gap: 5px;
+}
+
+.ada-scope .ada-link-success-content {
+  align-content: center;
+  min-height: min(620px, calc(100vh - 110px));
+}
+
+.ada-scope .ada-link-success-card > header {
+  justify-items: center;
+  text-align: center;
+}
+
+.ada-scope .ada-link-success-card > header > div {
+  align-items: center;
+  border: 2px solid var(--ada-primary);
+  display: flex;
+  height: 54px;
+  justify-content: center;
+  width: 54px;
+}
+
+.ada-scope .ada-link-success-grid {
+  border-top: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 14px 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-top: 12px;
+}
+
+.ada-scope .ada-link-success-grid > div {
+  display: grid;
+  gap: 4px;
+}
+
+.ada-scope .ada-link-success-grid span {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-link-success-grid p {
+  color: var(--ada-primary);
+  font-size: 13px;
+}
+
+.ada-scope .ada-link-audit-proof {
+  background: var(--ada-canvas-soft);
+  border-left: 2px solid var(--ada-primary);
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+@media (max-width: 860px) {
+  .ada-scope .ada-link-rail-options,
+  .ada-scope .ada-link-rail-fields,
+  .ada-scope .ada-link-rail-card aside,
+  .ada-scope .ada-link-success-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ada-scope .ada-link-rail-card > footer,
+  .ada-scope .ada-link-success-card > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.ada-scope .ada-security-panel {
+  display: grid;
+  gap: 0;
+  padding: 0 12px;
+}
+
+@media (max-width: 980px) {
+  .ada-scope .ada-management-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ada-scope .ada-management-stats,
+  .ada-scope .ada-success-grid,
+  .ada-scope .ada-provision-section,
+  .ada-scope .ada-provision-section > div:last-child {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ada-scope .ada-management-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ada-scope .ada-success-details,
+  .ada-scope .ada-success-actions,
+  .ada-scope .ada-success-grid article:nth-child(3),
+  .ada-scope .ada-success-grid article:nth-child(4),
+  .ada-scope .ada-detail-grid,
+  .ada-scope .ada-instruments-lower-grid {
+    grid-column: span 2;
+    grid-template-columns: 1fr;
+  }
+
+  .ada-scope .ada-provision-support,
+  .ada-scope .ada-success-support {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .ada-scope .ada-provision-support nav {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 700px) {
+  .ada-scope .ada-management-content,
+  .ada-scope .ada-provision-content,
+  .ada-scope .ada-success-content {
+    padding: 16px;
+  }
+
+  .ada-scope .ada-management-stats,
+  .ada-scope .ada-management-filters,
+  .ada-scope .ada-provision-section,
+  .ada-scope .ada-provision-section > div:last-child,
+  .ada-scope .ada-provision-metadata,
+  .ada-scope .ada-success-grid,
+  .ada-scope .ada-success-details > div {
+    grid-template-columns: 1fr;
+  }
+
+  .ada-scope .ada-success-details,
+  .ada-scope .ada-success-actions,
+  .ada-scope .ada-success-grid article:nth-child(3),
+  .ada-scope .ada-success-grid article:nth-child(4),
+  .ada-scope .ada-detail-grid,
+  .ada-scope .ada-instruments-lower-grid {
+    grid-column: span 1;
+  }
+
+  .ada-scope .ada-management-heading,
+  .ada-scope .ada-detail-header,
+  .ada-scope .ada-instruments-summary,
+  .ada-scope .ada-management-table-card footer,
+  .ada-scope .ada-provision-content form footer,
+  .ada-scope .ada-success-support div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ada-scope .ada-detail-data-grid,
+  .ada-scope .ada-detail-audit-grid,
+  .ada-scope .ada-bank-grid,
+  .ada-scope .ada-instruments-summary > div:last-child {
+    grid-template-columns: 1fr;
+    text-align: left;
+  }
+}

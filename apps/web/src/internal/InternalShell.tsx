@@ -1,4 +1,4 @@
-import { LogOut, Settings, User } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User } from "lucide-react";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import InternalAdminFooter from "./admin/InternalAdminFooter.js";
@@ -19,6 +19,17 @@ export const InternalShell = ({
   navigate: (path: string) => void;
 }) => {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [expandedNavGroups, setExpandedNavGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(
+      internalShellNavItems
+        .filter((item) => item.children?.length && isActiveRouteOrChild(activePath, item))
+        .map((item) => [item.path, true])
+    )
+  );
+
+  const toggleNavGroup = (path: string) => {
+    setExpandedNavGroups((current) => ({ ...current, [path]: !current[path] }));
+  };
 
   return (
     <div className="command-center-screen">
@@ -76,11 +87,35 @@ export const InternalShell = ({
             <nav className="command-center-sidepanel-nav">
               {internalShellNavItems.map((item) => {
                 const Icon = item.icon;
+                const children = item.children ?? [];
+                const hasChildren = children.length > 0;
+                const expanded = hasChildren && expandedNavGroups[item.path] !== false;
                 return (
-                  <button className={isActive(activePath, item.path) ? "active" : ""} key={item.path} onClick={() => navigate(navTarget(item.path))} type="button">
-                    <Icon size={20} />
-                    <span>{item.label}</span>
-                  </button>
+                  <div className={`command-center-nav-group ${hasChildren ? "has-children" : ""}`} key={item.path}>
+                    <button
+                      aria-expanded={hasChildren ? expanded : undefined}
+                      className={isActiveRouteOrChild(activePath, item) ? "active" : ""}
+                      onClick={() => hasChildren ? toggleNavGroup(item.path) : navigate(navTarget(item.path))}
+                      type="button"
+                    >
+                      <Icon size={20} />
+                      <span>{item.label}</span>
+                      {hasChildren ? <ChevronDown className="command-center-nav-chevron" size={15} /> : null}
+                    </button>
+                    {hasChildren && expanded ? (
+                      <div className="command-center-sidepanel-subnav">
+                        {children.map((child) => {
+                          const ChildIcon = child.icon;
+                          return (
+                            <button className={isActive(activePath, child.path) ? "active" : ""} key={child.path} onClick={() => navigate(navTarget(child.path))} type="button">
+                              <ChildIcon size={16} />
+                              <span>{child.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
             </nav>
@@ -101,5 +136,11 @@ export const InternalShell = ({
 const isActive = (activePath: string, itemPath: string): boolean =>
   activePath === itemPath || activePath.startsWith(`${itemPath}/`);
 
+const isActiveRouteOrChild = (activePath: string, item: (typeof internalShellNavItems)[number]): boolean =>
+  isActive(activePath, item.path) || Boolean(item.children?.some((child) => isActive(activePath, child.path)));
+
 const navTarget = (path: string): string =>
-  internalShellNavItems.find((item) => item.path === path)?.navTarget ?? path;
+  flattenNavItems(internalShellNavItems).find((item) => item.path === path)?.navTarget ?? path;
+
+const flattenNavItems = (items: typeof internalShellNavItems): typeof internalShellNavItems =>
+  items.flatMap((item) => [item, ...(item.children ? flattenNavItems(item.children) : [])]);

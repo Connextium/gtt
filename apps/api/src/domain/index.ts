@@ -20,7 +20,7 @@ export interface AccountOfDigitalAssetRef {
   id: string;
   businessClientId: string;
   assetCode: "USDC";
-  status: "active" | "restricted" | "closed";
+  status: "draft" | "pending_activation" | "active" | "restricted" | "frozen" | "closed";
 }
 
 export interface ClassifiedBalanceView {

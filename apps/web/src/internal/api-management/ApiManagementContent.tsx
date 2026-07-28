@@ -41,27 +41,30 @@ const gttApiKey = import.meta.env.VITE_GTT_API_KEY ?? "gtt_live_api_key_dev.dev_
 
 export const ApiManagementContent = ({ navigate }: { navigate: (path: string) => void }) => {
   const [showReveal, setShowReveal] = useState(false);
+  const [revealedPlaintextKey, setRevealedPlaintextKey] = useState("");
   const [clients, setClients] = useState<ApiClientData[]>([]);
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState("");
+  const [actionKeyId, setActionKeyId] = useState<string | undefined>();
 
-  useEffect(() => {
-    const controller = new AbortController();
+  const loadApiKeys = async (signal?: AbortSignal) => {
     setLoadStatus("loading");
     setLoadError("");
-
-    fetch(`${apiBaseUrl.replace(/\/+$/, "")}/api-keys`, {
+    const response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/api-keys`, {
       headers: {
         authorization: `Bearer ${gttApiKey}`
       },
-      signal: controller.signal
-    })
-      .then(async (response) => {
-        const payload = await response.json() as { keys?: ApiKeyListItem[]; error?: string };
-        if (!response.ok) throw new Error(payload.error ?? `api_keys_fetch_failed:${response.status}`);
-        setClients((payload.keys ?? []).map(apiKeyToClientData));
-        setLoadStatus("ready");
-      })
+      signal
+    });
+    const payload = await response.json() as { keys?: ApiKeyListItem[]; error?: string };
+    if (!response.ok) throw new Error(payload.error ?? `api_keys_fetch_failed:${response.status}`);
+    setClients((payload.keys ?? []).map(apiKeyToClientData));
+    setLoadStatus("ready");
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadApiKeys(controller.signal)
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setClients([]);
@@ -71,6 +74,34 @@ export const ApiManagementContent = ({ navigate }: { navigate: (path: string) =>
 
     return () => controller.abort();
   }, []);
+
+  const mutateApiKey = async (keyId: string, action: "revoke" | "rotate") => {
+    setActionKeyId(keyId);
+    setLoadError("");
+    try {
+      const response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/api-keys/${encodeURIComponent(keyId)}/${action}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${gttApiKey}`,
+          "content-type": "application/json",
+          "idempotency-key": `${action}-${keyId}-${crypto.randomUUID()}`
+        },
+        body: JSON.stringify({})
+      });
+      const payload = await response.json() as { error?: string; key?: ApiKeyListItem; plaintextKey?: string };
+      if (!response.ok) throw new Error(payload.error ?? `api_key_${action}_failed:${response.status}`);
+      await loadApiKeys();
+      if (action === "rotate" && payload.plaintextKey) {
+        setRevealedPlaintextKey(payload.plaintextKey);
+        setShowReveal(true);
+      }
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : `api_key_${action}_failed`);
+      setLoadStatus("error");
+    } finally {
+      setActionKeyId(undefined);
+    }
+  };
 
   const stats = useMemo<ApiManagementStat[]>(() => {
     const uniqueClientIds = new Set(clients.map((client) => client.uuid));
@@ -118,12 +149,12 @@ export const ApiManagementContent = ({ navigate }: { navigate: (path: string) =>
           <div>
             <h2>Secure Key Generated</h2>
             <p>
-              This is a one-time plaintext reveal for <span className="api-management-inline-emphasis">Settlement-Service-Production-Node-01</span>.
+              This is a one-time plaintext reveal for the rotated API key.
               Store this safely. It will not be shown again.
             </p>
             <div className="api-management-secret">
-              <code>ak_live_72kXj9W0qLmN41vR6zB2pT5sA8cV3nE1</code>
-              <button type="button">
+              <code>{revealedPlaintextKey}</code>
+              <button onClick={() => void navigator.clipboard?.writeText(revealedPlaintextKey)} type="button">
                 <Copy size={14} />
                 <span>Copy</span>
               </button>
@@ -175,7 +206,13 @@ export const ApiManagementContent = ({ navigate }: { navigate: (path: string) =>
                 </tr>
               )}
               {loadStatus === "ready" && clients.map((client) => (
-                <ApiClientRow client={client} key={client.id} />
+                <ApiClientRow
+                  actionPending={actionKeyId === client.id}
+                  client={client}
+                  key={client.id}
+                  onRevoke={() => void mutateApiKey(client.id, "revoke")}
+                  onRotate={() => void mutateApiKey(client.id, "rotate")}
+                />
               ))}
             </tbody>
           </table>
@@ -212,7 +249,17 @@ export const ApiManagementContent = ({ navigate }: { navigate: (path: string) =>
   );
 };
 
-const ApiClientRow = ({ client }: { client: ApiClientData }) => (
+const ApiClientRow = ({
+  actionPending,
+  client,
+  onRevoke,
+  onRotate
+}: {
+  actionPending: boolean;
+  client: ApiClientData;
+  onRevoke: () => void;
+  onRotate: () => void;
+}) => (
   <tr className={client.status === "revoked" ? "muted" : ""}>
     <td>
       <span className="api-management-client-name">{client.name}</span>
@@ -240,10 +287,10 @@ const ApiClientRow = ({ client }: { client: ApiClientData }) => (
       <div className="api-management-actions">
         {client.status === "active" && (
           <>
-            <button title="Rotate key" type="button">
+            <button disabled={actionPending} onClick={onRotate} title="Rotate key" type="button">
               <RefreshCw size={17} />
             </button>
-            <button title="Revoke access" type="button">
+            <button disabled={actionPending} onClick={onRevoke} title="Revoke access" type="button">
               <XCircle size={17} />
             </button>
           </>

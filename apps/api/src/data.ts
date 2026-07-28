@@ -11,7 +11,7 @@ import {
   type CreatedApiKey
 } from "./auth/index.js";
 
-export type EntityStatus = "draft" | "active" | "restricted" | "closed";
+export type EntityStatus = "draft" | "pending_activation" | "active" | "restricted" | "frozen" | "closed";
 export type EventStatus = "pending" | "processed" | "dead_letter";
 export type UserType = "business_user" | "internal_user";
 export type UserStatus = "invited" | "active" | "disabled";
@@ -125,6 +125,56 @@ export interface OnboardingStepPayload {
   stepKey: string;
   payload: Record<string, unknown>;
   savedAt: string;
+}
+
+export interface OnboardingRfiTask {
+  id: string;
+  tenantId: string;
+  applicationId: string;
+  businessClientId?: string;
+  status: "open" | "responded" | "closed" | "cancelled";
+  requestedFields: string[];
+  note?: string;
+  requesterEmail?: string;
+  assigneeEmail?: string;
+  dueAt?: string;
+  resolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OnboardingStatusEvent {
+  id: string;
+  tenantId: string;
+  applicationId: string;
+  businessClientId?: string;
+  previousStatus?: string;
+  nextStatus: string;
+  source: "applicant" | "internal_review" | "circle_webhook" | "circle_poll";
+  providerEventId?: string;
+  idempotencyKey?: string;
+  actorEmail?: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface CircleKybEvidence {
+  id: string;
+  tenantId: string;
+  applicationId: string;
+  businessClientId?: string;
+  operationType: "kyb_application_create" | "kyb_status_poll" | "kyb_status_webhook";
+  provider: "circle";
+  providerApplicationId?: string;
+  providerClientEntityId?: string;
+  providerEventId?: string;
+  providerStatus: string;
+  idempotencyKey?: string;
+  correlationId: string;
+  requestPayload: Record<string, unknown>;
+  responsePayload: Record<string, unknown>;
+  rawPayload?: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface AccountOfDigitalAsset {
@@ -310,6 +360,9 @@ export interface ApiState {
   internalAccessSecrets: InternalAccessSecret[];
   businessOnboardingApplications: BusinessOnboardingApplication[];
   onboardingStepPayloads: OnboardingStepPayload[];
+  onboardingRfiTasks: OnboardingRfiTask[];
+  onboardingStatusEvents: OnboardingStatusEvent[];
+  circleKybEvidence: CircleKybEvidence[];
   businessClients: BusinessClient[];
   accounts: AccountOfDigitalAsset[];
   balances: Balance[];
@@ -434,6 +487,9 @@ export const createInitialState = (): ApiState => {
     internalAccessSecrets: [],
     businessOnboardingApplications: [],
     onboardingStepPayloads: [],
+    onboardingRfiTasks: [],
+    onboardingStatusEvents: [],
+    circleKybEvidence: [],
     businessClients: [
       {
         id: "client_buyer",
