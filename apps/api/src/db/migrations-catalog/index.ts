@@ -136,6 +136,16 @@ export const migrationCatalog: MigrationCatalogEntry[] = [
     version: "0022",
     fileName: "0022_sprint3_ada_lifecycle_circle_mapping.sql",
     domainModules: ["digital-accounts", "circle-integration", "events"]
+  },
+  {
+    version: "0023",
+    fileName: "0023_platform_tenant_circle_activation.sql",
+    domainModules: ["circle-integration", "digital-accounts"]
+  },
+  {
+    version: "0024",
+    fileName: "0024_sprint3_2_circle_wallet_linked_instruments.sql",
+    domainModules: ["digital-accounts", "circle-integration"]
   }
 ];
 

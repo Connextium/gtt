@@ -8,6 +8,7 @@
     "check": "tsc --noEmit",
     "dev": "tsx src/server.ts",
     "bootstrap:super-admin": "tsx src/cli/provision-super-admin.ts",
+    "circle:sandbox-check": "tsx src/cli/circle-sandbox-check.ts",
     "smoke": "tsx src/smoke-test.ts",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "worker": "tsx src/workers/index.ts",
@@ -15,6 +16,7 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "@circle-fin/developer-controlled-wallets": "^10.8.0",
     "@supabase/supabase-js": "^2.110.6",
     "dotenv": "^17.4.2",
     "pg": "^8.22.0"

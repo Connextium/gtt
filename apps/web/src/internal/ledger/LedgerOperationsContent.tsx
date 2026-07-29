@@ -19,6 +19,7 @@ import {
   Wallet,
   X
 } from "lucide-react";
+import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import "./ledger-operations-scope.css";
 
@@ -52,18 +53,6 @@ interface OpeningJournalSummary {
   ledgerName: string;
 }
 
-interface RegisteredLedgerSummary {
-  baseAsset: string;
-  clientEntity: string;
-  correlationId: string;
-  idempotencyKey: string;
-  ledgerId: string;
-  ledgerName: string;
-  linkedAda: string;
-  purpose: string;
-  rail: string;
-}
-
 export const LedgerOperationsContent = ({
   mode,
   navigate
@@ -74,26 +63,7 @@ export const LedgerOperationsContent = ({
   const [accounts, setAccounts] = useState<AdaAccount[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
-  const [summary, setSummary] = useState<OpeningJournalSummary | undefined>(() => {
-    const raw = window.sessionStorage.getItem("gtt.lastRegisteredLedger");
-    if (!raw) return undefined;
-    try {
-      return JSON.parse(raw) as OpeningJournalSummary;
-    } catch {
-      window.sessionStorage.removeItem("gtt.lastRegisteredLedger");
-      return undefined;
-    }
-  });
-  const [registeredLedger, setRegisteredLedger] = useState<RegisteredLedgerSummary | undefined>(() => {
-    const raw = window.sessionStorage.getItem("gtt.lastLedgerRegistration");
-    if (!raw) return undefined;
-    try {
-      return JSON.parse(raw) as RegisteredLedgerSummary;
-    } catch {
-      window.sessionStorage.removeItem("gtt.lastLedgerRegistration");
-      return undefined;
-    }
-  });
+  const [summary, setSummary] = useState<OpeningJournalSummary | undefined>();
 
   useEffect(() => {
     let active = true;
@@ -149,14 +119,7 @@ export const LedgerOperationsContent = ({
       ledgerName: input.ledgerName
     };
     setSummary(nextSummary);
-    window.sessionStorage.setItem("gtt.lastRegisteredLedger", JSON.stringify(nextSummary));
     navigate("/internal/operations/ledger/opening-journal/success");
-  };
-
-  const completeLedgerRegistration = (input: RegisteredLedgerSummary) => {
-    setRegisteredLedger(input);
-    window.sessionStorage.setItem("gtt.lastLedgerRegistration", JSON.stringify(input));
-    navigate("/internal/operations/ledger/register/success");
   };
 
   return (
@@ -167,13 +130,13 @@ export const LedgerOperationsContent = ({
           accounts={accounts}
           loading={status === "loading"}
           onCancel={() => navigate("/internal/operations/ledger/active-ledgers")}
-          onSubmit={completeLedgerRegistration}
+          onSubmit={registerLedger}
         />
       ) : mode === "registerLedgerSuccess" ? (
-        <RegisterNewLedgerSuccessView
-          onDashboard={() => navigate("/internal/operations/ledger/active-ledgers")}
-          onReset={() => navigate("/internal/operations/ledger/register")}
-          summary={registeredLedger}
+        <LedgerSuccessView
+          onGoHome={() => navigate("/internal/operations/ledger/active-ledgers")}
+          onNewLedger={() => navigate("/internal/operations/ledger/register")}
+          summary={summary}
         />
       ) : mode === "openingJournal" ? (
         <LedgerRegisterView
@@ -231,10 +194,10 @@ const LedgerDashboardView = ({
       </header>
 
       <section className="ledger-ops-stat-grid">
-        <LedgerOpsStat detail="+3% vs previous month" icon label="Total Active Ledgers" value={String(stats.active)} />
-        <LedgerOpsStat detail="Target threshold: 99.95%" label="Aggregate Parity" value="99.98%" />
-        <LedgerOpsStat detail="Rail: SWIFT/FED/CHIPS" label="24H Volume" value="$1.2B" />
-        <LedgerOpsStat detail="Verified" label="Open Recon Breaks" value={String(stats.restricted)} />
+        <LedgerOpsStat detail="Loaded from accounts_of_digital_asset" icon label="Total Active Ledgers" value={String(stats.active)} />
+        <LedgerOpsStat detail="Reconciliation data not loaded" label="Aggregate Parity" value="Unavailable" />
+        <LedgerOpsStat detail="Journal totals require statement query" label="24H Volume" value="Unavailable" />
+        <LedgerOpsStat detail="Non-active ADA accounts" label="Open Recon Breaks" value={String(stats.restricted)} />
       </section>
 
       <section className="ledger-ops-table-section">
@@ -249,7 +212,7 @@ const LedgerDashboardView = ({
           <table className="ledger-ops-table">
             <thead>
               <tr>
-                <th>Ledger ID</th>
+                <th>ADA ID</th>
                 <th>Client Entity</th>
                 <th>Purpose</th>
                 <th>Asset</th>
@@ -263,11 +226,11 @@ const LedgerDashboardView = ({
               {!loading && accounts.length === 0 ? <tr><td colSpan={7}>No active ledgers found.</td></tr> : null}
               {!loading && accounts.map((account) => (
                 <tr key={account.id}>
-                  <td><code>{displayLedgerId(account)}</code></td>
+                  <td><code>{account.id}</code></td>
                   <td>{account.businessClientName ?? account.businessClientId}</td>
                   <td><span>{formatLabel(account.usePurpose)}</span></td>
                   <td>{account.assetCode ?? "USDC"}</td>
-                  <td className="numeric">{estimatedBalance(account)}</td>
+                  <td className="numeric">Unavailable</td>
                   <td>{recentActivity(account.createdAt)}</td>
                   <td><StatusBadge status={account.status} /></td>
                 </tr>
@@ -276,7 +239,7 @@ const LedgerDashboardView = ({
           </table>
         </div>
         <footer>
-          <span>Showing 1-{accounts.length} of {Math.max(accounts.length, 212)} ledgers. System latency: 12ms.</span>
+          <span>Showing {accounts.length} database-backed ADA ledger references.</span>
           <div>
             <button type="button"><ChevronLeft size={14} /> Previous</button>
             <button type="button">Next <ChevronRight size={14} /></button>
@@ -286,17 +249,16 @@ const LedgerDashboardView = ({
 
       <section className="ledger-ops-bottom-grid">
         <article>
-          <h3>Real-Time Rails Status</h3>
+          <h3>Rail Status Feed</h3>
           <div>
-            <RailStatus label="SWIFT GPI" meta="Avg Settlement: 14m" value="Online" />
-            <RailStatus label="FEDWIRE" meta="Avg Settlement: 2m" value="Online" />
-            <RailStatus label="ETHEREUM L2" meta="Gas: 12 gwei" value="Online" />
+            <RailStatus label="SWIFT GPI" meta="Status endpoint not connected" value="Unavailable" />
+            <RailStatus label="FEDWIRE" meta="Status endpoint not connected" value="Unavailable" />
+            <RailStatus label="ETHEREUM L2" meta="Status endpoint not connected" value="Unavailable" />
           </div>
         </article>
         <aside>
           <h3>System Notifications</h3>
-          <p>Compliance alert: annual audit evidence for restricted ledgers should be reviewed before the next close.</p>
-          <p>Node Alpha maintenance is scheduled for Sunday, 02:00 UTC. No downtime expected.</p>
+          <p>No database-backed ledger notifications are loaded in this view.</p>
         </aside>
       </section>
     </div>
@@ -312,11 +274,20 @@ const RegisterNewLedgerView = ({
   accounts: AdaAccount[];
   loading: boolean;
   onCancel: () => void;
-  onSubmit: (summary: RegisteredLedgerSummary) => void;
+  onSubmit: (input: {
+    accountOfDigitalAssetId: string;
+    amountMinorUnits: string;
+    correlationId: string;
+    description: string;
+    idempotencyKey: string;
+    ledgerName: string;
+  }) => Promise<void>;
 }) => {
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [correlationId] = useState(() => crypto.randomUUID());
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   useEffect(() => {
     if (accounts.length > 0 && (!selectedAccountId || !accounts.some((account) => account.id === selectedAccountId))) {
@@ -326,26 +297,27 @@ const RegisterNewLedgerView = ({
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? accounts[0];
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setSubmitting(true);
+    setSubmitError("");
     const form = new FormData(event.currentTarget);
     const ledgerName = stringForm(form, "ledgerName", "Q4_SETTLEMENT_CORE");
-    const clientEntity = stringForm(form, "clientEntity", selectedAccount?.businessClientName ?? "Nexus Capital Partners");
-    const purpose = stringForm(form, "purpose", "custody");
-    const baseAsset = stringForm(form, "baseAsset", "USDC");
-    const rail = stringForm(form, "rail", "FEDWIRE");
-    const linkedAda = selectedAccount ? `${selectedAccount.accountName} / ${displayAdaAccountCode(selectedAccount)}` : "ADA_NODE_ALPHA_0091";
-    onSubmit({
-      baseAsset,
-      clientEntity,
-      correlationId,
-      idempotencyKey,
-      ledgerId: `LDG-${ledgerName.replace(/[^a-z0-9]/gi, "").slice(0, 6).toUpperCase() || "8821"}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`,
-      ledgerName,
-      linkedAda,
-      purpose,
-      rail
-    });
+    const amountMinorUnits = decimalToMinorUnits(stringForm(form, "initialBalance", "0"));
+    try {
+      await onSubmit({
+        accountOfDigitalAssetId: stringForm(form, "accountOfDigitalAssetId", selectedAccountId),
+        amountMinorUnits,
+        correlationId,
+        description: stringForm(form, "businessJustification", `${ledgerName} opening journal registration`),
+        idempotencyKey,
+        ledgerName
+      });
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : "ledger_registration_failed");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -365,17 +337,13 @@ const RegisterNewLedgerView = ({
             </label>
             <label>
               <span>Client Entity</span>
-              <select defaultValue={selectedAccount?.businessClientName ?? "Nexus Capital Partners"} name="clientEntity">
+              <select defaultValue={selectedAccount?.businessClientName ?? selectedAccount?.businessClientId ?? ""} name="clientEntity">
                 {accounts.length ? accounts.map((account) => (
                   <option key={account.id} value={account.businessClientName ?? account.businessClientId}>
                     {account.businessClientName ?? account.businessClientId}
                   </option>
                 )) : (
-                  <>
-                    <option>Nexus Capital Partners</option>
-                    <option>Aethelgard Custody Ltd</option>
-                    <option>Ironclad Institutional</option>
-                  </>
+                  <option value="">No database-backed ADA account available</option>
                 )}
               </select>
             </label>
@@ -424,7 +392,7 @@ const RegisterNewLedgerView = ({
               <span>Linked Digital Asset Account (ADA)</span>
               <select name="accountOfDigitalAssetId" onChange={(event) => setSelectedAccountId(event.target.value)} value={selectedAccountId}>
                 {loading ? <option value="">Loading ADA accounts...</option> : null}
-                {!loading && accounts.length === 0 ? <option value="">ADA_NODE_ALPHA_0091 / 0x71C765...6789fE12</option> : null}
+                {!loading && accounts.length === 0 ? <option value="">No ADA accounts available</option> : null}
                 {!loading && accounts.map((account) => (
                   <option key={account.id} value={account.id}>
                     {account.accountName} / {displayAdaAccountCode(account)}
@@ -434,8 +402,8 @@ const RegisterNewLedgerView = ({
               <div className="ledger-linked-ada">
                 <LinkIcon size={18} />
                 <div>
-                  <b>{selectedAccount?.accountName ?? "ADA_NODE_ALPHA_0091"}</b>
-                  <p>{selectedAccount ? displayAdaAccountCode(selectedAccount) : "0x71C765...6789fE12"}</p>
+                  <b>{selectedAccount?.accountName ?? "No ADA selected"}</b>
+                  <p>{selectedAccount ? displayAdaAccountCode(selectedAccount) : "Unavailable"}</p>
                 </div>
                 <ChevronDown size={18} />
               </div>
@@ -457,56 +425,18 @@ const RegisterNewLedgerView = ({
             </label>
           </LedgerFormBlock>
 
+          {submitError ? <div className="form-error">{submitError}</div> : null}
           <footer>
             <button onClick={onCancel} type="button">Cancel</button>
-            <button className="primary" type="submit">Register Ledger</button>
+            <button className="primary" disabled={submitting || accounts.length === 0} type="submit">
+              {submitting ? "Posting..." : "Register Ledger"}
+            </button>
           </footer>
         </form>
       </section>
     </div>
   );
 };
-
-const RegisterNewLedgerSuccessView = ({
-  onDashboard,
-  onReset,
-  summary
-}: {
-  onDashboard: () => void;
-  onReset: () => void;
-  summary?: RegisteredLedgerSummary;
-}) => (
-  <div className="ledger-ops-success ledger-registration-success">
-    <main>
-      <span>Ledger & Lineage</span>
-      <section>
-        <CheckCircle2 size={64} strokeWidth={1.1} />
-        <h1>Ledger Successfully Registered</h1>
-        <p>The new institutional clearing ledger has been initialized and synchronized with the Node Alpha governance protocol. All downstream settlement nodes have been notified.</p>
-
-        <div className="ledger-success-grid">
-          <div><span>Ledger Name</span><p>{summary?.ledgerName ?? "Q4_SETTLEMENT_CORE"}</p></div>
-          <div><span>Ledger ID</span><p className="mono">{summary?.ledgerId ?? "LDG-8821-X9"}</p></div>
-          <div><span>Linked ADA</span><p className="mono">{summary?.linkedAda ?? "ADA_NODE_ALPHA_0091"}</p></div>
-          <div><span>Status</span><p>Active / Synchronized</p></div>
-        </div>
-
-        <aside>
-          <h2>System Correlation Audit</h2>
-          <div><span>Correlation ID</span><code>{summary?.correlationId ?? "550e8400-e29b-41d4-a716-446655440000"}</code></div>
-          <div><span>Idempotency Key</span><code>{summary?.idempotencyKey ?? "IDEM_LGR_99X_122394"}</code></div>
-        </aside>
-
-        <div className="ledger-success-actions">
-          <button className="primary" onClick={onDashboard} type="button">Go to Ledger Dashboard <ArrowRight size={15} /></button>
-          <button type="button"><Download size={15} /> Download Registration Certificate</button>
-        </div>
-
-        <button className="text-link" onClick={onReset} type="button">Provision Another Ledger</button>
-      </section>
-    </main>
-  </div>
-);
 
 const LedgerPurposeOption = ({
   defaultChecked,
@@ -652,8 +582,8 @@ const LedgerRegisterView = ({
               </label>
               <aside>
                 <h3>Balance Preview</h3>
-                <p><span>Debit: Operating Vault</span><code>+ {formatUsdcAmount(amount)}</code></p>
-                <p><span>Credit: Retained Earnings</span><code>- {formatUsdcAmount(amount)}</code></p>
+                <p><span>Debit target</span><code>+ {formatUsdcAmount(amount)}</code></p>
+                <p><span>Credit target</span><code>- {formatUsdcAmount(amount)}</code></p>
                 <footer><span>Net Ledger Impact</span><code>0.00 USDC</code></footer>
               </aside>
             </div>
@@ -679,14 +609,13 @@ const LedgerRegisterView = ({
         <aside className="open-journal-evidence">
           <section>
             <h3>System Readiness</h3>
-            <Readiness label="Ledger API" value="Operational" />
-            <Readiness label="Seed Status" value="Seeded" />
-            <Readiness icon={<CloudCog size={16} />} label="Node Sync" value="100%" />
+            <Readiness label="Ledger API" value="Not queried" />
+            <Readiness label="Seed Status" value="Not queried" />
+            <Readiness icon={<CloudCog size={16} />} label="Node Sync" value="Not queried" />
           </section>
           <section>
             <h3>Recent Journals (Today)</h3>
-            <JournalSnippet amount="2,500,000.00 USDC" id="4f9e...2b1a" label="Seed Operational" time="08:42 UTC" />
-            <JournalSnippet amount="125,000.00 USDC" id="a7d3...9f4e" label="Yield Settlement" time="07:15 UTC" />
+            <p>Journal history is not loaded in this view. Use the audited journal ledger once the statement endpoint is available.</p>
             <button type="button">View All Journal History</button>
           </section>
           <section className="open-journal-protocol">
@@ -719,8 +648,8 @@ const LedgerSuccessView = ({
       </div>
       <h1>Journal Posted Successfully.</h1>
       <div>
-        <p><span>Internal Reference ID</span><b>{summary?.journal.id ?? "New journal"}</b></p>
-        <p><span>Timestamp</span><b>{formatDateTime(summary?.journal.createdAt)}</b></p>
+        <p><span>Internal Reference ID</span><b>{summary?.journal.id ?? "No journal loaded"}</b></p>
+        <p><span>Timestamp</span><b>{summary?.journal.createdAt ? formatDateTime(summary.journal.createdAt) : "No journal loaded"}</b></p>
       </div>
     </section>
 
@@ -729,14 +658,14 @@ const LedgerSuccessView = ({
       <div className="journal-impact-top">
         <article>
           <span>Impacted Digital Asset Account (ADA)</span>
-          <div><Wallet size={24} /><p><b>{summary?.account.accountName ?? "Selected ADA account"}</b><code>{summary?.account.id ?? "ADA reference"}</code></p></div>
+          <div><Wallet size={24} /><p><b>{summary?.account.accountName ?? "No ADA loaded"}</b><code>{summary?.account.id ?? "Unavailable"}</code></p></div>
         </article>
-        <aside><span>Total Value Post</span><b>{formatMinorUnits(summary?.amountMinorUnits)} USDC</b></aside>
+        <aside><span>Total Value Post</span><b>{summary ? `${formatMinorUnits(summary.amountMinorUnits)} USDC` : "Unavailable"}</b></aside>
       </div>
       <div className="journal-impact-lines">
         <header><span>Account Type</span><span>Reference</span><span>Debit</span><span>Credit</span></header>
-        <p><b>Asset: USDC</b><span>Liquidity Pool A</span><code>{formatMinorUnits(summary?.amountMinorUnits)}</code><code>--</code></p>
-        <p><b>Equity: Treasury</b><span>Internal Transfer</span><code>--</code><code>{formatMinorUnits(summary?.amountMinorUnits)}</code></p>
+        <p><b>Asset: USDC</b><span>{summary?.account.id ?? "Unavailable"}</span><code>{summary ? formatMinorUnits(summary.amountMinorUnits) : "Unavailable"}</code><code>--</code></p>
+        <p><b>Equity: Treasury</b><span>{summary?.journal.id ?? "Unavailable"}</span><code>--</code><code>{summary ? formatMinorUnits(summary.amountMinorUnits) : "Unavailable"}</code></p>
       </div>
     </section>
 
@@ -745,7 +674,7 @@ const LedgerSuccessView = ({
       <div>
         <Trace label="Correlation ID" value={summary?.correlationId ?? "Unavailable"} />
         <Trace label="Idempotency Key" value={summary?.idempotencyKey ?? "Unavailable"} />
-        <article><span>Consensus Layer</span><p><i /> Mainnet Confirmed</p></article>
+        <article><span>Persistence</span><p><i /> {summary ? "Database journal recorded" : "No journal loaded"}</p></article>
       </div>
     </section>
 
@@ -774,14 +703,6 @@ const Readiness = ({ icon, label, value }: { icon?: React.ReactNode; label: stri
   </p>
 );
 
-const JournalSnippet = ({ amount, id, label, time }: { amount: string; id: string; label: string; time: string }) => (
-  <article>
-    <code>ID: {id}</code>
-    <b>{amount}</b>
-    <p><span>{label}</span><time>{time}</time></p>
-  </article>
-);
-
 const OpenJournalPreview = ({
   amount,
   correlationId,
@@ -797,7 +718,7 @@ const OpenJournalPreview = ({
     <section className="open-journal-preview">
       <header>
         <h2>Validation & Preview</h2>
-        <div><CheckCircle2 size={16} /><span>System Validated</span></div>
+        <div><CheckCircle2 size={16} /><span>Draft Preview</span></div>
         <button aria-label="Close preview" onClick={onClose} type="button"><X size={16} /></button>
       </header>
       <div>
@@ -809,10 +730,10 @@ const OpenJournalPreview = ({
           </div>
         </section>
         <section>
-          <h3>Ledger Impact Breakdown</h3>
+          <h3>Ledger Impact Draft</h3>
           <div className="preview-ledger-lines">
-            <p><span>1001 Operating USDC</span><b>Debit Account</b><code>+ {formatUsdcAmount(amount)}</code></p>
-            <p><span>3100 Treasury Equity</span><b>Credit Account</b><code>- {formatUsdcAmount(amount)}</code></p>
+            <p><span>Posting target</span><b>Debit Account</b><code>+ {formatUsdcAmount(amount)}</code></p>
+            <p><span>Posting target</span><b>Credit Account</b><code>- {formatUsdcAmount(amount)}</code></p>
           </div>
         </section>
       </div>
@@ -883,16 +804,8 @@ const normalizeStatus = (value: string): string => value.toLowerCase().replace(/
 
 const formatLabel = (value: string): string => value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
-const displayLedgerId = (account: AdaAccount): string =>
-  account.id.toUpperCase().startsWith("LDG") ? account.id : `LDG-${account.id.replace(/[^a-z0-9]/gi, "").slice(-8).toUpperCase()}`;
-
 const displayAdaAccountCode = (account: AdaAccount): string =>
   account.id.toUpperCase().startsWith("ADA") ? account.id : `ADA-${account.id.replace(/[^a-z0-9]/gi, "").slice(-8).toUpperCase()}`;
-
-const estimatedBalance = (account: AdaAccount): string => {
-  const seed = account.id.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return new Intl.NumberFormat("en", { maximumFractionDigits: 2, minimumFractionDigits: 2 }).format((seed % 900000) * 1000 + 5000000);
-};
 
 const formatUsdcAmount = (value: string): string => {
   const amount = Number(value.replace(/,/g, ""));

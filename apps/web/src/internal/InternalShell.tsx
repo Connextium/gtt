@@ -1,4 +1,4 @@
-import { ChevronDown, LogOut, Settings, User } from "lucide-react";
+import { Building2, ChevronDown, Code, LogOut, Settings, User } from "lucide-react";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import InternalAdminFooter from "./admin/InternalAdminFooter.js";
@@ -19,6 +19,7 @@ export const InternalShell = ({
   navigate: (path: string) => void;
 }) => {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   const [expandedNavGroups, setExpandedNavGroups] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
       internalShellNavItems
@@ -44,13 +45,62 @@ export const InternalShell = ({
             </nav>
           </div>
           <div className="command-center-header-actions">
-            <button className="icon-button" title="Command settings" type="button"><Settings size={18} /></button>
+            <div className="command-center-system-menu">
+              <button
+                aria-expanded={systemMenuOpen}
+                aria-haspopup="menu"
+                className={isSystemRoute(activePath) ? "icon-button active" : "icon-button"}
+                onClick={() => {
+                  setSystemMenuOpen((open) => !open);
+                  setProfileMenuOpen(false);
+                }}
+                title="System settings"
+                type="button"
+              >
+                <Settings size={18} />
+              </button>
+              {systemMenuOpen && (
+                <div className="command-center-system-popover" role="menu">
+                  <div>
+                    <span>System Settings</span>
+                    <small>Tenant and platform controls</small>
+                  </div>
+                  <button
+                    className={isActive(activePath, "/internal/operations/admin/tenant-activation") ? "active" : ""}
+                    onClick={() => {
+                      setSystemMenuOpen(false);
+                      navigate("/internal/operations/admin/tenant-activation");
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    <Building2 size={16} />
+                    <span>Tenant Activation</span>
+                  </button>
+                  <button
+                    className={isActive(activePath, "/internal/operations/api-keys") ? "active" : ""}
+                    onClick={() => {
+                      setSystemMenuOpen(false);
+                      navigate("/internal/operations/api-keys");
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    <Code size={16} />
+                    <span>API Management</span>
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="command-center-profile-menu">
               <button
                 aria-expanded={profileMenuOpen}
                 aria-haspopup="menu"
                 className="icon-button"
-                onClick={() => setProfileMenuOpen((open) => !open)}
+                onClick={() => {
+                  setProfileMenuOpen((open) => !open);
+                  setSystemMenuOpen(false);
+                }}
                 title="Operator profile"
                 type="button"
               >
@@ -135,6 +185,9 @@ export const InternalShell = ({
 
 const isActive = (activePath: string, itemPath: string): boolean =>
   activePath === itemPath || activePath.startsWith(`${itemPath}/`);
+
+const isSystemRoute = (activePath: string): boolean =>
+  isActive(activePath, "/internal/operations/admin/tenant-activation") || isActive(activePath, "/internal/operations/api-keys");
 
 const isActiveRouteOrChild = (activePath: string, item: (typeof internalShellNavItems)[number]): boolean =>
   isActive(activePath, item.path) || Boolean(item.children?.some((child) => isActive(activePath, child.path)));

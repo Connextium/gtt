@@ -714,6 +714,7 @@
 .ada-scope .ada-breadcrumbs button,
 .ada-scope .ada-detail-header button,
 .ada-scope .ada-client-panel > button,
+.ada-scope .ada-provider-panel > header button,
 .ada-scope .ada-journal-panel button,
 .ada-scope .ada-instrument-section > header button,
 .ada-scope .ada-instruments-table button,
@@ -1339,6 +1340,63 @@
   gap: 5px;
 }
 
+.ada-scope .ada-circle-provision-card {
+  gap: 14px;
+}
+
+.ada-scope .ada-circle-confirm-grid {
+  border: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 12px 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 14px;
+}
+
+.ada-scope .ada-circle-confirm-grid > div,
+.ada-scope .ada-circle-copy-grid {
+  display: grid;
+  gap: 4px;
+}
+
+.ada-scope .ada-circle-confirm-grid span,
+.ada-scope .ada-circle-confirm-list span {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-circle-confirm-grid p {
+  color: var(--ada-primary);
+  font-size: 12px;
+  margin: 0;
+}
+
+.ada-scope .ada-circle-confirm-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ada-scope .ada-circle-confirm-list > div {
+  align-items: center;
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.ada-scope .ada-circle-confirm-list svg {
+  color: var(--ada-primary);
+  flex: 0 0 auto;
+}
+
+.ada-scope .ada-circle-confirm-list code {
+  background: #ffffff;
+}
+
 .ada-scope .ada-link-success-content {
   align-content: center;
   min-height: min(620px, calc(100vh - 110px));
@@ -1393,11 +1451,23 @@
   padding: 12px;
 }
 
+.ada-scope .ada-circle-result-card {
+  gap: 14px;
+}
+
+.ada-scope .ada-circle-copy-grid {
+  border-top: 1px solid var(--ada-hairline);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-top: 12px;
+}
+
 @media (max-width: 860px) {
   .ada-scope .ada-link-rail-options,
   .ada-scope .ada-link-rail-fields,
   .ada-scope .ada-link-rail-card aside,
-  .ada-scope .ada-link-success-grid {
+  .ada-scope .ada-link-success-grid,
+  .ada-scope .ada-circle-confirm-grid,
+  .ada-scope .ada-circle-copy-grid {
     grid-template-columns: 1fr;
   }
 

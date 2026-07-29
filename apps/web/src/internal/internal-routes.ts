@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   BanknoteArrowUp,
+  Building2,
   ClipboardCheck,
   Code,
   Database,
@@ -69,7 +70,15 @@ export const internalRoutes: InternalRouteDefinition[] = [
     description: "Manage API credentials and scoped access.",
     workflow: "identity",
     icon: Code,
-    showInShellNav: true
+    showInShellNav: false
+  },
+  {
+    label: "Tenant Activation",
+    path: "/internal/operations/admin/tenant-activation",
+    description: "Activate tenant Circle wallet-set infrastructure and configure wallet creation network scope.",
+    workflow: "identity",
+    icon: Building2,
+    showInShellNav: false
   },
   {
     label: "Business Clients",

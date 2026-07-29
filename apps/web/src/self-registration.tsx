@@ -487,25 +487,73 @@ function SignInScreen({ navigate }: { navigate: Navigate }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | undefined>();
+  const [notice, setNotice] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(undefined);
+    setNotice(undefined);
     if (!supabase) {
       setError("Supabase browser configuration is missing.");
       return;
     }
+    const normalizedEmail = email.trim().toLowerCase();
     setSubmitting(true);
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-    setSubmitting(false);
-    if (signInError) {
-      setError(signInError.message);
+    try {
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
+      if (signInError) {
+        setError(signInError.message);
+        return;
+      }
+
+      const token = signInData.session?.access_token ?? (await supabase.auth.getSession()).data.session?.access_token;
+      if (!token) {
+        navigate("/welcome");
+        return;
+      }
+
+      let destination = "/welcome";
+      try {
+        destination = await nextOnboardingRoute(token);
+      } catch {
+        destination = "/welcome";
+      }
+
+      // Give the auth state listener one tick to publish the signed-in session.
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      navigate(destination);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to sign in.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function sendPasswordRecovery() {
+    setError(undefined);
+    setNotice(undefined);
+    if (!supabase) {
+      setError("Supabase browser configuration is missing.");
       return;
     }
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    navigate(token ? await nextOnboardingRoute(token) : "/onboarding/step-1");
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setError("Enter your business email before requesting password recovery.");
+      return;
+    }
+
+    setResetting(true);
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+      redirectTo: `${window.location.origin}/auth/set-password`
+    });
+    setResetting(false);
+    if (resetError) {
+      setError(resetError.message);
+      return;
+    }
+    setNotice("Password recovery email sent. Use the email link to set a new password, then sign in again.");
   }
 
   return (
@@ -529,9 +577,13 @@ function SignInScreen({ navigate }: { navigate: Navigate }) {
               <input id="sign-in-password" type="password" placeholder="••••••••••••••••" value={password} onChange={(event) => setPassword(event.target.value)} required />
             </label>
             {error ? <div className="form-error">{error}</div> : null}
+            {notice ? <div className="form-notice">{notice}</div> : null}
             <button className="primary-command" disabled={submitting} type="submit">
               <span>{submitting ? "Signing in" : "Sign in"}</span>
               {submitting ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
+            </button>
+            <button className="gtt-login-link" disabled={resetting} onClick={() => void sendPasswordRecovery()} type="button">
+              {resetting ? "Sending recovery email..." : "Reset password by email"}
             </button>
           </form>
         </div>

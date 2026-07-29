@@ -4,6 +4,7 @@ import {
   Calendar,
   CheckCircle2,
   ChevronRight,
+  Circle,
   CircleDollarSign,
   Copy,
   Download,
@@ -29,7 +30,7 @@ import "./ada-management-scope.css";
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 const gttApiKey = import.meta.env.VITE_GTT_API_KEY ?? "gtt_live_api_key_dev.dev_secret";
 
-type AdaRouteMode = "list" | "new" | "success" | "detail" | "instruments" | "linkRail" | "linkRailSuccess";
+type AdaRouteMode = "list" | "new" | "success" | "detail" | "instruments" | "linkRail" | "linkRailSuccess" | "circleConfirm" | "circleSuccess";
 
 interface AdaAccount {
   id: string;
@@ -41,8 +42,6 @@ interface AdaAccount {
   status: string;
   assetCode?: string;
   assetRail?: string;
-  circleAccountId?: string;
-  circleSubAccountId?: string;
   createdAt?: string;
 }
 
@@ -67,6 +66,10 @@ interface LinkedInstrumentRail {
   assetCode?: string;
   externalReference?: string;
   status: string;
+  networkCode?: string;
+  isDefault?: boolean;
+  provider?: string;
+  providerReferenceId?: string;
 }
 
 interface LinkedFiatAccount {
@@ -95,6 +98,7 @@ interface LinkedAuditEvent {
 
 interface LinkedInstrumentsPayload {
   accountId: string;
+  circleWallets: LinkedInstrumentRail[];
   rails: LinkedInstrumentRail[];
   fiatLinks: LinkedFiatAccount[];
   activity: LinkedActivity[];
@@ -126,6 +130,34 @@ interface LinkedRailSummary {
   idempotencyKey: string;
 }
 
+interface CircleProvisionSummary {
+  account: AdaAccount;
+  circleOperation?: ProviderMapping;
+  correlationId: string;
+  idempotencyKey: string;
+  linkedInstrument?: LinkedInstrumentRail;
+  reusedExistingMapping?: boolean;
+}
+
+interface TenantCircleActivationPayload {
+  circleIntegration?: {
+    environment?: string;
+    status?: string;
+    walletAccountType?: string;
+    walletBlockchains?: string[];
+    walletSetId?: string;
+    walletSetName?: string;
+  };
+  walletSet?: {
+    environment?: string;
+    status?: string;
+    walletAccountType?: string;
+    walletBlockchains?: string[];
+    walletSetId?: string;
+    walletSetName?: string;
+  };
+}
+
 export const AdaManagementContent = ({
   accountId,
   mode,
@@ -139,26 +171,9 @@ export const AdaManagementContent = ({
   const [clients, setClients] = useState<BusinessClient[]>([]);
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState("");
-  const [provisioned, setProvisioned] = useState<ProvisionedAdaSummary | undefined>(() => {
-    const raw = window.sessionStorage.getItem("gtt.lastProvisionedAda");
-    if (!raw) return undefined;
-    try {
-      return JSON.parse(raw) as ProvisionedAdaSummary;
-    } catch {
-      window.sessionStorage.removeItem("gtt.lastProvisionedAda");
-      return undefined;
-    }
-  });
-  const [linkedRail, setLinkedRail] = useState<LinkedRailSummary | undefined>(() => {
-    const raw = window.sessionStorage.getItem("gtt.lastLinkedAdaRail");
-    if (!raw) return undefined;
-    try {
-      return JSON.parse(raw) as LinkedRailSummary;
-    } catch {
-      window.sessionStorage.removeItem("gtt.lastLinkedAdaRail");
-      return undefined;
-    }
-  });
+  const [provisioned, setProvisioned] = useState<ProvisionedAdaSummary | undefined>();
+  const [linkedRail, setLinkedRail] = useState<LinkedRailSummary | undefined>();
+  const [circleProvisioned, setCircleProvisioned] = useState<CircleProvisionSummary | undefined>();
 
   const load = async () => {
     setLoadStatus("loading");
@@ -213,7 +228,6 @@ export const AdaManagementContent = ({
     const normalized = normalizeAdaAccount(payload.account, clients);
     const summary = { account: normalized, correlationId, idempotencyKey };
     setProvisioned(summary);
-    window.sessionStorage.setItem("gtt.lastProvisionedAda", JSON.stringify(summary));
     setAccounts((current) => [normalized, ...current.filter((account) => account.id !== normalized.id)]);
     navigate("/internal/operations/accounts-of-digital-asset/success");
   };
@@ -256,7 +270,6 @@ export const AdaManagementContent = ({
     );
     const summary = { account, correlationId, idempotencyKey, rail: payload.linkedInstrument };
     setLinkedRail(summary);
-    window.sessionStorage.setItem("gtt.lastLinkedAdaRail", JSON.stringify(summary));
     navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(account.id)}/linked-instruments/success`);
   };
 
@@ -274,6 +287,36 @@ export const AdaManagementContent = ({
     const normalized = normalizeAdaAccount(payload.account, clients);
     setAccounts((current) => current.map((item) => item.id === normalized.id ? normalized : item));
     return normalized;
+  };
+
+  const provisionCircleWallet = async (account: AdaAccount) => {
+    const idempotencyKey = `ada-provision-circle-${crypto.randomUUID()}`;
+    const correlationId = `corr-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const payload = await apiFetch<{
+      account: AdaAccount;
+      circleOperation?: ProviderMapping;
+      linkedInstrument?: LinkedInstrumentRail;
+      reusedExistingMapping?: boolean;
+    }>(`/accounts-of-digital-asset/${encodeURIComponent(account.id)}/provision-circle`, {
+      body: { reason: "Provision Circle developer-controlled wallet", idempotencyKey },
+      headers: {
+        "idempotency-key": idempotencyKey,
+        "x-correlation-id": correlationId
+      },
+      method: "POST"
+    });
+    const normalized = normalizeAdaAccount(payload.account, clients);
+    const summary = {
+      account: normalized,
+      circleOperation: payload.circleOperation,
+      correlationId,
+      idempotencyKey,
+      linkedInstrument: payload.linkedInstrument,
+      reusedExistingMapping: payload.reusedExistingMapping
+    };
+    setAccounts((current) => current.map((item) => item.id === normalized.id ? normalized : item));
+    setCircleProvisioned(summary);
+    navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(account.id)}/linked-instruments/circle/success`);
   };
 
   if (mode === "new") {
@@ -297,8 +340,8 @@ export const AdaManagementContent = ({
     );
   }
 
-  if (mode === "detail" || mode === "instruments" || mode === "linkRail" || mode === "linkRailSuccess") {
-    const selectedAccount = findAdaAccount(accounts, accountId) ?? (provisioned && provisioned.account.id === accountId ? provisioned.account : undefined);
+  if (mode === "detail" || mode === "instruments" || mode === "linkRail" || mode === "linkRailSuccess" || mode === "circleConfirm" || mode === "circleSuccess") {
+    const selectedAccount = findAdaAccount(accounts, accountId);
     if (!selectedAccount) {
       return (
         <section className="ada-scope">
@@ -320,11 +363,25 @@ export const AdaManagementContent = ({
         onAnother={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/linked-instruments/new`)}
         onDone={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/instruments`)}
       />
+    ) : mode === "circleConfirm" ? (
+      <AdaProvisionCircleConfirm
+        account={selectedAccount}
+        onBack={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/instruments`)}
+        onConfirm={() => provisionCircleWallet(selectedAccount)}
+      />
+    ) : mode === "circleSuccess" ? (
+      <AdaProvisionCircleSuccess
+        account={selectedAccount}
+        onDone={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/instruments`)}
+        onViewAda={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}`)}
+        result={circleProvisioned?.account.id === selectedAccount.id ? circleProvisioned : undefined}
+      />
     ) : mode === "instruments" ? (
       <AdaLinkedInstrumentsView
         account={selectedAccount}
         onBack={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}`)}
         onNewRail={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/linked-instruments/new`)}
+        onProvisionCircle={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/linked-instruments/circle/confirm`)}
       />
     ) : (
       <AdaDetailView
@@ -482,7 +539,6 @@ const AdaDetailView = ({
 }) => {
   const [currentAccount, setCurrentAccount] = useState(account);
   const [providerMappings, setProviderMappings] = useState<ProviderMapping[]>([]);
-  const [providerStatus, setProviderStatus] = useState<"loading" | "ready" | "error">("loading");
   const [actionStatus, setActionStatus] = useState("");
   const [actionError, setActionError] = useState("");
   const accountCode = displayAdaCode(account);
@@ -496,17 +552,14 @@ const AdaDetailView = ({
 
   useEffect(() => {
     let active = true;
-    setProviderStatus("loading");
     apiFetch<ProviderMappingsPayload>(`/accounts-of-digital-asset/${encodeURIComponent(account.id)}/provider-mappings`)
       .then((payload) => {
         if (!active) return;
         setProviderMappings(payload.mappings ?? []);
-        setProviderStatus("ready");
       })
       .catch(() => {
         if (!active) return;
         setProviderMappings([]);
-        setProviderStatus("error");
       });
     return () => {
       active = false;
@@ -522,7 +575,6 @@ const AdaDetailView = ({
       if (action === "provision-circle") {
         const payload = await apiFetch<ProviderMappingsPayload>(`/accounts-of-digital-asset/${encodeURIComponent(account.id)}/provider-mappings`);
         setProviderMappings(payload.mappings ?? []);
-        setProviderStatus("ready");
       }
     } catch (error) {
       setActionError(error instanceof Error ? error.message : `${action}_failed`);
@@ -571,8 +623,8 @@ const AdaDetailView = ({
               <DetailItem label="Account Name" value={currentAccount.accountName} />
               <DetailItem label="Purpose" value={capitalize(currentAccount.usePurpose)} />
               <DetailItem label="Asset / Rail" value={`${currentAccount.assetCode ?? "USDC"} / ${formatRailLabel(currentAccount.assetRail)}`} />
-              <DetailItem label="Circle Account ID" value={currentAccount.circleAccountId ?? "Not provisioned"} />
-              <DetailItem label="Circle Sub-account ID" value={currentAccount.circleSubAccountId ?? "Not provisioned"} />
+              <DetailItem label="Circle Wallet ID" value={latestMapping?.providerWalletId ?? "Not provisioned"} />
+              <DetailItem label="Circle Wallet Address" value={latestMapping?.providerAddressId ?? "Not provisioned"} />
             </div>
           </section>
 
@@ -586,21 +638,6 @@ const AdaDetailView = ({
             <button type="button">View Full Entity Profile</button>
           </section>
         </div>
-
-        <section className="ada-detail-panel ada-provider-panel">
-          <header>
-            <h2>Circle Mapping & Activation Readiness</h2>
-            <button disabled={actionStatus !== "" || normalizedStatus === "closed"} onClick={() => void runAction("provision-circle", "Provision Circle wallet/account mapping")} type="button">Provision Circle</button>
-          </header>
-          <div className="ada-detail-data-grid">
-            <DetailItem label="Provider Source" value={providerStatus === "ready" ? "Database" : providerStatus === "loading" ? "Loading" : "Unavailable"} />
-            <DetailItem label="Latest Mapping" value={latestMapping?.status ?? "Not mapped"} />
-            <DetailItem label="Provider Account" value={latestMapping?.providerAccountId ?? currentAccount.circleAccountId ?? "Not provisioned"} />
-            <DetailItem label="Provider Wallet" value={latestMapping?.providerWalletId ?? currentAccount.circleSubAccountId ?? "Not provisioned"} />
-            <DetailItem label="Provider Address" value={latestMapping?.providerAddressId ?? "Not provisioned"} />
-            <DetailItem label="Correlation ID" value={latestMapping?.correlationId ?? "No provider operation recorded"} />
-          </div>
-        </section>
 
         <section className="ada-detail-panel ada-journal-panel">
           <header>
@@ -651,7 +688,7 @@ const AdaDetailView = ({
   );
 };
 
-const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail }: { account: AdaAccount; onBack: () => void; onNewRail: () => void }) => {
+const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail, onProvisionCircle }: { account: AdaAccount; onBack: () => void; onNewRail: () => void; onProvisionCircle: () => void }) => {
   const [payload, setPayload] = useState<LinkedInstrumentsPayload | undefined>();
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
@@ -678,6 +715,7 @@ const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail }: { account: Ada
   }, [account.id]);
 
   const rails = payload?.rails ?? [];
+  const circleWallets = payload?.circleWallets ?? [];
   const fiatLinks = payload?.fiatLinks ?? [];
   const activity = payload?.activity ?? [];
   const audit = payload?.audit ?? [];
@@ -701,11 +739,47 @@ const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail }: { account: Ada
           </div>
           <div>
             <DetailItem label="Data Source" value={status === "ready" ? "Database" : status === "loading" ? "Loading" : "Unavailable"} />
-            <DetailItem label="Linked Instruments" value={String(rails.length + fiatLinks.length)} />
+            <DetailItem label="Linked Instruments" value={String(circleWallets.length + rails.length + fiatLinks.length)} />
           </div>
         </section>
 
-        {status === "error" ? <div className="ada-management-notice">Linked instrument database query failed: {error}</div> : null}
+        {status === "error" || error ? <div className="ada-management-notice">{error || "Linked instrument database query failed"}</div> : null}
+
+        <InstrumentSection
+          actionIcon={Circle}
+          actionLabel="Provision Circle Wallet"
+          onAction={onProvisionCircle}
+          title="Circle Provisioned Wallets"
+        >
+          <div className="ada-instruments-table-wrap">
+            <table className="ada-instruments-table">
+              <thead>
+                <tr>
+                  <th>Wallet</th>
+                  <th>Address / ID</th>
+                  <th>Network</th>
+                  <th>Status</th>
+                  <th>Default</th>
+                  <th>Provider</th>
+                </tr>
+              </thead>
+              <tbody>
+                {status === "loading" ? <tr><td colSpan={6}>Loading Circle wallets from database...</td></tr> : null}
+                {status !== "loading" && circleWallets.length === 0 ? <tr><td colSpan={6}>No Circle wallets provisioned for this ADA.</td></tr> : null}
+                {circleWallets.map((wallet) => (
+                  <tr key={wallet.id}>
+                    <td>{wallet.railName ?? "Circle Wallet"}</td>
+                    <td><code>{wallet.externalReference ?? wallet.providerReferenceId ?? wallet.id}</code></td>
+                    <td>{wallet.networkCode ?? wallet.railCode ?? "Pending"}</td>
+                    <td><StatusPill status={wallet.status} /></td>
+                    <td>{wallet.isDefault ? <CheckCircle2 size={15} /> : "-"}</td>
+                    <td>{wallet.provider ?? "circle"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </InstrumentSection>
 
         <InstrumentSection
           actionIcon={Plus}
@@ -793,6 +867,199 @@ const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail }: { account: Ada
               <TraceLine label="Latest Event" value={audit[0]?.eventType ?? "No linked audit event"} />
             </div>
           </InstrumentSection>
+        </section>
+      </div>
+    </section>
+  );
+};
+
+const AdaProvisionCircleConfirm = ({
+  account,
+  onBack,
+  onConfirm
+}: {
+  account: AdaAccount;
+  onBack: () => void;
+  onConfirm: () => Promise<void>;
+}) => {
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [activation, setActivation] = useState<TenantCircleActivationPayload | undefined>();
+  const [activationStatus, setActivationStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [activationError, setActivationError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setActivationStatus("loading");
+    setActivationError("");
+    apiFetch<TenantCircleActivationPayload>("/tenants/current/activation")
+      .then((payload) => {
+        if (!active) return;
+        setActivation(payload);
+        setActivationStatus("ready");
+      })
+      .catch((caught) => {
+        if (!active) return;
+        setActivation(undefined);
+        setActivationStatus("error");
+        setActivationError(caught instanceof Error ? caught.message : "tenant_activation_fetch_failed");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const integration = activation?.circleIntegration;
+  const walletSet = activation?.walletSet;
+  const walletSetId = integration?.walletSetId ?? walletSet?.walletSetId;
+  const walletSetName = integration?.walletSetName ?? walletSet?.walletSetName;
+  const walletSetEnvironment = integration?.environment ?? walletSet?.environment;
+  const walletSetStatus = integration?.status ?? walletSet?.status;
+  const walletBlockchains = integration?.walletBlockchains?.length
+    ? integration.walletBlockchains
+    : walletSet?.walletBlockchains ?? [];
+  const walletAccountType = integration?.walletAccountType ?? walletSet?.walletAccountType ?? "SCA";
+
+  const confirm = async () => {
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      await onConfirm();
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : "circle_wallet_provision_failed");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="ada-scope">
+      <div className="ada-link-rail-content">
+        <nav className="ada-breadcrumbs" aria-label="Provision Circle wallet breadcrumb">
+          <button onClick={onBack} type="button">Linked Instruments</button>
+          <ChevronRight size={13} />
+          <span>Provision Circle Wallet</span>
+        </nav>
+
+        <section className="ada-link-rail-card ada-circle-provision-card">
+          <header>
+            <h1>Provision Circle Wallet</h1>
+            <p>
+              Create a Circle developer-controlled wallet and register it as a linked instrument for ADA account <code>{account.accountName}</code>.
+            </p>
+          </header>
+
+          <section className="ada-link-rail-section">
+            <h2>01. Confirmation Scope</h2>
+            <div className="ada-circle-confirm-grid">
+              <DetailItem label="ADA Account" value={account.accountName} />
+              <DetailItem label="ADA Code" value={displayAdaCode(account)} />
+              <DetailItem label="Business Client" value={account.businessClientName ?? account.businessClientId} />
+              <DetailItem label="Purpose" value={capitalize(account.usePurpose)} />
+              <DetailItem label="Asset" value={account.assetCode ?? "USDC"} />
+              <DetailItem label="Current Status" value={capitalize(account.status)} />
+            </div>
+          </section>
+
+          <section className="ada-link-rail-section">
+            <h2>02. Circle Wallet Behavior</h2>
+            <div className="ada-circle-confirm-list">
+              <div><Circle size={17} /><span>A developer-controlled Circle wallet will be created using the active tenant Circle wallet set.</span></div>
+              <div><LinkIcon size={17} /><span>The created wallet is persisted as a <code>circle_wallet</code> linked instrument.</span></div>
+              <div><CheckCircle2 size={17} /><span>If a verified active Circle wallet already exists, the existing wallet will be reused.</span></div>
+            </div>
+          </section>
+
+          <section className="ada-link-rail-section">
+            <h2>03. Tenant Circle Wallet Set</h2>
+            {activationStatus === "error" ? <div className="ada-management-notice">Unable to load tenant wallet set: {activationError}</div> : null}
+            <div className="ada-circle-confirm-grid">
+              <DetailItem label="Wallet Set Name" value={activationStatus === "loading" ? "Loading..." : walletSetName ?? "Not configured"} />
+              <DetailItem label="Wallet Set ID" value={activationStatus === "loading" ? "Loading..." : walletSetId ?? "Not configured"} />
+              <DetailItem label="Environment" value={activationStatus === "loading" ? "Loading..." : walletSetEnvironment ?? "Unavailable"} />
+              <DetailItem label="Network Scope" value={activationStatus === "loading" ? "Loading..." : walletBlockchains.join(", ") || "Not configured"} />
+              <DetailItem label="Wallet Type" value={activationStatus === "loading" ? "Loading..." : walletAccountType} />
+              <DetailItem label="Activation Status" value={activationStatus === "loading" ? "Loading..." : capitalize(walletSetStatus ?? "draft")} />
+              <DetailItem label="Provider" value="Circle" />
+            </div>
+          </section>
+
+          {submitError ? <div className="form-error">Circle wallet provisioning failed: {submitError}</div> : null}
+
+          <footer>
+            <button disabled={submitting} onClick={onBack} type="button">Cancel</button>
+            <div>
+              <button className="primary" disabled={submitting} onClick={() => void confirm()} type="button">
+                {submitting ? "Provisioning..." : "Confirm Provision Circle Wallet"}
+              </button>
+            </div>
+          </footer>
+
+          <aside>
+            <div><span>Correlation ID</span><code>Generated on confirmation</code></div>
+            <div><span>Idempotency Key</span><code>Generated on confirmation</code></div>
+          </aside>
+        </section>
+      </div>
+    </section>
+  );
+};
+
+const AdaProvisionCircleSuccess = ({
+  account,
+  onDone,
+  onViewAda,
+  result
+}: {
+  account: AdaAccount;
+  onDone: () => void;
+  onViewAda: () => void;
+  result?: CircleProvisionSummary;
+}) => {
+  const wallet = result?.linkedInstrument;
+  const operation = result?.circleOperation;
+  const copy = (text: string) => void navigator.clipboard?.writeText(text);
+
+  return (
+    <section className="ada-scope">
+      <div className="ada-link-success-content">
+        <section className="ada-link-success-card ada-circle-result-card">
+          <header>
+            <div><CheckCircle2 size={30} /></div>
+            <h1>{result?.reusedExistingMapping ? "Circle Wallet Already Linked" : "Circle Wallet Provisioned"}</h1>
+            <p>
+              The Circle developer-controlled wallet is available as a linked instrument for <code>{account.accountName}</code>.
+            </p>
+          </header>
+
+          <section>
+            <h2>Circle Provisioned Wallet</h2>
+            <div className="ada-link-success-grid">
+              <DetailItem label="Linked Instrument ID" value={wallet?.id ?? "Unavailable"} />
+              <DetailItem label="Instrument Type" value={formatActivityType(wallet?.instrumentType ?? "circle_wallet")} />
+              <DetailItem label="Wallet ID" value={wallet?.providerReferenceId ?? operation?.providerWalletId ?? "Unavailable"} />
+              <DetailItem label="Wallet Address" value={wallet?.externalReference ?? operation?.providerAddressId ?? "Unavailable"} />
+              <DetailItem label="Network" value={wallet?.networkCode ?? "Tenant default"} />
+              <DetailItem label="Status" value={capitalize(wallet?.status ?? operation?.status ?? "active")} />
+            </div>
+          </section>
+
+          <section className="ada-link-audit-proof">
+            <h2>Security & Audit Proof</h2>
+            <TraceLine label="Correlation ID" value={result?.correlationId ?? operation?.correlationId ?? "Unavailable"} />
+            <TraceLine label="Idempotency Key" value={result?.idempotencyKey ?? operation?.idempotencyKey ?? "Unavailable"} />
+            <TraceLine label="Circle Operation ID" value={operation?.id ?? "Unavailable"} />
+            <TraceLine label="Provider Request ID" value={operation?.providerReferenceId ?? "Unavailable"} />
+          </section>
+
+          <section className="ada-circle-copy-grid">
+            <CopyLine label="Wallet ID" onCopy={copy} value={wallet?.providerReferenceId ?? operation?.providerWalletId ?? "Unavailable"} />
+            <CopyLine label="Wallet Address" onCopy={copy} value={wallet?.externalReference ?? operation?.providerAddressId ?? "Unavailable"} />
+          </section>
+
+          <footer>
+            <button className="primary" onClick={onDone} type="button">Return to Linked Instruments</button>
+            <button onClick={onViewAda} type="button">View ADA Detail</button>
+          </footer>
         </section>
       </div>
     </section>
@@ -977,10 +1244,10 @@ const AdaLinkRailSuccess = ({
           <section>
             <h2>Linked Instrument Details</h2>
             <div className="ada-link-success-grid">
-              <DetailItem label="Rail ID" value={rail?.id ?? "New linked rail"} />
-              <DetailItem label="Instrument Type" value={formatActivityType(rail?.instrumentType ?? "on_chain_wallet")} />
-              <DetailItem label="Purpose" value={formatActivityType(rail?.railName ?? "Settlement")} />
-              <DetailItem label="Status" value={capitalize(rail?.status ?? "active")} />
+              <DetailItem label="Rail ID" value={rail?.id ?? "Unavailable"} />
+              <DetailItem label="Instrument Type" value={rail?.instrumentType ? formatActivityType(rail.instrumentType) : "Unavailable"} />
+              <DetailItem label="Purpose" value={rail?.railName ? formatActivityType(rail.railName) : "Unavailable"} />
+              <DetailItem label="Status" value={rail?.status ? capitalize(rail.status) : "Unavailable"} />
             </div>
           </section>
 
@@ -1133,12 +1400,12 @@ const AdaProvisionSuccess = ({
 
       <section className="ada-success-grid">
         <article className="ada-success-details">
-          <header><h2>ADA Details</h2><StatusPill status={account?.status ?? "active"} /></header>
+          <header><h2>ADA Details</h2><StatusPill status={account?.status ?? "unavailable"} /></header>
           <div>
-            <DetailItem label="Account Name" value={account?.accountName ?? "Operational Liquidity"} large />
-            <DetailItem label="Linked Business Client" value={account?.businessClientName ?? account?.businessClientId ?? "Approved Business Client"} />
-            <DetailItem label="Asset" value={account?.assetCode ?? "USDC"} icon />
-            <DetailItem label="Rail" value={formatRailLabel(account?.assetRail)} />
+            <DetailItem label="Account Name" value={account?.accountName ?? "Unavailable"} large />
+            <DetailItem label="Linked Business Client" value={account?.businessClientName ?? account?.businessClientId ?? "Unavailable"} />
+            <DetailItem label="Asset" value={account?.assetCode ?? "Unavailable"} icon />
+            <DetailItem label="Rail" value={account?.assetRail ? formatRailLabel(account.assetRail) : "Unavailable"} />
           </div>
         </article>
 
@@ -1151,8 +1418,8 @@ const AdaProvisionSuccess = ({
 
         <article>
           <h2>Technical Mappings</h2>
-          <CopyLine label="Circle Account ID" onCopy={copy} value={account?.circleAccountId ?? account?.id ?? "pending-provider-mapping"} />
-          <CopyLine label="Circle Sub-Account ID" onCopy={copy} value={account?.circleSubAccountId ?? "pending-sub-account"} />
+          <CopyLine label="ADA ID" onCopy={copy} value={account?.id ?? "Unavailable"} />
+          <CopyLine label="Provider Mapping" onCopy={copy} value="Available on ADA Detail" />
         </article>
 
         <article>
@@ -1160,12 +1427,12 @@ const AdaProvisionSuccess = ({
           <TraceLine label="Correlation ID" value={provisioned?.correlationId ?? "Unavailable"} />
           <TraceLine label="Idempotency Key" value={provisioned?.idempotencyKey ?? "Unavailable"} />
           <TraceLine label="Ledger Reference ID" value={account?.id ?? "Unavailable"} />
-          <TraceLine label="Provision Status" value={normalizeStatus(account?.status ?? "active").toUpperCase()} />
+          <TraceLine label="Provision Status" value={account?.status ? normalizeStatus(account.status).toUpperCase() : "UNAVAILABLE"} />
         </article>
       </section>
 
       <section className="ada-success-support">
-        <p>Consensus reached at {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit" }).format(new Date())} GMT by policy validator nodes.</p>
+        <p>{account ? `Persisted ADA record created at ${formatDateTime(account.createdAt)}.` : "No persisted ADA response is loaded for this success view."}</p>
         <div>
           <a href="#">View Block Explorer</a>
           <a href="#">Download PDF Receipt</a>
@@ -1297,8 +1564,11 @@ const apiFetch = async <T,>(path: string, options: { body?: Record<string, unkno
     },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
-  const payload = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error ?? `${path}:${response.status}`);
+  const payload = await response.json() as T & { detail?: string; error?: string };
+  if (!response.ok) {
+    const message = [payload.error ?? `${path}:${response.status}`, payload.detail].filter(Boolean).join(" - ");
+    throw new Error(message);
+  }
   return payload;
 };
 

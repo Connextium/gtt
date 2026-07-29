@@ -3503,10 +3503,17 @@ select {
   background: var(--gtt-surface-container) !important;
 }
 
+.command-center-header-actions .icon-button.active {
+  background: var(--gtt-surface-container) !important;
+  box-shadow: inset 0 0 0 1px var(--gtt-border-strong);
+}
+
+.command-center-system-menu,
 .command-center-profile-menu {
   position: relative;
 }
 
+.command-center-system-popover,
 .command-center-profile-popover {
   position: absolute;
   top: calc(100% + 8px);
@@ -3518,6 +3525,11 @@ select {
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.14);
 }
 
+.command-center-system-popover {
+  width: 250px;
+}
+
+.command-center-system-popover > div,
 .command-center-profile-popover > div {
   display: grid;
   gap: 3px;
@@ -3525,12 +3537,14 @@ select {
   padding: 10px 12px;
 }
 
+.command-center-system-popover span,
 .command-center-profile-popover span {
   color: var(--gtt-primary);
   font-size: 12px;
   line-height: 16px;
 }
 
+.command-center-system-popover small,
 .command-center-profile-popover small {
   color: var(--gtt-secondary);
   font-family: var(--font-data-mono);
@@ -3539,6 +3553,7 @@ select {
   overflow-wrap: anywhere;
 }
 
+.command-center-system-popover button,
 .command-center-profile-popover button {
   width: 100%;
   min-height: 34px;
@@ -3556,6 +3571,8 @@ select {
   text-transform: uppercase;
 }
 
+.command-center-system-popover button.active,
+.command-center-system-popover button:hover,
 .command-center-profile-popover button:hover {
   background: var(--gtt-surface-container);
 }

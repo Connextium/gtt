@@ -364,6 +364,7 @@ test("ADA activation command enforces instrument and Circle mapping gates transa
         };
       }
       if (sql.includes("count(*)::int as verified_count")) return { rows: [{ verified_count: 1 }] };
+      if (sql.includes("count(*)::int as circle_count")) return { rows: [{ circle_count: 1 }] };
       if (sql.includes("select id, platform_tenant_id, business_client_id")) {
         return {
           rows: [
@@ -471,6 +472,7 @@ test("ADA Circle provisioning persists provider mapping evidence", async () => {
         };
       }
       if (sql.includes("and operation_type = 'ada_circle_mapping'") && sql.includes("idempotency_key = $3")) return { rows: [] };
+      if (sql.includes("from linked_instruments") && sql.includes("instrument_type = 'circle_wallet'")) return { rows: [] };
       if (sql.includes("from circle_api_operations") && sql.includes("where id = $1")) {
         return {
           rows: [
@@ -489,6 +491,27 @@ test("ADA Circle provisioning persists provider mapping evidence", async () => {
               created_at: "2026-01-01T00:00:00.000Z"
             }
           ]
+        };
+      }
+      if (sql.includes("insert into linked_instruments")) {
+        return {
+          rows: [{
+            id: "linked_circle_1",
+            account_of_digital_asset_id: "00000000-0000-4000-8000-000000000777",
+            instrument_type: "circle_wallet",
+            status: "active",
+            external_reference: "circle_address_000000000777",
+            asset_code: "USDC",
+            rail_type: "on-chain",
+            purpose: "settlement",
+            provider: "circle",
+            provider_reference_id: "circle_wallet_000000000777",
+            verification_status: "verified",
+            network_code: "ARC-TESTNET",
+            is_default: true,
+            metadata: {},
+            created_at: "2026-01-01T00:00:00.000Z"
+          }]
         };
       }
       if (sql.includes("select id, platform_tenant_id, business_client_id")) {
@@ -528,9 +551,348 @@ test("ADA Circle provisioning persists provider mapping evidence", async () => {
 
   assert.equal(result.status, 200);
   assert.equal(queries.some((sql) => sql.includes("insert into circle_api_operations")), true);
-  assert.equal(queries.some((sql) => sql.includes("update accounts_of_digital_asset")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into linked_instruments")), true);
   assert.equal(params.flat().includes("account_of_digital_asset.circle_mapping.provisioned"), true);
   assert.equal(queries.some((sql) => sql.includes("insert into api_idempotency_records")), true);
+});
+
+test("ADA Circle provisioning reuses existing successful provider mapping without creating a new wallet", async () => {
+  const queries: string[] = [];
+  const params: unknown[][] = [];
+  const client = {
+    query: async (sql: string, values: unknown[] = []): Promise<QueryResult> => {
+      queries.push(sql);
+      params.push(values);
+      if (sql.includes("from accounts_of_digital_asset account")) {
+        return {
+          rows: [
+            {
+              id: "00000000-0000-4000-8000-000000000777",
+              status: "pending_activation",
+              business_client_id: "00000000-0000-4000-8000-000000000222",
+              circle_account_id: "circle_account_existing",
+              circle_sub_account_id: "circle_wallet_existing",
+              onboarding_status: "approved"
+            }
+          ]
+        };
+      }
+      if (sql.includes("from linked_instruments") && sql.includes("instrument_type = 'circle_wallet'")) {
+        return {
+          rows: [{
+            id: "linked_circle_existing",
+            account_of_digital_asset_id: "00000000-0000-4000-8000-000000000777",
+            instrument_type: "circle_wallet",
+            status: "active",
+            external_reference: "circle_address_existing",
+            asset_code: "USDC",
+            rail_type: "on-chain",
+            purpose: "settlement",
+            provider: "circle",
+            provider_reference_id: "circle_wallet_existing",
+            verification_status: "verified",
+            network_code: "ARC-TESTNET",
+            is_default: true,
+            metadata: {},
+            created_at: "2026-01-01T00:00:00.000Z"
+          }]
+        };
+      }
+      if (sql.includes("and status = 'succeeded'")) {
+        return {
+          rows: [
+            {
+              id: "circle_op_existing",
+              operation_type: "ada_circle_mapping",
+              idempotency_key: "first-click-key",
+              correlation_id: "first-click-corr",
+              request_payload: {},
+              response_payload: {},
+              provider_reference_id: "circle_account_existing",
+              provider_account_id: "circle_account_existing",
+              provider_wallet_id: "circle_wallet_existing",
+              provider_address_id: "circle_address_existing",
+              status: "succeeded",
+              created_at: "2026-01-01T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("select id, platform_tenant_id, business_client_id")) {
+        return {
+          rows: [
+            {
+              id: "00000000-0000-4000-8000-000000000777",
+              platform_tenant_id: "tenant_1",
+              business_client_id: "00000000-0000-4000-8000-000000000222",
+              account_name: "ADA",
+              use_purpose: "settlement",
+              status: "pending_activation",
+              circle_account_id: "circle_account_existing",
+              circle_sub_account_id: "circle_wallet_existing",
+              asset_code: "USDC",
+              asset_rail: "circle_internal",
+              created_at: "2026-01-01T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const result = await executeSprint1PostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/accounts-of-digital-asset/00000000-0000-4000-8000-000000000777/provision-circle",
+      body: {},
+      idempotencyKey: "second-click-key",
+      correlationId: "second-click-corr"
+    },
+    "circle_map_second_click_hash"
+  );
+
+  assert.equal(result.status, 200);
+  assert.equal((result.body as { reusedExistingMapping?: boolean }).reusedExistingMapping, true);
+  assert.equal(queries.some((sql) => sql.includes("insert into circle_api_operations")), false);
+  assert.equal(params.flat().includes("account_of_digital_asset.circle_mapping.provisioned"), false);
+  assert.equal(queries.some((sql) => sql.includes("insert into api_idempotency_records")), true);
+});
+
+test("ADA Circle provisioning ignores removed legacy Circle fields", async () => {
+  const previousEnvironment = process.env.CIRCLE_ENVIRONMENT;
+  process.env.CIRCLE_ENVIRONMENT = "circle-sandbox";
+  const previousApiKey = process.env.CIRCLE_API_KEY;
+  const previousEntitySecret = process.env.CIRCLE_ENTITY_SECRET;
+  delete process.env.CIRCLE_API_KEY;
+  delete process.env.CIRCLE_ENTITY_SECRET;
+  const queries: string[] = [];
+  const params: unknown[][] = [];
+  const client = {
+    query: async (sql: string, values: unknown[] = []): Promise<QueryResult> => {
+      queries.push(sql);
+      params.push(values);
+      if (sql.includes("from accounts_of_digital_asset account")) {
+        return {
+          rows: [
+            {
+              id: "00000000-0000-4000-8000-000000000777",
+              status: "active",
+              business_client_id: "00000000-0000-4000-8000-000000000222",
+              circle_account_id: "circle_account_existing",
+              circle_sub_account_id: "circle_wallet_existing",
+              onboarding_status: "approved"
+            }
+          ]
+        };
+      }
+      if (sql.includes("from linked_instruments") && sql.includes("instrument_type = 'circle_wallet'")) return { rows: [] };
+      if (sql.includes("and status = 'succeeded'")) return { rows: [] };
+      if (sql.includes("from circle_api_operations") && sql.includes("where id = $1")) {
+        return {
+          rows: [
+            {
+              id: values[0],
+              operation_type: "ada_circle_mapping",
+              idempotency_key: "recover-circle-map",
+              correlation_id: "recover-circle-map-corr",
+              request_payload: { recoveredExistingAccountMapping: true },
+              response_payload: { recoveredExistingAccountMapping: true },
+              provider_reference_id: "circle_account_existing",
+              provider_account_id: "circle_account_existing",
+              provider_wallet_id: "circle_wallet_existing",
+              status: "succeeded",
+              created_at: "2026-01-01T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("select id, platform_tenant_id, business_client_id")) {
+        return {
+          rows: [
+            {
+              id: "00000000-0000-4000-8000-000000000777",
+              platform_tenant_id: "tenant_1",
+              business_client_id: "00000000-0000-4000-8000-000000000222",
+              account_name: "ADA",
+              use_purpose: "settlement",
+              status: "active",
+              circle_account_id: "circle_account_existing",
+              circle_sub_account_id: "circle_wallet_existing",
+              asset_code: "USDC",
+              asset_rail: "circle_internal",
+              created_at: "2026-01-01T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  try {
+    const result = await executeSprint1PostgresCommand(
+      client as never,
+      {
+        method: "POST",
+        pathname: "/accounts-of-digital-asset/00000000-0000-4000-8000-000000000777/provision-circle",
+        body: {},
+        idempotencyKey: "recover-circle-map",
+        correlationId: "recover-circle-map-corr"
+      },
+      "circle_map_recover_hash"
+    );
+
+    assert.equal(result.status, 400);
+    assert.equal((result.body as { error?: string }).error, "circle_api_key_required");
+    assert.equal(queries.some((sql) => sql.includes("insert into circle_api_operations")), true);
+    assert.equal(queries.some((sql) => sql.includes("insert into linked_instruments")), false);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.CIRCLE_ENVIRONMENT;
+    else process.env.CIRCLE_ENVIRONMENT = previousEnvironment;
+    if (previousApiKey === undefined) delete process.env.CIRCLE_API_KEY;
+    else process.env.CIRCLE_API_KEY = previousApiKey;
+    if (previousEntitySecret === undefined) delete process.env.CIRCLE_ENTITY_SECRET;
+    else process.env.CIRCLE_ENTITY_SECRET = previousEntitySecret;
+  }
+});
+
+test("tenant activation initializes simulator wallet set and stores tenant Circle integration", async () => {
+  const previousEnvironment = process.env.CIRCLE_ENVIRONMENT;
+  process.env.CIRCLE_ENVIRONMENT = "simulator";
+  const queries: string[] = [];
+  const params: unknown[][] = [];
+  let integrationStored = false;
+  const client = {
+    query: async (sql: string, values: unknown[] = []): Promise<QueryResult> => {
+      queries.push(sql);
+      params.push(values);
+      if (sql.includes("from platform_tenants")) {
+        return {
+          rows: [
+            {
+              id: "00000000-0000-4000-8000-000000000001",
+              tenant_name: "Demo Tenant",
+              created_at: "2026-01-01T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      if (sql.includes("insert into platform_tenant_circle_integrations")) {
+        integrationStored = true;
+        return { rows: [] };
+      }
+      if (sql.includes("from platform_tenant_circle_integrations")) {
+        return integrationStored
+          ? {
+              rows: [
+                {
+                  id: "tenant_circle_1",
+                  platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+                  provider: "circle",
+                  environment: "simulator",
+                  wallet_set_id: "circle_wallet_set_demotenantwallets",
+                  wallet_set_name: "Demo Tenant Wallets",
+                  wallet_blockchain: "ARC-TESTNET",
+                  wallet_strategy: "omnibus_custodial_set",
+                  status: "active",
+                  activated_at: "2026-01-01T00:00:00.000Z",
+                  created_at: "2026-01-01T00:00:00.000Z",
+                  updated_at: "2026-01-01T00:00:00.000Z",
+                  metadata: {}
+                }
+              ]
+            }
+          : { rows: [] };
+      }
+      return { rows: [] };
+    }
+  };
+
+  try {
+    const result = await executeSprint1PostgresCommand(
+      client as never,
+      {
+        method: "POST",
+        pathname: "/tenants/current/activate",
+        body: {
+          walletSetName: "Demo Tenant Wallets",
+          walletBlockchains: ["ARC-TESTNET"],
+          walletStrategy: "omnibus_custodial_set"
+        },
+        idempotencyKey: "tenant-activate",
+        correlationId: "tenant-activate-corr"
+      },
+      "tenant_activate_hash"
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(queries.some((sql) => sql.includes("insert into platform_tenant_circle_integrations")), true);
+    assert.equal(params.flat().includes("platform_tenant.circle_wallet_set.activated"), true);
+    assert.equal(JSON.stringify(result.body).includes("CIRCLE_ENTITY_SECRET"), false);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.CIRCLE_ENVIRONMENT;
+    else process.env.CIRCLE_ENVIRONMENT = previousEnvironment;
+  }
+});
+
+test("Circle sandbox diagnostic command persists provider evidence through direct database mode", async () => {
+  const previousEnvironment = process.env.CIRCLE_ENVIRONMENT;
+  const previousApiKey = process.env.CIRCLE_API_KEY;
+  process.env.CIRCLE_ENVIRONMENT = "circle-sandbox";
+  delete process.env.CIRCLE_API_KEY;
+  const queries: string[] = [];
+  const params: unknown[][] = [];
+  const client = {
+    query: async (sql: string, values: unknown[] = []): Promise<QueryResult> => {
+      queries.push(sql);
+      params.push(values);
+      if (sql.includes("from circle_api_operations") && sql.includes("where id = $1")) {
+        return {
+          rows: [
+            {
+              id: "circle_diag_1",
+              operation_type: "circle.sandbox_check",
+              idempotency_key: "idem-circle-diag",
+              correlation_id: "corr-circle-diag",
+              request_payload: {},
+              response_payload: { accepted: false },
+              provider_reference_id: "circle_diagnostic_circle-sandbox",
+              status: "failed",
+              error_code: "circle_api_key_required",
+              created_at: "2026-01-01T00:00:00.000Z"
+            }
+          ]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  try {
+    const result = await executeSprint1PostgresCommand(
+      client as never,
+      {
+        method: "POST",
+        pathname: "/integrations/circle/sandbox-check",
+        body: {},
+        idempotencyKey: "idem-circle-diag",
+        correlationId: "corr-circle-diag"
+      },
+      "circle_diag_hash"
+    );
+
+    assert.equal(result.status, 400);
+    assert.equal(queries.some((sql) => sql.includes("insert into circle_api_operations")), true);
+    assert.equal(params.flat().includes("circle.sandbox_check.failed"), true);
+    assert.equal(queries.some((sql) => sql.includes("insert into api_idempotency_records")), false);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.CIRCLE_ENVIRONMENT;
+    else process.env.CIRCLE_ENVIRONMENT = previousEnvironment;
+    if (previousApiKey === undefined) delete process.env.CIRCLE_API_KEY;
+    else process.env.CIRCLE_API_KEY = previousApiKey;
+  }
 });
 
 test("postgres evidence query reads ledger, audit, outbox, and inbox tables", async () => {

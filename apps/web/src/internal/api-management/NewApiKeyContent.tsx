@@ -1,19 +1,51 @@
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, Copy, Download } from "lucide-react";
+import type React from "react";
 import { useState } from "react";
 import apiManagementImageUrl from "../../assets-internal/api-management.jpg";
 
-const scopes = ["READ:LEDGER", "WRITE:TX", "ADMIN:FULL", "READ:ANALYTICS"] as const;
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const gttApiKey = import.meta.env.VITE_GTT_API_KEY ?? "gtt_live_api_key_dev.dev_secret";
+
+const scopes = [
+  { label: "READ:OPERATIONS", value: "read:operations" },
+  { label: "WRITE:ACCOUNTS", value: "write:accounts" },
+  { label: "WRITE:LEDGER", value: "write:ledger" },
+  { label: "ADMIN:API-KEYS", value: "admin:api-keys" }
+] as const;
 const expirationPeriods = ["30 DAYS", "90 DAYS", "1 YEAR", "NEVER"] as const;
-const secretKey = "gtt_demo_generated_key_9a2b5c8e1f0g4h7j";
+
+interface CreatedApiKeyResponse {
+  client?: {
+    id: string;
+    clientName: string;
+  };
+  key?: {
+    id: string;
+    keyPrefix: string;
+    scopes: string[];
+    expiresAt?: string;
+    createdAt?: string;
+  };
+  plaintextKey: string;
+}
 
 export const NewApiKeyContent = ({ navigate }: { navigate: (path: string) => void }) => {
   const [step, setStep] = useState<"create" | "reveal">("create");
+  const [createdKey, setCreatedKey] = useState<CreatedApiKeyResponse | undefined>();
 
   if (step === "reveal") {
-    return <RevealApiKeyView onDone={() => navigate("/internal/operations/api-keys")} />;
+    return <RevealApiKeyView createdKey={createdKey} onDone={() => navigate("/internal/operations/api-keys")} />;
   }
 
-  return <CreateApiKeyView onCancel={() => navigate("/internal/operations/api-keys")} onGenerate={() => setStep("reveal")} />;
+  return (
+    <CreateApiKeyView
+      onCancel={() => navigate("/internal/operations/api-keys")}
+      onGenerate={(payload) => {
+        setCreatedKey(payload);
+        setStep("reveal");
+      }}
+    />
+  );
 };
 
 const CreateApiKeyView = ({
@@ -21,9 +53,42 @@ const CreateApiKeyView = ({
   onGenerate
 }: {
   onCancel: () => void;
-  onGenerate: () => void;
+  onGenerate: (payload: CreatedApiKeyResponse) => void;
 }) => {
   const [expiration, setExpiration] = useState("90 DAYS");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setSubmitError("");
+    const form = new FormData(event.currentTarget);
+    const selectedScopes = form.getAll("scopes").filter((value): value is string => typeof value === "string");
+    try {
+      const response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}/api-keys`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${gttApiKey}`,
+          "content-type": "application/json",
+          "idempotency-key": `api-key-create-${crypto.randomUUID()}`
+        },
+        body: JSON.stringify({
+          clientName: stringForm(form, "clientName", "API Client"),
+          scopes: selectedScopes.length ? selectedScopes : ["read:operations"],
+          expiresAt: expirationToIso(expiration)
+        })
+      });
+      const payload = await response.json() as CreatedApiKeyResponse & { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? `api_key_create_failed:${response.status}`);
+      if (!payload.plaintextKey) throw new Error("api_key_plaintext_missing");
+      onGenerate(payload);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "api_key_create_failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="new-api-key-content">
@@ -40,55 +105,33 @@ const CreateApiKeyView = ({
         </div>
 
         <div className="new-api-key-audit">
-          <h2>Audit Log Reference</h2>
-          <span>REF_ID: ADM-API-992-K</span>
-          <span>REQUESTOR: ADMIN_01_PROD</span>
+          <h2>Audit Evidence</h2>
+          <span>Created through POST /api-keys</span>
+          <span>Backend writes audit and outbox records</span>
         </div>
       </aside>
 
       <section className="new-api-key-form-panel">
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          onGenerate();
-        }}>
+        <form onSubmit={submit}>
           <label>
-            <span>Client Assignment</span>
+            <span>Key Name / Client Name</span>
             <div className="new-api-key-select">
-              <select defaultValue="" required>
-                <option value="" disabled>Select existing API Client</option>
-                <option value="1">Settlement-Service-Prod</option>
-                <option value="2">OMS-Integration-Core</option>
-                <option value="3">Reporting-Nexus-Alpha</option>
-                <option value="4">Liquidity-Bridge-Mainnet</option>
-              </select>
+              <input name="clientName" placeholder="e.g. Settlement-Service-Prod" required type="text" />
               <ChevronDown size={16} />
             </div>
-          </label>
-
-          <label>
-            <span>Key Name / Description</span>
-            <input placeholder="e.g. Primary Write Access - Q4 Ops" type="text" required />
           </label>
 
           <fieldset>
             <legend>Permissions & Scopes</legend>
             <div className="new-api-key-scopes">
               {scopes.map((scope) => (
-                <label key={scope}>
-                  <input type="checkbox" />
-                  <span>{scope}</span>
+                <label key={scope.value}>
+                  <input defaultChecked={scope.value === "read:operations"} name="scopes" type="checkbox" value={scope.value} />
+                  <span>{scope.label}</span>
                 </label>
               ))}
             </div>
           </fieldset>
-
-          <label>
-            <span className="new-api-key-label-row">
-              <span>IP Whitelisting (Optional)</span>
-              <small>CIDR format allowed</small>
-            </span>
-            <textarea placeholder="192.168.1.1, 10.0.0.0/24" rows={3} />
-          </label>
 
           <fieldset>
             <legend>Key Expiration Period</legend>
@@ -117,8 +160,12 @@ const CreateApiKeyView = ({
             </div>
           </div>
 
+          {submitError ? <div className="form-error">{submitError}</div> : null}
+
           <footer>
-            <button className="new-api-key-primary" type="submit">Generate API Key</button>
+            <button className="new-api-key-primary" disabled={submitting} type="submit">
+              {submitting ? "Generating..." : "Generate API Key"}
+            </button>
             <button className="new-api-key-secondary" onClick={onCancel} type="button">Cancel</button>
           </footer>
         </form>
@@ -127,10 +174,18 @@ const CreateApiKeyView = ({
   );
 };
 
-const RevealApiKeyView = ({ onDone }: { onDone: () => void }) => {
+const RevealApiKeyView = ({
+  createdKey,
+  onDone
+}: {
+  createdKey?: CreatedApiKeyResponse;
+  onDone: () => void;
+}) => {
   const [copied, setCopied] = useState(false);
+  const secretKey = createdKey?.plaintextKey ?? "";
 
   const copySecret = async () => {
+    if (!secretKey) return;
     await navigator.clipboard.writeText(secretKey);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 3000);
@@ -162,14 +217,14 @@ const RevealApiKeyView = ({ onDone }: { onDone: () => void }) => {
         <div className="new-api-key-secret-stack">
           <label>
             <span>API Key ID</span>
-            <code>ak_live_7249...x92k</code>
+            <code>{createdKey?.key?.id ?? "Unavailable"}</code>
           </label>
 
           <label>
             <span>Secret Key</span>
             <div className="new-api-key-secret">
-              <code>{secretKey}</code>
-              <button onClick={copySecret} type="button">
+              <code>{secretKey || "No plaintext key returned"}</code>
+              <button disabled={!secretKey} onClick={copySecret} type="button">
                 {copied ? (
                   <>
                     <Check size={16} />
@@ -193,14 +248,12 @@ const RevealApiKeyView = ({ onDone }: { onDone: () => void }) => {
             <div>
               <span>Scopes Assigned</span>
               <div>
-                <small>TREASURY.READ</small>
-                <small>LEDGER.WRITE</small>
-                <small>ANALYTICS</small>
+                {(createdKey?.key?.scopes ?? []).map((scope) => <small key={scope}>{scope.toUpperCase()}</small>)}
               </div>
             </div>
             <div>
               <span>Expiration Date</span>
-              <p>Dec 31, 2025 - Never Expires</p>
+              <p>{createdKey?.key?.expiresAt ? formatDateTime(createdKey.key.expiresAt) : "Never expires"}</p>
             </div>
           </div>
 
@@ -215,4 +268,27 @@ const RevealApiKeyView = ({ onDone }: { onDone: () => void }) => {
       </section>
     </div>
   );
+};
+
+const stringForm = (form: FormData, key: string, fallback = ""): string => {
+  const value = form.get(key);
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+};
+
+const expirationToIso = (period: string): string | undefined => {
+  if (period === "NEVER") return undefined;
+  const days = period === "30 DAYS" ? 30 : period === "90 DAYS" ? 90 : 365;
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString();
+};
+
+const formatDateTime = (value: string): string => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  }).format(date);
 };

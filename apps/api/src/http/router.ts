@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { publicApiKey, type ApiScope } from "../auth/index.js";
-import { invokeCircle, verifyCircleWebhook } from "../modules/circle/index.js";
+import { checkCircleHealth, circleEnvironment, circleWalletAccountType, initializeCircleWalletSet, invokeCircle, provisionAdaCircleMapping, verifyCircleWebhook } from "../modules/circle/index.js";
 import {
   handleGetOrCreateMyOnboarding,
   handleRespondToMyOnboardingRfi,
@@ -54,6 +54,8 @@ export const routeMetadata = (method: string, pathname: string): { public?: bool
   if (method === "POST" && ["/internal-access/initialize", "/internal-access/login"].includes(pathname)) return { public: true };
   if (pathname === "/onboarding/me" || pathname.startsWith("/onboarding/me/")) return { public: true };
   if (pathname.startsWith("/api-keys")) return { requiredScopes: ["admin:api-keys"] };
+  if (pathname.startsWith("/integrations/circle")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["admin:api-keys"] };
+  if (pathname.startsWith("/tenants")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["admin:users"] };
   if (pathname.startsWith("/admin/business-onboarding")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:clients"] };
   if (pathname.startsWith("/admin/users") || pathname === "/admin/roles") return { requiredScopes: ["admin:users"] };
   if (method === "GET") return { requiredScopes: ["read:operations"] };
@@ -83,6 +85,96 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
       stateStore: stateStoreStatus,
       circleMode: process.env.CIRCLE_ENVIRONMENT ?? "simulator"
     });
+  }
+  if (method === "GET" && pathname === "/integrations/circle/health") {
+    const circle = await checkCircleHealth({ probe: false });
+    const lastDiagnostic = state.circleOperations.find((item) => ["circle.health_check", "circle.sandbox_check"].includes(item.operationType));
+    return ok({ circle, lastDiagnostic });
+  }
+  if (method === "POST" && pathname === "/integrations/circle/sandbox-check") {
+    const circle = await checkCircleHealth({ probe: true });
+    const operation = {
+      id: newId("circle_op"),
+      tenantId: state.tenantId,
+      operationType: "circle.sandbox_check",
+      requestPayload: { environment: circle.environment, baseUrl: circle.baseUrl, probe: true },
+      responsePayload: circle.responsePayload,
+      providerReferenceId: circle.providerRequestId ?? `circle_diagnostic_${circle.environment}`,
+      status: circle.status === "ready" ? "complete" as const : "failed" as const,
+      createdAt: new Date().toISOString()
+    };
+    state.circleOperations.unshift(operation);
+    emitOutbox(state, circle.status === "ready" ? "circle.sandbox_check.succeeded" : "circle.sandbox_check.failed", {
+      circleOperationId: operation.id,
+      environment: circle.environment,
+      status: circle.status,
+      errorCode: circle.errorCode
+    });
+    return {
+      status: circle.status === "ready" ? 200 : circle.errorCode === "circle_api_key_required" ? 400 : 502,
+      body: { circle, diagnostic: operation }
+    };
+  }
+  if (method === "GET" && pathname === "/tenants/current/activation") {
+    return ok({
+      tenant: {
+        id: state.tenantId,
+        tenant_name: "Demo Tenant",
+        created_at: new Date().toISOString()
+      },
+      circleIntegration: {
+        environment: circleEnvironment(),
+        walletSetId: process.env.CIRCLE_WALLET_SET_ID,
+        walletSetName: "Demo Tenant Wallet Set",
+        walletBlockchains: circleWalletBlockchainsFromEnv(),
+        walletAccountType: circleWalletAccountType,
+        walletStrategy: "omnibus_custodial_set",
+        status: process.env.CIRCLE_WALLET_SET_ID ? "active" : "draft"
+      }
+    });
+  }
+  if (method === "POST" && pathname === "/tenants/current/activate") {
+    const walletSetName = stringBody(body, "walletSetName", "Demo Tenant Wallet Set");
+    const walletBlockchains = stringArrayBody(body, "walletBlockchains", circleWalletBlockchainsFromEnv());
+    const walletSetId = optionalStringBody(body, "walletSetId");
+    const walletSet = walletSetId
+      ? {
+          environment: circleEnvironment(),
+          walletSetId,
+          walletSetName,
+          walletBlockchains,
+          status: "complete" as const,
+          responsePayload: { accepted: true, attachedExistingWalletSet: true }
+        }
+      : await initializeCircleWalletSet({
+          idempotencyKey: optionalStringBody(body, "idempotencyKey"),
+          walletSetName,
+          walletBlockchains
+        });
+    emitOutbox(state, walletSet.status === "complete" ? "platform_tenant.circle_wallet_set.activated" : "platform_tenant.circle_wallet_set.activation_failed", {
+      tenantId: state.tenantId,
+      walletSetId: walletSet.walletSetId,
+      walletBlockchains,
+      errorCode: walletSet.errorCode
+    });
+    return {
+      status: 200,
+      body: {
+        tenant: { id: state.tenantId, tenant_name: "Demo Tenant" },
+        circleIntegration: {
+          environment: walletSet.environment,
+          walletSetId: walletSet.walletSetId,
+          walletSetName,
+          walletBlockchains,
+          walletStrategy: stringBody(body, "walletStrategy", "omnibus_custodial_set"),
+          status: walletSet.status === "complete" ? "active" : "failed"
+        },
+        activationAccepted: walletSet.status === "complete",
+        error: walletSet.status === "complete" ? undefined : walletSet.errorCode,
+        detail: walletSet.status === "complete" ? undefined : tenantActivationFailureDetail(walletSet.responsePayload),
+        walletSet
+      }
+    };
   }
 
   if (method === "POST" && pathname === "/auth/invitations") {
@@ -492,9 +584,67 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   if (method === "POST" && provisionMatch) {
     const account = requireItem(state.accounts, provisionMatch[1]!, "account_not_found");
     if (["restricted", "frozen", "closed"].includes(account.status)) return badRequest("account_status_blocks_circle_provisioning");
-    const circle = await invokeCircle(state, { tenantId: state.tenantId, operationType: "account_provision", payload: { accountId: account.id } });
-    account.circleAccountId = circle.providerReferenceId;
-    account.circleSubAccountId = `${circle.providerReferenceId}_sub`;
+    const existingCircleOperation = state.circleOperations.find((operation) =>
+      operation.operationType === "ada_circle_mapping"
+      && operation.status === "complete"
+      && operation.requestPayload.accountId === account.id
+    );
+    if (existingCircleOperation) {
+      account.circleAccountId ??= existingCircleOperation.providerReferenceId;
+      account.circleSubAccountId ??= `${existingCircleOperation.providerReferenceId}_sub`;
+      return ok({ account, circleOperation: existingCircleOperation, reusedExistingMapping: true });
+    }
+    if (account.circleAccountId && account.circleSubAccountId) {
+      const circle = {
+        id: newId("circle_op"),
+        tenantId: state.tenantId,
+        operationType: "ada_circle_mapping",
+        requestPayload: { accountId: account.id, recoveredExistingAccountMapping: true },
+        responsePayload: {
+          accepted: true,
+          recoveredExistingAccountMapping: true,
+          providerAccountId: account.circleAccountId,
+          providerWalletId: account.circleSubAccountId
+        },
+        providerReferenceId: account.circleAccountId,
+        status: "complete" as const,
+        createdAt: new Date().toISOString()
+      };
+      state.circleOperations.unshift(circle);
+      emitOutbox(state, "account_of_digital_asset.circle_mapping.recovered", { accountOfDigitalAssetId: account.id, circleOperationId: circle.id });
+      return ok({ account, circleOperation: circle, reusedExistingMapping: true });
+    }
+    const provider = await provisionAdaCircleMapping({
+      tenantId: state.tenantId,
+      accountOfDigitalAssetId: account.id,
+      businessClientId: account.businessClientId,
+      idempotencyKey: optionalStringBody(body, "idempotencyKey"),
+      correlationId: optionalStringBody(body, "correlationId"),
+      payload: { accountId: account.id }
+    });
+    const circle = {
+      id: newId("circle_op"),
+      tenantId: state.tenantId,
+      operationType: "ada_circle_mapping",
+      requestPayload: { accountId: account.id },
+      responsePayload: provider.responsePayload,
+      providerReferenceId: provider.providerReferenceId,
+      status: provider.status,
+      createdAt: new Date().toISOString()
+    };
+    state.circleOperations.unshift(circle);
+    if (provider.status !== "complete") {
+      return {
+        status: provider.errorCode === "circle_wallet_configuration_required" || provider.errorCode === "circle_api_key_required" ? 400 : 502,
+        body: {
+          error: provider.errorCode ?? "circle_provider_unavailable",
+          detail: tenantActivationFailureDetail(provider.responsePayload),
+          circleOperation: circle
+        }
+      };
+    }
+    account.circleAccountId = provider.providerAccountId ?? provider.providerReferenceId;
+    account.circleSubAccountId = provider.providerWalletId ?? provider.providerReferenceId;
     emitOutbox(state, "account_of_digital_asset.provisioned", { accountOfDigitalAssetId: account.id, circleOperationId: circle.id });
     return ok({ account, circleOperation: circle });
   }
@@ -769,7 +919,7 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   if (method === "GET" && pathname === "/internal/operations/commandcentre") return ok({ dailyClose: dailyClose(state), recommendations: state.recommendations, breaks: state.reconciliationBreaks });
 
   if (method === "POST" && (pathname === "/webhooks/circle" || pathname === "/webhooks/circle/onboarding")) {
-    const verification = verifyCircleWebhook(input.rawBody ?? JSON.stringify(body), input.headers?.["circle-signature"]);
+    const verification = verifyCircleWebhook(input.rawBody ?? JSON.stringify(body), input.headers?.["circle-signature"] ?? input.headers?.["x-circle-signature"]);
     const existing = state.circleWebhooks.find((item) => item.providerEventId === verification.providerEventId);
     if (existing) return ok({ webhook: existing, duplicate: true });
     const webhook = { id: newId("circle_webhook"), tenantId: state.tenantId, providerEventId: verification.providerEventId, signatureValid: verification.valid, rawPayload: body, normalizedPayload: verification.normalizedPayload, status: verification.valid ? "received" as const : "rejected" as const, receivedAt: new Date().toISOString() };
@@ -808,6 +958,31 @@ const uuidBody = (body: Record<string, unknown>, key: string): string | undefine
   return value && isUuid(value) ? value : undefined;
 };
 const arrayBody = (body: Record<string, unknown>, key: string): unknown[] | undefined => Array.isArray(body[key]) ? body[key] as unknown[] : undefined;
+const stringArrayBody = (body: Record<string, unknown>, key: string, fallback: string[]): string[] => {
+  const value = arrayBody(body, key);
+  const filtered = value?.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()) ?? [];
+  return filtered.length ? filtered : fallback;
+};
+const circleWalletBlockchainsFromEnv = (): string[] =>
+  (process.env.CIRCLE_WALLET_BLOCKCHAINS ?? process.env.CIRCLE_WALLET_BLOCKCHAIN ?? "MATIC-AMOY")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+const tenantActivationFailureDetail = (responsePayload: Record<string, unknown>): string | undefined => {
+  const providerError = responsePayload.providerError && typeof responsePayload.providerError === "object"
+    ? responsePayload.providerError as Record<string, unknown>
+    : undefined;
+  const message = providerError?.message;
+  const code = providerError?.code;
+  const httpStatus = providerError?.httpStatus ?? responsePayload.httpStatus;
+  const providerRequestId = providerError?.providerRequestId ?? responsePayload.providerRequestId;
+  return [
+    typeof message === "string" ? message : undefined,
+    code !== undefined ? `code=${String(code)}` : undefined,
+    httpStatus !== undefined ? `httpStatus=${String(httpStatus)}` : undefined,
+    typeof providerRequestId === "string" ? `requestId=${providerRequestId}` : undefined
+  ].filter(Boolean).join("; ") || undefined;
+};
 const reviewActionFromRoute = (value: string): BusinessOnboardingReviewActionType | undefined => {
   if (value === "approve") return "approved";
   if (value === "reject") return "rejected";

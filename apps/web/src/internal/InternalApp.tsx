@@ -12,6 +12,7 @@ import { InternalShell } from "./InternalShell.js";
 import { LedgerOperationsContent } from "./ledger/LedgerOperationsContent.js";
 import { LedgerRegistryContent } from "./ledger/LedgerRegistryContent.js";
 import { InternalCommandCenterContent } from "./operations/InternalCommandCenterContent.js";
+import { TenantActivationContent } from "./tenant-activation/TenantActivationContent.js";
 import type { AppUser, RoleCode, UserStatus } from "../identity.js";
 import { isTreasuryWorksRoute, TreasuryWorksContent } from "./treasury-works/TreasuryWorksApp.js";
 
@@ -292,6 +293,17 @@ export const InternalApp = ({
     );
   }
 
+  if (path === "/internal/operations/admin/tenant-activation" || path === "/internal/operations/admin/tenant-activation/success") {
+    return (
+      <InternalShell activePath="/internal/operations/admin/tenant-activation" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <TenantActivationContent
+          mode={path.endsWith("/success") ? "success" : "config"}
+          navigate={navigate}
+        />
+      </InternalShell>
+    );
+  }
+
   if (path === "/internal/operations/business-clients" || /^\/internal\/operations\/business-clients\/[^/]+$/.test(path)) {
     return (
       <InternalShell activePath={path} currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
@@ -348,7 +360,7 @@ export const InternalApp = ({
     );
   }
 
-  const adaDetailMatch = path.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)(?:\/(instruments|linked-instruments)(?:\/(new|success))?)?$/);
+  const adaDetailMatch = path.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)(?:\/(instruments|linked-instruments)(?:\/(new|success|circle\/confirm|circle\/success))?)?$/);
   if (path === "/internal/operations/accounts-of-digital-asset" || path === "/internal/operations/accounts-of-digital-asset/new" || path === "/internal/operations/accounts-of-digital-asset/success" || adaDetailMatch) {
     const mode =
       path === "/internal/operations/accounts-of-digital-asset/new"
@@ -359,6 +371,10 @@ export const InternalApp = ({
             ? "linkRail"
             : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "success"
               ? "linkRailSuccess"
+              : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "circle/confirm"
+                ? "circleConfirm"
+                : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "circle/success"
+                  ? "circleSuccess"
               : adaDetailMatch?.[2] === "instruments" || adaDetailMatch?.[2] === "linked-instruments"
             ? "instruments"
             : adaDetailMatch

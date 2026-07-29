@@ -319,8 +319,8 @@ const PostingRulesView = ({
 
       <footer className="posting-rules-statusbar">
         <div>
-          <span><i /> System Status: Online</span>
-          <span>Ledger Latency: 12ms</span>
+          <span><i /> System Status: Not queried</span>
+          <span>Ledger Latency: Unavailable</span>
         </div>
         <code>Capital-Treasury-01 // v2.4.12</code>
       </footer>

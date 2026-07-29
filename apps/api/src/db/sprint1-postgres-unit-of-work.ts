@@ -9,6 +9,7 @@ import {
 } from "../auth/index.js";
 import { requestHash } from "../events/idempotency.js";
 import type { JsonResponse } from "../http/index.js";
+import { checkCircleHealth, circleEnvironment, circleWalletAccountType, initializeCircleWalletSet, provisionAdaCircleMapping } from "../modules/circle/index.js";
 import { withPostgresTransaction, type PostgresClient } from "./transaction.js";
 
 const defaultTenantId = (): string => process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001";
@@ -41,7 +42,9 @@ export const isSprint1PostgresRoute = (method: string, pathname: string): boolea
       || pathname === "/events/outbox"
       || pathname === "/events/inbox"
       || pathname === "/audit-log"
-      || pathname === "/audit-events";
+      || pathname === "/audit-events"
+      || pathname === "/tenants/current/activation"
+      || pathname === "/integrations/circle/health";
   }
   return method === "POST" && (
     [
@@ -54,6 +57,8 @@ export const isSprint1PostgresRoute = (method: string, pathname: string): boolea
     || /^\/business-clients\/[^/]+\/(submit-onboarding|map-circle|restrict|close)$/.test(pathname)
     || /^\/accounts-of-digital-asset\/[^/]+\/linked-instruments$/.test(pathname)
     || /^\/accounts-of-digital-asset\/[^/]+\/(activate|restrict|unrestrict|freeze|unfreeze|close|provision-circle)$/.test(pathname)
+    || pathname === "/tenants/current/activate"
+    || pathname === "/integrations/circle/sandbox-check"
     || /^\/events\/(outbox|inbox)\/[^/]+\/retry$/.test(pathname)
   );
 };
@@ -110,6 +115,8 @@ export const executeSprint1PostgresQueryWithClient = async (
     if (input.pathname === "/events/outbox") return { status: 200, body: { events: await listOutboxEvents(client, tenantId) } };
     if (input.pathname === "/events/inbox") return { status: 200, body: { events: await listInboxEvents(client, tenantId) } };
     if (input.pathname === "/audit-log" || input.pathname === "/audit-events") return { status: 200, body: { auditEvents: await listAuditEvents(client, tenantId) } };
+    if (input.pathname === "/tenants/current/activation") return { status: 200, body: await getTenantActivation(client, tenantId) };
+    if (input.pathname === "/integrations/circle/health") return { status: 200, body: await getCircleHealth(client, tenantId) };
   return { status: 404, body: { error: "postgres_query_not_supported" } };
 };
 
@@ -148,6 +155,10 @@ export const executeSprint1PostgresCommand = async (
       response = await provisionCircleAccount(client, tenantId, input, decodeURIComponent(accountProvisionMatch[1]!));
     } else if (eventRetryMatch) {
       response = await retryEvent(client, tenantId, eventRetryMatch[1]!, decodeURIComponent(eventRetryMatch[2]!));
+    } else if (input.pathname === "/tenants/current/activate") {
+      response = await activateTenant(client, tenantId, input);
+    } else if (input.pathname === "/integrations/circle/sandbox-check") {
+      response = await runCircleSandboxCheck(client, tenantId, input);
     } else if (input.pathname === "/business-clients") {
     response = await createBusinessClient(client, tenantId, input);
   } else if (input.pathname === "/accounts-of-digital-asset") {
@@ -290,6 +301,39 @@ const ensureTenant = async (client: Pick<PostgresClient, "query">, tenantId: str
   );
 };
 
+const getTenantRow = async (client: Pick<PostgresClient, "query">, tenantId: string): Promise<Record<string, unknown> | undefined> => {
+  const result = await client.query(
+    `select id, tenant_name, created_at
+       from platform_tenants
+      where id = $1`,
+    [tenantId]
+  );
+  return result.rows[0] as Record<string, unknown> | undefined;
+};
+
+const getTenantCircleIntegrationRow = async (client: Pick<PostgresClient, "query">, tenantId: string): Promise<Record<string, unknown> | undefined> => {
+  const result = await client.query(
+    `select id,
+            platform_tenant_id,
+            provider,
+            environment,
+            wallet_set_id,
+            wallet_set_name,
+            wallet_blockchain,
+            wallet_strategy,
+            status,
+            activated_at,
+            created_at,
+            updated_at,
+            metadata
+       from platform_tenant_circle_integrations
+      where platform_tenant_id = $1 and provider = 'circle'
+      limit 1`,
+    [tenantId]
+  );
+  return result.rows[0] as Record<string, unknown> | undefined;
+};
+
 const findIdempotencyRecord = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
@@ -421,6 +465,8 @@ const createLinkedInstrument = async (
   const externalReference = stringBody(input.body, "externalReference", railCode);
   const purpose = stringBody(input.body, "purpose", String(account.usePurpose ?? "settlement"));
   const railType = optionalStringBody(input.body, "railType");
+  const networkCode = optionalStringBody(input.body, "networkCode") ?? railCode;
+  const isDefault = input.body.isDefault === true;
   const accountStatus = String(account.status);
   const accountAssetCode = String(account.assetCode ?? "USDC");
 
@@ -443,25 +489,31 @@ const createLinkedInstrument = async (
     [railCode, assetCode, railName]
   );
 
+  const normalizedInstrumentType = instrumentType === "on_chain" || instrumentType === "on_chain_wallet"
+    ? "external_wallet_address"
+    : instrumentType;
   const result = await client.query(
     `insert into linked_instruments
-      (id, account_of_digital_asset_id, platform_tenant_id, instrument_type, status, external_reference, asset_code, rail_type, purpose, provider, provider_reference_id, verification_status, metadata, created_at, updated_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $14)
-     returning id, account_of_digital_asset_id, instrument_type, status, external_reference, asset_code, rail_type, purpose, provider, provider_reference_id, verification_status, created_at`,
+      (id, account_of_digital_asset_id, platform_tenant_id, instrument_type, status, external_reference, asset_code, rail_type, purpose, provider, provider_reference_id, verification_status, metadata, network_code, is_default, created_by_user_id, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $17)
+     returning id, account_of_digital_asset_id, instrument_type, status, external_reference, asset_code, rail_type, purpose, provider, provider_reference_id, verification_status, network_code, is_default, created_at`,
     [
       randomUUID(),
       accountId,
       tenantId,
-      instrumentType,
+      normalizedInstrumentType,
       status,
       externalReference,
       assetCode,
       railType,
       purpose,
-      providerForInstrument(instrumentType),
+      providerForInstrument(normalizedInstrumentType),
       externalReference,
       status === "active" ? "verified" : "pending_verification",
-      JSON.stringify({ isDefault: input.body.isDefault === true }),
+      JSON.stringify({ isDefault, networkCode }),
+      networkCode,
+      isDefault,
+      asUuidOrNull(input.actorUserId),
       new Date().toISOString()
     ]
   );
@@ -477,6 +529,8 @@ const createLinkedInstrument = async (
     provider: row.provider,
     providerReferenceId: row.provider_reference_id,
     verificationStatus: row.verification_status,
+    networkCode: row.network_code,
+    isDefault: row.is_default,
     externalReference: row.external_reference,
     status: row.status,
     createdAt: toIsoString(row.created_at)
@@ -696,7 +750,7 @@ const transitionBusinessClient = async (
 
 const listAccounts = async (client: Pick<PostgresClient, "query">, tenantId: string): Promise<unknown[]> => {
   const result = await client.query(
-    `select id, platform_tenant_id, business_client_id, account_name, use_purpose, status, circle_account_id, circle_sub_account_id, asset_code, asset_rail, created_at
+    `select id, platform_tenant_id, business_client_id, account_name, use_purpose, status, asset_code, asset_rail, created_at
        from accounts_of_digital_asset
       where platform_tenant_id = $1
       order by created_at desc`,
@@ -707,7 +761,7 @@ const listAccounts = async (client: Pick<PostgresClient, "query">, tenantId: str
 
 const getAccount = async (client: Pick<PostgresClient, "query">, tenantId: string, accountId: string): Promise<unknown | undefined> => {
   const result = await client.query(
-    `select id, platform_tenant_id, business_client_id, account_name, use_purpose, status, circle_account_id, circle_sub_account_id, asset_code, asset_rail, created_at
+    `select id, platform_tenant_id, business_client_id, account_name, use_purpose, status, asset_code, asset_rail, created_at
        from accounts_of_digital_asset
       where id = $1 and platform_tenant_id = $2`,
     [accountId, tenantId]
@@ -726,8 +780,6 @@ const transitionAccount = async (
     `select account.id,
             account.status,
             account.asset_rail,
-            account.circle_account_id,
-            account.circle_sub_account_id,
             client.id as business_client_id,
             client.onboarding_status
        from accounts_of_digital_asset account
@@ -740,8 +792,6 @@ const transitionAccount = async (
     id: string;
     status: string;
     asset_rail?: string;
-    circle_account_id?: string;
-    circle_sub_account_id?: string;
     business_client_id: string;
     onboarding_status: string;
   } | undefined;
@@ -782,7 +832,7 @@ const provisionCircleAccount = async (
   accountId: string
 ): Promise<JsonResponse> => {
   const result = await client.query(
-    `select account.id, account.status, account.business_client_id, account.circle_account_id, account.circle_sub_account_id, client.onboarding_status
+    `select account.id, account.status, account.business_client_id, account.use_purpose, client.onboarding_status
        from accounts_of_digital_asset account
        join business_clients client on client.id = account.business_client_id and client.platform_tenant_id = account.platform_tenant_id
       where account.id = $1 and account.platform_tenant_id = $2
@@ -793,13 +843,46 @@ const provisionCircleAccount = async (
     id: string;
     status: string;
     business_client_id: string;
-    circle_account_id?: string;
-    circle_sub_account_id?: string;
+    use_purpose: string;
     onboarding_status: string;
   } | undefined;
   if (!account) return { status: 404, body: { error: "account_not_found" } };
   if (account.onboarding_status !== "approved") return { status: 400, body: { error: "business_client_not_approved" } };
   if (["restricted", "frozen", "closed"].includes(account.status)) return { status: 400, body: { error: "account_status_blocks_circle_provisioning" } };
+
+  const existingInstrument = await client.query(
+    `select id, account_of_digital_asset_id, instrument_type, status, external_reference, asset_code, rail_type, purpose, provider, provider_reference_id, verification_status, network_code, is_default, metadata, created_at
+       from linked_instruments
+      where platform_tenant_id = $1
+        and account_of_digital_asset_id = $2
+        and instrument_type = 'circle_wallet'
+        and provider = 'circle'
+        and status in ('active', 'verified')
+        and verification_status = 'verified'
+      order by created_at desc
+      limit 1`,
+    [tenantId, accountId]
+  );
+  const existingRow = existingInstrument.rows[0] as Record<string, unknown> | undefined;
+  if (existingRow) {
+    const operation = await client.query(
+      `select id, operation_type, idempotency_key, correlation_id, request_payload, response_payload, provider_reference_id, provider_account_id, provider_wallet_id, provider_address_id, status, error_code, created_at
+         from circle_api_operations
+        where linked_instrument_id = $1
+        order by created_at desc
+        limit 1`,
+      [existingRow.id]
+    );
+    return {
+      status: 200,
+      body: {
+        account: await getAccount(client, tenantId, accountId),
+        linkedInstrument: mapLinkedInstrumentRow(existingRow),
+        circleOperation: operation.rows[0] ? mapCircleOperationRow(operation.rows[0]) : undefined,
+        reusedExistingMapping: true
+      }
+    };
+  }
 
   const existing = await client.query(
     `select id, operation_type, provider_reference_id, provider_account_id, provider_wallet_id, provider_address_id, status, request_payload, response_payload, created_at
@@ -815,20 +898,36 @@ const provisionCircleAccount = async (
   const replayed = existing.rows[0];
   if (replayed) return { status: 200, body: { account: await getAccount(client, tenantId, accountId), circleOperation: mapCircleOperationRow(replayed) } };
 
-  const providerAccountId = account.circle_account_id ?? `circle_account_${accountId.replace(/[^a-z0-9]/gi, "").slice(-12)}`;
-  const providerWalletId = `circle_wallet_${accountId.replace(/[^a-z0-9]/gi, "").slice(-12)}`;
-  const providerAddressId = `circle_address_${accountId.replace(/[^a-z0-9]/gi, "").slice(-12)}`;
+  const tenantIntegration = await getTenantCircleIntegrationRow(client, tenantId);
+  const tenantWalletSetId = typeof tenantIntegration?.wallet_set_id === "string" ? tenantIntegration.wallet_set_id : undefined;
+  const tenantWalletBlockchain = typeof tenantIntegration?.wallet_blockchain === "string" ? tenantIntegration.wallet_blockchain : undefined;
+  const provider = await provisionAdaCircleMapping({
+    tenantId,
+    accountOfDigitalAssetId: accountId,
+    businessClientId: account.business_client_id,
+    idempotencyKey: input.idempotencyKey,
+    correlationId: input.correlationId,
+    walletSetId: tenantWalletSetId,
+    walletBlockchains: tenantWalletBlockchain ? [tenantWalletBlockchain] : undefined,
+    payload: input.body
+  });
+  const providerAccountId = provider.providerAccountId ?? provider.providerReferenceId;
+  const providerWalletId = provider.providerWalletId ?? provider.providerReferenceId;
+  const providerAddressId = provider.providerAddressId;
   const operationId = randomUUID();
   const responsePayload = {
     providerAccountId,
     providerWalletId,
     providerAddressId,
-    status: "created"
+    providerRequestId: provider.providerRequestId,
+    status: provider.status,
+    errorCode: provider.errorCode,
+    provider: provider.responsePayload
   };
   await client.query(
     `insert into circle_api_operations
-      (id, platform_tenant_id, operation_type, idempotency_key, correlation_id, account_of_digital_asset_id, business_client_id, request_payload, response_payload, provider_reference_id, provider_account_id, provider_wallet_id, provider_address_id, status, created_at)
-     values ($1, $2, 'ada_circle_mapping', $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, 'succeeded', now())`,
+      (id, platform_tenant_id, operation_type, idempotency_key, correlation_id, account_of_digital_asset_id, business_client_id, request_payload, response_payload, provider_reference_id, provider_account_id, provider_wallet_id, provider_address_id, status, error_code, created_at)
+     values ($1, $2, 'ada_circle_mapping', $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, now())`,
     [
       operationId,
       tenantId,
@@ -838,19 +937,59 @@ const provisionCircleAccount = async (
       account.business_client_id,
       JSON.stringify({ accountOfDigitalAssetId: accountId, provider: "circle" }),
       JSON.stringify(responsePayload),
-      providerAccountId,
+      provider.providerReferenceId,
       providerAccountId,
       providerWalletId,
-      providerAddressId
+      providerAddressId,
+      provider.status === "complete" ? "succeeded" : "failed",
+      provider.errorCode
     ]
   );
+  if (provider.status !== "complete") {
+    await writeAuditAndOutbox(client, tenantId, input, "account_of_digital_asset.circle_mapping.failed", {
+      accountOfDigitalAssetId: accountId,
+      businessClientId: account.business_client_id,
+      circleOperationId: operationId,
+      errorCode: provider.errorCode
+    });
+    const status = provider.errorCode === "circle_api_key_required" || provider.errorCode === "circle_wallet_configuration_required" ? 400 : 502;
+    return {
+      status,
+      body: {
+        error: provider.errorCode ?? "circle_provider_unavailable",
+        detail: tenantActivationFailureDetail(provider.responsePayload),
+        circleOperation: await getCircleOperation(client, tenantId, operationId)
+      }
+    };
+  }
+  const instrumentResult = await client.query(
+    `insert into linked_instruments
+      (id, account_of_digital_asset_id, platform_tenant_id, instrument_type, status, external_reference, asset_code, rail_type, purpose, provider, provider_reference_id, verification_status, metadata, network_code, is_default, created_at, updated_at)
+     values ($1, $2, $3, 'circle_wallet', 'active', $4, $5, 'on-chain', $6, 'circle', $7, 'verified', $8::jsonb, $9, true, now(), now())
+     returning id, account_of_digital_asset_id, instrument_type, status, external_reference, asset_code, rail_type, purpose, provider, provider_reference_id, verification_status, network_code, is_default, metadata, created_at`,
+    [
+      randomUUID(),
+      accountId,
+      tenantId,
+      providerAddressId ?? providerWalletId,
+      providerWalletId,
+      account.use_purpose,
+      providerWalletId,
+      JSON.stringify({
+        walletSetId: tenantWalletSetId,
+        walletId: providerWalletId,
+        address: providerAddressId,
+        blockchain: tenantWalletBlockchain,
+        providerRequestId: provider.providerRequestId,
+        circleOperationId: operationId
+      }),
+      tenantWalletBlockchain
+    ]
+  );
+  const linkedInstrument = instrumentResult.rows[0] as Record<string, unknown>;
   await client.query(
-    `update accounts_of_digital_asset
-        set circle_account_id = coalesce(circle_account_id, $3),
-            circle_sub_account_id = coalesce(circle_sub_account_id, $4),
-            updated_at = now()
-      where id = $1 and platform_tenant_id = $2`,
-    [accountId, tenantId, providerAccountId, providerWalletId]
+    `update circle_api_operations set linked_instrument_id = $2 where id = $1`,
+    [operationId, linkedInstrument.id]
   );
   await writeAuditAndOutbox(client, tenantId, input, "account_of_digital_asset.circle_mapping.provisioned", {
     accountOfDigitalAssetId: accountId,
@@ -858,10 +997,178 @@ const provisionCircleAccount = async (
     circleOperationId: operationId,
     providerAccountId,
     providerWalletId,
-    providerAddressId
+    providerAddressId,
+    linkedInstrumentId: linkedInstrument.id
   });
   const circleOperation = await getCircleOperation(client, tenantId, operationId);
-  return { status: 200, body: { account: await getAccount(client, tenantId, accountId), circleOperation } };
+  return { status: 200, body: { account: await getAccount(client, tenantId, accountId), linkedInstrument: mapLinkedInstrumentRow(linkedInstrument), circleOperation } };
+};
+
+const getTenantActivation = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string
+): Promise<unknown> => {
+  const tenant = await getTenantRow(client, tenantId);
+  const integration = await getTenantCircleIntegrationRow(client, tenantId);
+  return {
+    tenant,
+    circleIntegration: integration ? mapTenantCircleIntegrationRow(integration) : {
+      environment: circleEnvironment(),
+      walletSetId: process.env.CIRCLE_WALLET_SET_ID,
+      walletSetName: `${tenant?.tenant_name ?? "Demo Tenant"} Wallet Set`,
+      walletBlockchains: circleWalletBlockchainsFromEnv(),
+      walletAccountType: circleWalletAccountType,
+      walletStrategy: "omnibus_custodial_set",
+      status: "draft"
+    }
+  };
+};
+
+const activateTenant = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: Sprint1PostgresCommandInput
+): Promise<JsonResponse> => {
+  const tenant = await getTenantRow(client, tenantId);
+  const walletSetName = stringBody(input.body, "walletSetName", `${tenant?.tenant_name ?? "Demo Tenant"} Wallet Set`);
+  const walletBlockchains = stringArrayBody(input.body, "walletBlockchains", circleWalletBlockchainsFromEnv());
+  const walletBlockchainForStorage = walletBlockchains[0] ?? "MATIC-AMOY";
+  const walletStrategy = stringBody(input.body, "walletStrategy", "omnibus_custodial_set");
+  const attachedWalletSetId = optionalStringBody(input.body, "walletSetId");
+  const environment = circleEnvironment();
+
+  const walletSet = attachedWalletSetId
+    ? {
+        environment,
+        walletSetId: attachedWalletSetId,
+        walletSetName,
+        walletBlockchains,
+        status: "complete" as const,
+        responsePayload: { accepted: true, attachedExistingWalletSet: true }
+      }
+    : await initializeCircleWalletSet({
+        idempotencyKey: input.idempotencyKey,
+        walletSetName,
+        walletBlockchains
+      });
+
+  const integrationId = randomUUID();
+  const status = walletSet.status === "complete" ? "active" : "failed";
+  await client.query(
+    `insert into platform_tenant_circle_integrations
+      (id, platform_tenant_id, provider, environment, wallet_set_id, wallet_set_name, wallet_blockchain, wallet_strategy, status, activated_at, metadata, created_at, updated_at)
+     values ($1, $2, 'circle', $3, $4, $5, $6, $7, $8, case when $8 = 'active' then now() else null end, $9::jsonb, now(), now())
+     on conflict (platform_tenant_id, provider)
+     do update set environment = excluded.environment,
+                   wallet_set_id = excluded.wallet_set_id,
+                   wallet_set_name = excluded.wallet_set_name,
+                   wallet_blockchain = excluded.wallet_blockchain,
+                   wallet_strategy = excluded.wallet_strategy,
+                   status = excluded.status,
+                   activated_at = case when excluded.status = 'active' then coalesce(platform_tenant_circle_integrations.activated_at, now()) else platform_tenant_circle_integrations.activated_at end,
+                   metadata = excluded.metadata,
+                   updated_at = now()`,
+    [
+      integrationId,
+      tenantId,
+      walletSet.environment,
+      walletSet.walletSetId,
+      walletSetName,
+      walletBlockchainForStorage,
+      walletStrategy,
+      status,
+      JSON.stringify({
+        providerRequestId: walletSet.providerRequestId,
+        responsePayload: {
+          ...walletSet.responsePayload,
+          walletBlockchains
+        },
+        errorCode: walletSet.errorCode
+      })
+    ]
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, status === "active" ? "platform_tenant.circle_wallet_set.activated" : "platform_tenant.circle_wallet_set.activation_failed", {
+    walletSetId: walletSet.walletSetId,
+    walletSetName,
+    walletBlockchains,
+    walletStrategy,
+    environment: walletSet.environment,
+    errorCode: walletSet.errorCode
+  });
+
+  const body = await getTenantActivation(client, tenantId);
+  return {
+    status: 200,
+    body: {
+      ...body as Record<string, unknown>,
+      activationAccepted: status === "active",
+      error: status === "active" ? undefined : walletSet.errorCode,
+      detail: status === "active" ? undefined : tenantActivationFailureDetail(walletSet.responsePayload),
+      walletSet
+    }
+  };
+};
+
+const getCircleHealth = async (client: Pick<PostgresClient, "query">, tenantId: string): Promise<unknown> => {
+  const health = await checkCircleHealth({ probe: false });
+  const last = await client.query(
+    `select id,
+            operation_type,
+            idempotency_key,
+            correlation_id,
+            request_payload,
+            response_payload,
+            provider_reference_id,
+            provider_account_id,
+            provider_wallet_id,
+            provider_address_id,
+            status,
+            error_code,
+            created_at
+       from circle_api_operations
+      where platform_tenant_id = $1
+        and operation_type in ('circle.health_check', 'circle.sandbox_check')
+      order by created_at desc
+      limit 1`,
+    [tenantId]
+  );
+  return { circle: health, lastDiagnostic: last.rows[0] ? mapCircleOperationRow(last.rows[0]) : undefined };
+};
+
+const runCircleSandboxCheck = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: Sprint1PostgresCommandInput
+): Promise<JsonResponse> => {
+  const health = await checkCircleHealth({ probe: true });
+  const operationId = randomUUID();
+  await client.query(
+    `insert into circle_api_operations
+      (id, platform_tenant_id, operation_type, idempotency_key, correlation_id, request_payload, response_payload, provider_reference_id, status, error_code, created_at)
+     values ($1, $2, 'circle.sandbox_check', $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, now())`,
+    [
+      operationId,
+      tenantId,
+      input.idempotencyKey,
+      input.correlationId,
+      JSON.stringify({ environment: health.environment, baseUrl: health.baseUrl, probe: true }),
+      JSON.stringify(health.responsePayload),
+      health.providerRequestId ?? `circle_diagnostic_${health.environment}`,
+      health.status === "ready" ? "succeeded" : "failed",
+      health.errorCode
+    ]
+  );
+  await writeAuditAndOutbox(client, tenantId, input, health.status === "ready" ? "circle.sandbox_check.succeeded" : "circle.sandbox_check.failed", {
+    circleOperationId: operationId,
+    environment: health.environment,
+    status: health.status,
+    errorCode: health.errorCode
+  });
+  return {
+    status: health.status === "ready" ? 200 : health.errorCode === "circle_api_key_required" ? 400 : 502,
+    body: { circle: health, diagnostic: await getCircleOperation(client, tenantId, operationId) }
+  };
 };
 
 const getAccountStatement = async (client: Pick<PostgresClient, "query">, tenantId: string, accountId: string): Promise<unknown> => {
@@ -924,6 +1231,9 @@ const getAccountLinkedInstruments = async (
             linked.provider,
             linked.provider_reference_id,
             linked.verification_status,
+            linked.network_code,
+            linked.is_default,
+            linked.metadata,
             linked.created_at,
             rail.rail_code,
             rail.rail_name,
@@ -966,32 +1276,48 @@ const getAccountLinkedInstruments = async (
     [tenantId, accountId]
   );
 
+  const instruments = railsResult.rows.map((row) => ({
+    id: row.id,
+    instrumentType: row.instrument_type,
+    railCode: row.rail_code ?? row.external_reference,
+    railName: row.rail_name ?? row.instrument_type,
+    assetCode: row.linked_asset_code ?? row.asset_code ?? account.assetCode ?? "USDC",
+    railType: row.rail_type ?? undefined,
+    purpose: row.purpose ?? undefined,
+    provider: row.provider ?? undefined,
+    providerReferenceId: row.provider_reference_id ?? undefined,
+    verificationStatus: row.verification_status ?? undefined,
+    networkCode: row.network_code ?? undefined,
+    isDefault: row.is_default === true,
+    externalReference: row.external_reference,
+    status: row.status,
+    createdAt: toIsoString(row.created_at)
+  }));
+  const circleWallets = instruments.filter((item) => item.instrumentType === "circle_wallet");
+  const rails = instruments.filter((item) => item.instrumentType !== "circle_wallet" && item.railType !== "fiat");
+  const linkedFiatLinks = instruments
+    .filter((item) => item.railType === "fiat")
+    .map((item) => ({
+      id: item.id,
+      bankName: item.railName ?? "Linked Bank Account",
+      accountNumberLast4: String(item.externalReference ?? "").slice(-4) || "----",
+      routingNumber: item.networkCode,
+      status: item.status,
+      createdAt: item.createdAt
+    }));
   return {
     accountId,
     account,
-    rails: railsResult.rows.map((row) => ({
-      id: row.id,
-      instrumentType: row.instrument_type,
-      railCode: row.rail_code ?? row.external_reference,
-      railName: row.rail_name ?? row.instrument_type,
-      assetCode: row.linked_asset_code ?? row.asset_code ?? account.assetCode ?? "USDC",
-      railType: row.rail_type ?? undefined,
-      purpose: row.purpose ?? undefined,
-      provider: row.provider ?? undefined,
-      providerReferenceId: row.provider_reference_id ?? undefined,
-      verificationStatus: row.verification_status ?? undefined,
-      externalReference: row.external_reference,
-      status: row.status,
-      createdAt: toIsoString(row.created_at)
-    })),
-    fiatLinks: fiatResult.rows.map((row) => ({
+    circleWallets,
+    rails,
+    fiatLinks: [...fiatResult.rows.map((row) => ({
       id: row.id,
       bankName: row.bank_name,
       accountNumberLast4: row.account_number_last4,
       routingNumber: row.routing_number,
       status: row.status,
       createdAt: toIsoString(row.created_at)
-    })),
+    })), ...linkedFiatLinks],
     activity: activityResult.rows.map((row) => ({
       id: row.id,
       activityType: row.activity_type,
@@ -1073,7 +1399,7 @@ const validateAccountActivationGates = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
   accountId: string,
-  account: { onboarding_status: string; asset_rail?: string; circle_account_id?: string; circle_sub_account_id?: string }
+  account: { onboarding_status: string; asset_rail?: string }
 ): Promise<string | undefined> => {
   if (account.onboarding_status !== "approved") return "business_client_not_approved";
   const instrumentResult = await client.query(
@@ -1087,8 +1413,19 @@ const validateAccountActivationGates = async (
   );
   const verifiedCount = Number(instrumentResult.rows[0]?.verified_count ?? 0);
   if (verifiedCount < 1) return "linked_instrument_gate_not_satisfied";
-  if ((account.asset_rail ?? "circle_internal") === "circle_internal" && !account.circle_account_id) {
-    return "circle_mapping_required";
+  if ((account.asset_rail ?? "circle_internal") === "circle_internal") {
+    const circleResult = await client.query(
+      `select count(*)::int as circle_count
+         from linked_instruments
+        where account_of_digital_asset_id = $1
+          and coalesce(platform_tenant_id, $2) = $2
+          and instrument_type = 'circle_wallet'
+          and provider = 'circle'
+          and status in ('active', 'verified')
+          and verification_status = 'verified'`,
+      [accountId, tenantId]
+    );
+    if (Number(circleResult.rows[0]?.circle_count ?? 0) < 1) return "circle_mapping_required";
   }
   return undefined;
 };
@@ -1297,10 +1634,26 @@ const mapAccountRow = (row: Record<string, unknown>): unknown => ({
   accountName: row.account_name,
   usePurpose: row.use_purpose,
   status: row.status,
-  circleAccountId: row.circle_account_id ?? undefined,
-  circleSubAccountId: row.circle_sub_account_id ?? undefined,
   assetCode: row.asset_code,
   assetRail: row.asset_rail,
+  createdAt: toIsoString(row.created_at)
+});
+
+const mapLinkedInstrumentRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  accountId: row.account_of_digital_asset_id,
+  instrumentType: row.instrument_type,
+  status: row.status,
+  externalReference: row.external_reference ?? undefined,
+  assetCode: row.asset_code ?? undefined,
+  railType: row.rail_type ?? undefined,
+  purpose: row.purpose ?? undefined,
+  provider: row.provider ?? undefined,
+  providerReferenceId: row.provider_reference_id ?? undefined,
+  verificationStatus: row.verification_status ?? undefined,
+  networkCode: row.network_code ?? undefined,
+  isDefault: row.is_default === true,
+  metadata: row.metadata ?? {},
   createdAt: toIsoString(row.created_at)
 });
 
@@ -1318,6 +1671,23 @@ const mapCircleOperationRow = (row: Record<string, unknown>): unknown => ({
   status: row.status,
   errorCode: row.error_code ?? undefined,
   createdAt: toIsoString(row.created_at)
+});
+
+const mapTenantCircleIntegrationRow = (row: Record<string, unknown>): unknown => ({
+  id: row.id,
+  tenantId: row.platform_tenant_id,
+  provider: row.provider,
+  environment: row.environment,
+  walletSetId: row.wallet_set_id ?? undefined,
+  walletSetName: row.wallet_set_name,
+  walletBlockchains: walletBlockchainsFromRow(row),
+  walletAccountType: circleWalletAccountType,
+  walletStrategy: row.wallet_strategy,
+  status: row.status,
+  activatedAt: toIsoString(row.activated_at),
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at),
+  metadata: row.metadata ?? {}
 });
 
 const businessClientTransitions: Record<string, string[]> = {
@@ -1403,6 +1773,46 @@ const stringBody = (body: Record<string, unknown>, key: string, fallback = ""): 
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "number") return String(value);
   return typeof value === "string" && value.trim() ? value : fallback;
+};
+
+const stringArrayBody = (body: Record<string, unknown>, key: string, fallback: string[]): string[] => {
+  const value = body[key];
+  if (!Array.isArray(value)) return fallback;
+  const filtered = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  return filtered.length ? filtered : fallback;
+};
+
+const walletBlockchainsFromRow = (row: Record<string, unknown>): string[] => {
+  const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Record<string, unknown> : {};
+  const responsePayload = metadata.responsePayload && typeof metadata.responsePayload === "object" ? metadata.responsePayload as Record<string, unknown> : {};
+  const metadataList = normalizeStringList(responsePayload.walletBlockchains ?? responsePayload.blockchains);
+  if (metadataList.length) return metadataList;
+  return normalizeStringList(row.wallet_blockchain);
+};
+
+const circleWalletBlockchainsFromEnv = (): string[] =>
+  normalizeStringList(process.env.CIRCLE_WALLET_BLOCKCHAINS ?? process.env.CIRCLE_WALLET_BLOCKCHAIN ?? "MATIC-AMOY");
+
+const normalizeStringList = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
+};
+
+const tenantActivationFailureDetail = (responsePayload: Record<string, unknown>): string | undefined => {
+  const providerError = responsePayload.providerError && typeof responsePayload.providerError === "object"
+    ? responsePayload.providerError as Record<string, unknown>
+    : undefined;
+  const message = providerError?.message;
+  const code = providerError?.code;
+  const httpStatus = providerError?.httpStatus ?? responsePayload.httpStatus;
+  const providerRequestId = providerError?.providerRequestId ?? responsePayload.providerRequestId;
+  return [
+    typeof message === "string" ? message : undefined,
+    code !== undefined ? `code=${String(code)}` : undefined,
+    httpStatus !== undefined ? `httpStatus=${String(httpStatus)}` : undefined,
+    typeof providerRequestId === "string" ? `requestId=${providerRequestId}` : undefined
+  ].filter(Boolean).join("; ") || undefined;
 };
 
 const asUuidOrNull = (value: string | undefined): string | null => {

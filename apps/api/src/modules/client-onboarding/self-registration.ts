@@ -484,7 +484,7 @@ const mapStoredStepPayload = (row: Record<string, unknown>): OnboardingStepPaylo
   applicationId: `business_onboarding_application_${String(row.application_id)}`,
   stepKey: String(row.step_key),
   payload: isRecord(row.payload) ? row.payload : {},
-  savedAt: String(row.saved_at)
+  savedAt: timestampToIsoString(row.saved_at)
 });
 
 const mapStoredProfile = (row: Record<string, unknown>): BusinessUserProfile => ({
@@ -494,8 +494,8 @@ const mapStoredProfile = (row: Record<string, unknown>): BusinessUserProfile => 
   email: String(row.email),
   role: "business_user",
   status: isBusinessUserProfileStatus(row.status) ? row.status : "active",
-  createdAt: String(row.created_at),
-  updatedAt: String(row.updated_at)
+  createdAt: timestampToIsoString(row.created_at),
+  updatedAt: timestampToIsoString(row.updated_at)
 });
 
 const mapStoredApplication = (row: Record<string, unknown>): BusinessOnboardingApplication => ({
@@ -505,9 +505,9 @@ const mapStoredApplication = (row: Record<string, unknown>): BusinessOnboardingA
   email: String(row.email),
   currentStep: isOnboardingStep(String(row.current_step)) ? String(row.current_step) as BusinessOnboardingApplication["currentStep"] : "step_1",
   status: isOnboardingStatus(row.status) ? row.status : "draft",
-  submittedAt: typeof row.submitted_at === "string" ? row.submitted_at : undefined,
-  createdAt: String(row.created_at),
-  updatedAt: String(row.updated_at)
+  submittedAt: timestampToOptionalIsoString(row.submitted_at),
+  createdAt: timestampToIsoString(row.created_at),
+  updatedAt: timestampToIsoString(row.updated_at)
 });
 
 const upsertRuntimeProfile = (state: ApiState, profile: BusinessUserProfile): void => {
@@ -677,6 +677,21 @@ const isBusinessUserProfileStatus = (value: unknown): value is BusinessUserProfi
 
 const isRfiTaskStatus = (value: unknown): value is OnboardingRfiTask["status"] =>
   typeof value === "string" && ["open", "responded", "closed", "cancelled"].includes(value);
+
+const timestampToIsoString = (value: unknown): string => {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  if (typeof value === "number") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return new Date().toISOString();
+};
+
+const timestampToOptionalIsoString = (value: unknown): string | undefined => {
+  if (value === null || value === undefined) return undefined;
+  return timestampToIsoString(value);
+};
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
