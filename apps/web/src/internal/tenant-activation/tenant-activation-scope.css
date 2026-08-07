@@ -414,6 +414,107 @@
   gap: 10px;
 }
 
+.tenant-activation-ada-preview {
+  background: #fff;
+  border: 1px solid var(--tenant-hairline);
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.tenant-activation-ada-preview-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.tenant-activation-ada-preview-head > span,
+.tenant-activation-ada-preview-field > span,
+.tenant-activation-ada-preview-missing {
+  color: var(--tenant-secondary);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.tenant-activation-ada-preview-head > small {
+  color: var(--tenant-secondary);
+  font-size: 10px;
+  margin: 0;
+}
+
+.tenant-activation-ada-preview-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tenant-activation-ada-preview-field {
+  border: 1px solid var(--tenant-hairline);
+  display: grid;
+  gap: 6px;
+  min-height: 58px;
+  padding: 8px 10px;
+}
+
+.tenant-activation-ada-preview-field > strong {
+  color: var(--tenant-primary);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.tenant-activation-ada-status-field {
+  align-content: start;
+}
+
+.tenant-activation-ada-status {
+  border: 1px solid var(--tenant-hairline);
+  display: inline-flex;
+  justify-self: start;
+  min-height: 22px;
+  padding: 3px 8px;
+}
+
+.tenant-activation-ada-status.positive {
+  background: #ecfdf3;
+  border-color: #7ad7a1;
+  color: #095c2b;
+}
+
+.tenant-activation-ada-status.negative {
+  background: #fff3f3;
+  border-color: #f0a5a5;
+  color: #8f1d1d;
+}
+
+.tenant-activation-ada-status.attention {
+  background: #fff9ef;
+  border-color: #f0c57f;
+  color: #83510a;
+}
+
+.tenant-activation-ada-status.neutral {
+  background: #f3f3f3;
+  border-color: var(--tenant-hairline);
+  color: #4f4f4f;
+}
+
+.tenant-activation-ada-preview-missing {
+  align-items: center;
+  background: #fff5f5;
+  border: 1px solid #f1a4a4;
+  color: #8f1d1d;
+  display: flex;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 10px;
+  text-transform: none;
+}
+
 .tenant-activation-endpoints > div {
   background: #fff;
   border: 1px solid var(--tenant-hairline);

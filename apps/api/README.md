@@ -78,6 +78,8 @@ Real Circle HTTP mode requires runtime environment variables only:
 ```bash
 CIRCLE_API_BASE_URL=...
 CIRCLE_API_KEY=...
+# Optional dedicated key for /v1/mocks/payments/wire in circle-sandbox.
+CIRCLE_MINT_KEY=...
 CIRCLE_ENTITY_SECRET=...
 CIRCLE_ENTITY_PUBLIC_KEY=...
 # Optional outage workaround: a previously retrieved Circle entity public key.
@@ -94,6 +96,9 @@ Most endpoints require an API key:
 ```bash
 Authorization: Bearer gtt_live_<key_id>.<secret>
 ```
+
+Sandbox mock wire mint can use a dedicated key via `CIRCLE_MINT_KEY`; if unset,
+the integration falls back to `CIRCLE_API_KEY`.
 
 Local development seed key:
 
@@ -129,10 +134,15 @@ curl http://localhost:4000/business-clients \
 - `GET /accounts-of-digital-asset/:id`
 - `POST /accounts-of-digital-asset/:id/provision-circle`
 - `GET /accounts-of-digital-asset/:id/balance`
+- `GET /accounts-of-digital-asset/:id/balances`
 - `GET /accounts-of-digital-asset/:id/statement`
+- `GET /accounts-of-digital-asset/:id/statements`
 - `GET /ledger/chart-of-accounts`
 - `POST /ledger/journals`
 - `GET /ledger/journals`
+- `GET /ledger/journals/:id`
+- `POST /ledger/journals/:id/reverse`
+- `GET /balances/projection-runs`
 - `POST /settlement-obligations`
 - `GET /settlement-obligations`
 - `POST /funding-reservations`
@@ -161,6 +171,7 @@ curl http://localhost:4000/business-clients \
 - `GET /events/inbox`
 - `GET /dead-letter`
 - `GET /treasury-accounting/trial-balance`
+- `GET /treasury-accounting/customer-liability-control`
 - `GET /reports/daily-close`
 - `GET /uat/scenarios`
 - `GET /release-readiness`

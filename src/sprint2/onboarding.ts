@@ -89,7 +89,7 @@ export class OnboardingApplicationService {
   addDocumentMetadata(
     context: ActorContext,
     onboardingApplicationId: string,
-    input: { documentType: string; fileName: string; externalReference?: string }
+    input: { documentType: string; fileName: string; reference?: string }
   ): OnboardingDocument {
     this.requireApplication(context, onboardingApplicationId);
     const document: OnboardingDocument = {
@@ -98,7 +98,7 @@ export class OnboardingApplicationService {
       onboardingApplicationId,
       documentType: input.documentType,
       fileName: input.fileName,
-      externalReference: input.externalReference,
+      reference: input.reference,
       status: "metadata_recorded",
       createdAt: nowIso()
     };

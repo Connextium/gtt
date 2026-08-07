@@ -1050,10 +1050,27 @@
   justify-content: space-between;
 }
 
+.ada-scope .ada-bank-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .ada-scope .ada-instruments-lower-grid {
+  align-items: stretch;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-instruments-lower-grid .ada-instrument-section {
+  height: 100%;
+}
+
+.ada-scope .ada-instruments-lower-grid .ada-instrument-section > article {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
 }
 
 .ada-scope .ada-activity-panel {
@@ -1397,6 +1414,40 @@
   background: #ffffff;
 }
 
+.ada-scope .ada-circle-network-picker {
+  margin-top: 12px;
+}
+
+.ada-scope .ada-circle-network-picker label {
+  display: grid;
+  gap: 5px;
+  max-width: 320px;
+}
+
+.ada-scope .ada-circle-network-picker span {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-circle-network-picker select {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 12px;
+  min-height: 32px;
+  outline: 0;
+  padding: 7px 9px;
+  width: 100%;
+}
+
+.ada-scope .ada-circle-network-picker select:focus {
+  border-color: var(--ada-primary);
+}
+
 .ada-scope .ada-link-success-content {
   align-content: center;
   min-height: min(620px, calc(100vh - 110px));
@@ -1442,6 +1493,304 @@
   color: var(--ada-primary);
   font-size: 13px;
 }
+.ada-scope .ada-fiat-link-content {
+  display: grid;
+  gap: 12px;
+  margin: 0 auto;
+  max-width: 1280px;
+  padding: 16px 20px 18px;
+  width: 100%;
+}
+.ada-scope .ada-fiat-link-layout {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr);
+}
+.ada-scope .ada-fiat-link-context {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding-top: 6px;
+}
+.ada-scope .ada-fiat-link-context h1 {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-display);
+  font-size: 42px;
+  font-weight: 400;
+  line-height: 0.98;
+  margin: 0;
+}
+.ada-scope .ada-fiat-link-context p {
+  color: var(--ada-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+.ada-scope .ada-fiat-link-context aside {
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 12px;
+}
+.ada-scope .ada-fiat-link-context aside h2 {
+  color: var(--ada-primary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.ada-scope .ada-fiat-link-context aside p {
+  font-size: 11px;
+}
+.ada-scope .ada-fiat-link-form-card {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  display: grid;
+}
+.ada-scope .ada-fiat-link-form-card > header {
+  border-bottom: 1px solid var(--ada-hairline);
+  padding: 14px;
+}
+.ada-scope .ada-fiat-link-form-card > header h2 {
+  align-items: center;
+  color: var(--ada-primary);
+  display: inline-flex;
+  font-size: 20px;
+  font-weight: 700;
+  gap: 7px;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.ada-scope .ada-fiat-link-form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 14px;
+}
+.ada-scope .ada-fiat-link-form-grid label {
+  display: grid;
+  gap: 5px;
+}
+.ada-scope .ada-fiat-link-form-grid label.wide,
+.ada-scope .ada-fiat-link-form-grid fieldset.wide {
+  grid-column: 1 / -1;
+}
+.ada-scope .ada-fiat-link-form-grid span,
+.ada-scope .ada-fiat-link-form-grid legend {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.ada-scope .ada-fiat-link-form-grid input,
+.ada-scope .ada-fiat-link-form-grid select {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 12px;
+  min-height: 36px;
+  outline: 0;
+  padding: 8px 9px;
+  width: 100%;
+}
+.ada-scope .ada-fiat-link-form-grid input:focus,
+.ada-scope .ada-fiat-link-form-grid select:focus {
+  border-color: var(--ada-primary);
+}
+.ada-scope .ada-fiat-link-form-grid input[readonly] {
+  background: var(--ada-canvas-soft);
+  color: var(--ada-secondary);
+}
+.ada-scope .ada-fiat-link-form-grid small {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.ada-scope .ada-fiat-allocation-group {
+  border: 0;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+}
+.ada-scope .ada-fiat-allocation-group > legend {
+  display: block;
+  margin: 0 0 2px;
+  padding: 0;
+}
+.ada-scope .ada-fiat-allocation-group > label {
+  cursor: pointer;
+  display: block;
+}
+.ada-scope .ada-fiat-allocation-group > label input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.ada-scope .ada-fiat-allocation-group > label span {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  display: inline-flex;
+  font-family: var(--ada-font-body);
+  font-size: 11px;
+  letter-spacing: 0;
+  padding: 7px 9px;
+  text-transform: none;
+}
+.ada-scope .ada-fiat-allocation-group > label input:checked + span {
+  background: var(--ada-primary);
+  border-color: var(--ada-primary);
+  color: var(--ada-on-primary);
+}
+.ada-scope .ada-fiat-default-toggle {
+  align-items: center;
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  display: flex !important;
+  justify-content: space-between;
+  padding: 12px;
+}
+.ada-scope .ada-fiat-default-toggle > span {
+  display: grid;
+  gap: 3px;
+}
+.ada-scope .ada-fiat-default-toggle > span b {
+  color: var(--ada-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.ada-scope .ada-fiat-default-toggle input {
+  accent-color: var(--ada-primary);
+  height: 18px;
+  width: 18px;
+}
+.ada-scope .ada-fiat-link-form-card > footer {
+  align-items: center;
+  border-top: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 14px;
+}
+.ada-scope .ada-fiat-link-form-card > footer button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  min-height: 32px;
+  padding: 0 10px;
+  text-transform: uppercase;
+}
+.ada-scope .ada-fiat-link-form-card > footer button.primary {
+  background: var(--ada-primary);
+  border-color: var(--ada-primary);
+  color: var(--ada-on-primary);
+}
+.ada-scope .ada-toast {
+  background: #fff6f5;
+  border: 1px solid #e7b6af;
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+}
+.ada-scope .ada-toast-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.ada-scope .ada-toast-header strong {
+  color: #7d1f16;
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ada-scope .ada-toast-header button {
+  background: transparent;
+  border: 0;
+  color: #7d1f16;
+  min-height: auto;
+  padding: 0;
+}
+.ada-scope .ada-toast-request-id {
+  display: grid;
+  gap: 6px;
+}
+.ada-scope .ada-toast-request-id > span {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ada-scope .ada-toast-request-id > div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.ada-scope .ada-toast-request-id code {
+  background: #ffffff;
+  border: 1px solid #e7b6af;
+  display: block;
+  flex: 1;
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+}
+.ada-scope .ada-toast-request-id button {
+  align-items: center;
+  border: 1px solid #e7b6af;
+  color: #7d1f16;
+  display: inline-flex;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+}
+.ada-scope .ada-fiat-success-card {
+  gap: 14px;
+}
+.ada-scope .ada-fiat-success-grid {
+  border-top: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ada-scope .ada-fiat-success-grid article {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+}
+.ada-scope .ada-fiat-success-grid article:first-child {
+  border-right: 1px solid var(--ada-hairline);
+  padding-right: 14px;
+}
+.ada-scope .ada-fiat-success-grid article:last-child {
+  padding-left: 14px;
+}
+.ada-scope .ada-fiat-success-grid h2 {
+  border-bottom: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 12px;
+  margin: 0;
+  padding-bottom: 8px;
+}
 
 .ada-scope .ada-link-audit-proof {
   background: var(--ada-canvas-soft);
@@ -1484,13 +1833,508 @@
   padding: 0 12px;
 }
 
+.ada-scope .ada-wire-view-shell {
+  display: grid;
+  gap: 12px;
+  margin: 0 auto;
+  max-width: var(--ada-detail-page-width);
+  padding: 14px 18px 18px;
+  width: 100%;
+}
+
+.ada-scope .ada-wire-view-header {
+  align-items: end;
+  border-bottom: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding-bottom: 10px;
+}
+
+.ada-scope .ada-wire-view-header h1 {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-display);
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 1.06;
+  margin: 0;
+}
+
+.ada-scope .ada-wire-view-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.ada-scope .ada-wire-view-badges > div {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  display: inline-flex;
+  gap: 7px;
+  min-height: 24px;
+  padding: 0 7px;
+}
+
+.ada-scope .ada-wire-view-badges > div.status {
+  border-color: var(--ada-primary);
+}
+
+.ada-scope .ada-wire-view-badges span,
+.ada-scope .ada-wire-view-header-meta span,
+.ada-scope .ada-wire-view-section h3,
+.ada-scope .ada-wire-view-section h4,
+.ada-scope .ada-wire-view-mask-row span,
+.ada-scope .ada-wire-view-meta-row span,
+.ada-scope .ada-wire-view-instructions-meta span,
+.ada-scope .ada-wire-view-section footer span,
+.ada-scope .ada-wire-side-card h3,
+.ada-scope .ada-wire-view-timeline strong,
+.ada-scope .ada-wire-payload-drawer h3 {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-wire-view-badges code,
+.ada-scope .ada-wire-view-header-meta code,
+.ada-scope .ada-wire-view-mask-row code,
+.ada-scope .ada-wire-view-meta-row code,
+.ada-scope .ada-wire-view-instructions-meta code,
+.ada-scope .ada-wire-view-section footer code,
+.ada-scope .ada-wire-view-timeline code,
+.ada-scope .ada-wire-inline-payload pre,
+.ada-scope .ada-wire-payload-drawer pre {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-mono);
+  font-size: 10px;
+}
+
+.ada-scope .ada-wire-view-header-meta {
+  align-items: flex-end;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.ada-scope .ada-wire-view-header-meta > div {
+  align-items: center;
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  display: inline-flex;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 9px;
+}
+
+.ada-scope .ada-wire-view-header-meta p {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  margin: 0;
+}
+
+.ada-scope .ada-wire-view-layout {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 8fr) minmax(280px, 4fr);
+}
+
+.ada-scope .ada-wire-view-main {
+  display: grid;
+  gap: 12px;
+}
+
+.ada-scope .ada-wire-view-section {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 0;
+}
+
+.ada-scope .ada-wire-view-section > h3 {
+  border-bottom: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 10px;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.ada-scope .ada-wire-view-profile-grid {
+  background: var(--ada-hairline);
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-wire-view-profile-grid article {
+  background: #ffffff;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.ada-scope .ada-wire-view-profile-grid h4 {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+  margin: 0;
+}
+
+.ada-scope .ada-wire-view-profile-grid strong,
+.ada-scope .ada-wire-view-instructions strong {
+  color: var(--ada-primary);
+  font-size: 13px;
+}
+
+.ada-scope .ada-wire-view-profile-grid p,
+.ada-scope .ada-wire-view-instructions p {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.ada-scope .ada-wire-view-mask-row,
+.ada-scope .ada-wire-view-meta-row {
+  align-items: center;
+  background: var(--ada-canvas-soft);
+  display: flex;
+  gap: 26px;
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  min-height: 48px;
+  padding: 10px 12px;
+}
+
+.ada-scope .ada-wire-view-mask-row > div,
+.ada-scope .ada-wire-view-meta-row > div {
+  display: grid;
+  gap: 3px;
+}
+
+.ada-scope .ada-wire-view-meta-row {
+  background: #ffffff;
+  border-top: 1px solid var(--ada-hairline);
+}
+
+.ada-scope .ada-wire-view-instructions {
+  background: var(--ada-hairline);
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-wire-view-instructions > div {
+  background: #ffffff;
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+}
+
+.ada-scope .ada-wire-view-instructions h4 {
+  margin: 0;
+}
+
+.ada-scope .ada-wire-view-instructions-meta {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.ada-scope .ada-wire-view-instructions-meta > div {
+  display: grid;
+  gap: 3px;
+}
+
+.ada-scope .ada-wire-view-section > footer {
+  align-items: center;
+  background: var(--ada-canvas-soft);
+  border-top: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.ada-scope .ada-wire-view-section > footer > div {
+  display: grid;
+  gap: 3px;
+}
+
+.ada-scope .ada-wire-view-side {
+  display: grid;
+  gap: 10px;
+}
+
+.ada-scope .ada-wire-side-card {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.ada-scope .ada-wire-side-card.active {
+  border-color: var(--ada-primary);
+}
+
+.ada-scope .ada-wire-side-card > h3 {
+  border-bottom: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 10px;
+  margin: 0;
+  padding-bottom: 8px;
+}
+
+.ada-scope .ada-wire-side-card > div {
+  display: grid;
+  gap: 6px;
+}
+
+.ada-scope .ada-wire-purpose-reset {
+  border-top: 1px solid var(--ada-hairline);
+  margin-top: 2px;
+  padding-top: 8px;
+}
+
+.ada-scope .ada-wire-purpose-reset label {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-wire-purpose-reset select {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 12px;
+  min-height: 30px;
+  padding: 6px 8px;
+}
+
+.ada-scope .ada-wire-purpose-reset small {
+  color: var(--ada-secondary);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.ada-scope .ada-wire-purpose-reset p {
+  font-size: 11px;
+  margin: 0;
+}
+
+.ada-scope .ada-wire-purpose-reset p.success {
+  color: #1f5f3f;
+}
+
+.ada-scope .ada-wire-purpose-reset p.error {
+  color: #8b2d2d;
+}
+
+.ada-scope .ada-wire-side-card button,
+.ada-scope .ada-wire-payload-drawer button,
+.ada-scope .ada-wire-payload-overlay {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--ada-primary);
+  color: var(--ada-primary);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  gap: 6px;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  min-height: 30px;
+  padding: 0 10px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-wire-side-card button svg.spin {
+  animation: ada-wire-spin 0.85s linear infinite;
+}
+
+.ada-scope .ada-wire-view-timeline {
+  border-left: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 10px;
+  margin-left: 4px;
+  padding-left: 10px;
+}
+
+.ada-scope .ada-wire-view-timeline article {
+  display: grid;
+  gap: 3px;
+}
+
+.ada-scope .ada-wire-payload-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  display: flex;
+  justify-content: space-between;
+  margin: -2px;
+  padding: 2px;
+  width: 100%;
+}
+
+.ada-scope .ada-wire-payload-toggle h3 {
+  color: var(--ada-primary);
+  margin: 0;
+}
+
+.ada-scope .ada-wire-payload-toggle svg {
+  color: var(--ada-secondary);
+  transition: transform 120ms ease;
+}
+
+.ada-scope .ada-wire-payload-toggle svg.open {
+  transform: rotate(180deg);
+}
+
+.ada-scope .ada-wire-inline-payload {
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  padding: 10px;
+}
+
+.ada-scope .ada-wire-inline-payload pre,
+.ada-scope .ada-wire-payload-drawer pre {
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.ada-scope .ada-wire-payload-overlay {
+  background: rgba(0, 0, 0, 0.18);
+  border: 0;
+  cursor: pointer;
+  inset: 0;
+  min-height: auto;
+  padding: 0;
+  position: fixed;
+  z-index: 70;
+}
+
+.ada-scope .ada-wire-payload-drawer {
+  background: #ffffff;
+  border-left: 1px solid var(--ada-hairline);
+  box-shadow: -8px 0 20px rgba(0, 0, 0, 0.12);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  max-width: 400px;
+  position: fixed;
+  right: 0;
+  top: 0;
+  width: 100%;
+  z-index: 80;
+}
+
+.ada-scope .ada-wire-payload-drawer > header,
+.ada-scope .ada-wire-payload-drawer > footer {
+  align-items: center;
+  border-bottom: 1px solid var(--ada-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.ada-scope .ada-wire-payload-drawer > footer {
+  background: var(--ada-canvas-soft);
+  border-bottom: 0;
+  border-top: 1px solid var(--ada-hairline);
+}
+
+.ada-scope .ada-wire-payload-drawer > header h2 {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-body);
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-wire-payload-drawer > header button {
+  border: 0;
+  min-height: auto;
+  padding: 0;
+}
+
+.ada-scope .ada-wire-payload-drawer > div {
+  display: grid;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.ada-scope .ada-wire-payload-drawer section {
+  display: grid;
+  gap: 8px;
+}
+
+.ada-scope .ada-wire-payload-drawer section h3 {
+  margin: 0;
+}
+
+.ada-scope .ada-wire-payload-drawer section pre {
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  padding: 10px;
+}
+
+.ada-scope .ada-wire-payload-drawer > footer p {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  margin: 0;
+}
+
+@keyframes ada-wire-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 980px) {
   .ada-scope .ada-management-heading {
     align-items: flex-start;
     flex-direction: column;
   }
+  .ada-scope .ada-fiat-link-layout {
+    grid-template-columns: 1fr;
+  }
+  .ada-scope .ada-fiat-link-context h1 {
+    font-size: 34px;
+    line-height: 1.02;
+  }
 
   .ada-scope .ada-management-stats,
+  .ada-scope .ada-fiat-link-form-grid,
+  .ada-scope .ada-fiat-success-grid {
+    grid-template-columns: 1fr;
+  }
+  .ada-scope .ada-fiat-success-grid article:first-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--ada-hairline);
+    padding-right: 0;
+    padding-bottom: 14px;
+  }
+  .ada-scope .ada-fiat-success-grid article:last-child {
+    padding-left: 0;
+    padding-top: 14px;
+  }
   .ada-scope .ada-success-grid,
   .ada-scope .ada-provision-section,
   .ada-scope .ada-provision-section > div:last-child {
@@ -1565,5 +2409,514 @@
   .ada-scope .ada-instruments-summary > div:last-child {
     grid-template-columns: 1fr;
     text-align: left;
+  }
+}
+
+.ada-scope .ada-fiat2-shell {
+  display: grid;
+  gap: 12px;
+  margin: 0 auto;
+  max-width: 1360px;
+  padding: 16px 20px 18px;
+  width: 100%;
+}
+
+.ada-scope .ada-fiat2-layout {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(300px, 1fr) minmax(0, 2fr);
+}
+
+.ada-scope .ada-fiat2-context {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding-top: 6px;
+}
+
+.ada-scope .ada-fiat2-context h1 {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-display);
+  font-size: 34px;
+  font-weight: 400;
+  line-height: 1.04;
+  margin: 0;
+}
+
+.ada-scope .ada-fiat2-context p {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.ada-scope .ada-fiat2-context aside {
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 12px;
+}
+
+.ada-scope .ada-fiat2-context aside h2 {
+  color: var(--ada-primary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-fiat2-context aside p {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ada-scope .ada-fiat2-form-card {
+  background: var(--ada-surface);
+  border: 1px solid var(--ada-hairline);
+  display: grid;
+}
+
+.ada-scope .ada-fiat2-form-card > header {
+  border-bottom: 1px solid var(--ada-hairline);
+  padding: 14px;
+}
+
+.ada-scope .ada-fiat2-form-card > header h2 {
+  align-items: center;
+  color: var(--ada-primary);
+  display: inline-flex;
+  font-size: 16px;
+  font-weight: 700;
+  gap: 8px;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.ada-scope .ada-fiat2-form-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 14px;
+}
+
+.ada-scope .ada-fiat2-form-grid h3 {
+  border-bottom: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  grid-column: 1 / -1;
+  letter-spacing: 0.08em;
+  margin: 10px 0 2px;
+  padding-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-fiat2-form-grid h3:first-child {
+  margin-top: 0;
+}
+
+.ada-scope .ada-fiat2-form-grid label {
+  display: grid;
+  gap: 5px;
+}
+
+.ada-scope .ada-fiat2-form-grid label.wide {
+  grid-column: 1 / -1;
+}
+
+.ada-scope .ada-fiat2-form-grid span {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-fiat2-form-grid input,
+.ada-scope .ada-fiat2-form-grid select {
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-size: 12px;
+  min-height: 32px;
+  outline: 0;
+  padding: 7px 9px;
+  width: 100%;
+}
+
+.ada-scope .ada-fiat2-form-grid input:focus,
+.ada-scope .ada-fiat2-form-grid select:focus {
+  border-color: var(--ada-primary);
+}
+
+.ada-scope .ada-fiat2-form-grid input[readonly] {
+  background: var(--ada-canvas-soft);
+  color: var(--ada-secondary);
+}
+
+.ada-scope .ada-fiat2-form-grid small {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ada-scope .ada-fiat2-form-card > footer,
+.ada-scope .ada-fiat2-stage-card > footer,
+.ada-scope .ada-fiat2-confirm-card > footer {
+  align-items: center;
+  border-top: 1px solid var(--ada-hairline);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.ada-scope .ada-fiat2-form-card > footer button,
+.ada-scope .ada-fiat2-stage-card button,
+.ada-scope .ada-fiat2-confirm-card > footer button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--ada-primary);
+  color: var(--ada-primary);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  gap: 6px;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  min-height: 32px;
+  padding: 0 10px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-fiat2-form-card > footer button.primary,
+.ada-scope .ada-fiat2-stage-card button.primary,
+.ada-scope .ada-fiat2-confirm-card > footer button.primary,
+.ada-scope .ada-fiat2-success-card > footer button.primary {
+  background: var(--ada-primary);
+  border-color: var(--ada-primary);
+  color: var(--ada-on-primary);
+}
+
+.ada-scope .ada-fiat2-stage-card,
+.ada-scope .ada-fiat2-confirm-card,
+.ada-scope .ada-fiat2-success-card {
+  background: var(--ada-surface);
+  border: 1px solid var(--ada-hairline);
+  display: grid;
+}
+
+.ada-scope .ada-fiat2-stage-card > header {
+  align-items: center;
+  border-bottom: 1px solid var(--ada-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.ada-scope .ada-fiat2-stage-card > header > div {
+  display: grid;
+  gap: 6px;
+}
+
+.ada-scope .ada-fiat2-stage-card > header p {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+  max-width: 620px;
+}
+
+.ada-scope .ada-fiat2-stage-card > header h1,
+.ada-scope .ada-fiat2-confirm-card > header h1,
+.ada-scope .ada-fiat2-success-card > header h1 {
+  color: var(--ada-primary);
+  font-family: var(--ada-font-display);
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 1.08;
+  margin: 0;
+}
+
+.ada-scope .ada-fiat2-stage-card > header span {
+  background: var(--ada-canvas-soft);
+  border: 1px solid var(--ada-hairline);
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-fiat2-stage-grid,
+.ada-scope .ada-fiat2-success-grid {
+  border-top: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-fiat2-stage-grid article,
+.ada-scope .ada-fiat2-success-grid article {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.ada-scope .ada-fiat2-stage-grid article:first-child,
+.ada-scope .ada-fiat2-success-grid article:first-child {
+  border-right: 1px solid var(--ada-hairline);
+}
+
+.ada-scope .ada-fiat2-stage-grid h2,
+.ada-scope .ada-fiat2-success-grid h2,
+.ada-scope .ada-fiat2-trace h2 {
+  border-bottom: 1px solid var(--ada-hairline);
+  color: var(--ada-primary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  padding-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-fiat2-stage-card > footer p {
+  color: var(--ada-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  margin: 0;
+  max-width: 520px;
+}
+
+.ada-scope .ada-fiat2-stage-card > footer > div {
+  display: flex;
+  gap: 8px;
+}
+
+.ada-scope .ada-fiat2-confirm-card > header {
+  border-bottom: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.ada-scope .ada-fiat2-confirm-card > header > span {
+  color: var(--ada-secondary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-fiat2-confirm-card > header p {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.ada-scope .ada-fiat2-confirm-grid {
+  border-top: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ada-scope .ada-fiat2-confirm-grid > div {
+  border-bottom: 1px solid var(--ada-hairline);
+  border-right: 1px solid var(--ada-hairline);
+  padding: 12px;
+}
+
+.ada-scope .ada-fiat2-confirm-grid > div:nth-child(2n) {
+  border-right: 0;
+}
+
+.ada-scope .ada-fiat2-attestation {
+  align-items: flex-start;
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px 2px;
+}
+
+.ada-scope .ada-fiat2-attestation input {
+  accent-color: var(--ada-primary);
+  height: 16px;
+  margin-top: 1px;
+  width: 16px;
+}
+
+.ada-scope .ada-fiat2-attestation span {
+  color: var(--ada-primary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ada-scope .ada-fiat2-confirm-card > footer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ada-scope .ada-fiat2-success-shell {
+  display: grid;
+  margin: 0 auto;
+  max-width: 980px;
+  padding: 16px 20px 18px;
+  width: 100%;
+}
+
+.ada-scope .ada-fiat2-success-card > header {
+  align-items: center;
+  border-bottom: 1px solid var(--ada-hairline);
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  padding: 20px 14px 16px;
+  text-align: center;
+}
+
+.ada-scope .ada-fiat2-success-card > header > div {
+  align-items: center;
+  border: 2px solid var(--ada-primary);
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+
+.ada-scope .ada-fiat2-success-card > header p {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 0;
+  max-width: 560px;
+}
+
+.ada-scope .ada-fiat2-trace {
+  background: var(--ada-canvas-soft);
+  border-left: 2px solid var(--ada-primary);
+  display: grid;
+  gap: 8px;
+  margin: 14px;
+  padding: 12px;
+}
+
+.ada-scope .ada-fiat2-success-card > footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 14px;
+}
+
+.ada-scope .ada-fiat2-success-card > footer button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--ada-primary);
+  color: var(--ada-primary);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  min-height: 32px;
+  padding: 0 10px;
+  text-transform: uppercase;
+}
+
+@media (max-width: 980px) {
+  .ada-scope .ada-fiat2-layout,
+  .ada-scope .ada-fiat2-stage-grid,
+  .ada-scope .ada-fiat2-success-grid,
+  .ada-scope .ada-fiat2-confirm-grid,
+  .ada-scope .ada-fiat2-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ada-scope .ada-fiat2-stage-grid article:first-child,
+  .ada-scope .ada-fiat2-success-grid article:first-child,
+  .ada-scope .ada-fiat2-confirm-grid > div {
+    border-right: 0;
+  }
+
+  .ada-scope .ada-fiat2-confirm-grid > div {
+    border-bottom: 1px solid var(--ada-hairline);
+  }
+
+  .ada-scope .ada-fiat2-context h1 {
+    font-size: 30px;
+  }
+
+  .ada-scope .ada-wire-view-layout,
+  .ada-scope .ada-wire-view-profile-grid,
+  .ada-scope .ada-wire-view-instructions,
+  .ada-scope .ada-wire-view-instructions-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .ada-scope .ada-wire-view-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ada-scope .ada-wire-view-header-meta {
+    align-items: flex-start;
+    justify-items: start;
+  }
+}
+
+@media (max-width: 700px) {
+  .ada-scope .ada-fiat2-shell,
+  .ada-scope .ada-fiat2-success-shell {
+    padding: 16px;
+  }
+
+  .ada-scope .ada-fiat2-form-card > footer,
+  .ada-scope .ada-fiat2-stage-card > footer,
+  .ada-scope .ada-fiat2-stage-card > footer > div,
+  .ada-scope .ada-fiat2-confirm-card > footer,
+  .ada-scope .ada-fiat2-success-card > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ada-scope .ada-fiat2-form-grid h3 {
+    margin-top: 6px;
+  }
+
+  .ada-scope .ada-wire-view-shell,
+  .ada-scope .ada-wire-view-mask-row,
+  .ada-scope .ada-wire-view-meta-row,
+  .ada-scope .ada-wire-view-section > footer {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .ada-scope .ada-wire-view-mask-row,
+  .ada-scope .ada-wire-view-meta-row,
+  .ada-scope .ada-wire-view-section > footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .ada-scope .ada-wire-payload-drawer {
+    max-width: none;
   }
 }

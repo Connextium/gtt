@@ -72,7 +72,7 @@ const testFundingWebhookReplayAndSettlement = (): void => {
     supplierBusinessClientId: supplier.id,
     amountMinorUnits: "600000000",
     dueDate: "2026-11-30",
-    externalReference: "INV-S5"
+    reference: "INV-S5"
   });
   sprint4.sprint3.obligations.approveObligation(ctx, obligation.id);
   const reservation = sprint4.sprint3.obligations.activateReservation(ctx, {

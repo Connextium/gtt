@@ -84,7 +84,7 @@ export interface OnboardingDocument {
   documentType: string;
   fileName: string;
   status: "metadata_recorded" | "uploaded" | "accepted" | "rejected";
-  externalReference?: string;
+  reference?: string;
   createdAt: string;
 }
 

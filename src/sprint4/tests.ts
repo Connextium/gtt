@@ -49,7 +49,7 @@ const prepare = () => {
     supplierBusinessClientId: supplier.id,
     amountMinorUnits: "600000000",
     dueDate: "2026-09-30",
-    externalReference: "INV-S4"
+    reference: "INV-S4"
   });
   sprint3.obligations.approveObligation(ctx, obligation.id);
   sprint3.obligations.activateReservation(ctx, {

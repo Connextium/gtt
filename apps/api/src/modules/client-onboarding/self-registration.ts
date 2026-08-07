@@ -19,6 +19,34 @@ interface AuthenticatedBusinessUser {
   email: string;
 }
 
+interface OnboardingBusinessClientView {
+  id: string;
+  legalName: string;
+  country: string;
+  onboardingStatus: string;
+}
+
+interface OnboardingAdaAccountView {
+  id: string;
+  accountCode?: string;
+  accountName: string;
+  businessClientId: string;
+  businessClientName?: string;
+  status: string;
+  usePurpose: string;
+  assetCode?: string;
+  assetRail?: string;
+  createdAt?: string;
+  balances?: {
+    availableMinorUnits: string;
+    pendingMinorUnits: string;
+    reservedMinorUnits: string;
+    lockedMinorUnits: string;
+    suspenseMinorUnits: string;
+    updatedAt?: string;
+  };
+}
+
 const rateLimitWindowMs = 60_000;
 const maxAttemptsPerWindow = 5;
 const invitationAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -129,15 +157,148 @@ export const handleGetOrCreateMyOnboarding = async (
   const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
   const stepPayloads = await hydrateOnboardingStepPayloads(state, bundle.application);
   const rfiTasks = await hydrateOnboardingRfiTasks(state, bundle.application);
+  const assets = await resolveOnboardingAssets(state, bundle.application, stepPayloads);
   await persistOnboardingBundle(state, auth, bundle);
   return {
     status: 200,
     body: {
       ...bundle,
       stepPayloads,
-      rfiTasks
+      rfiTasks,
+      businessClient: assets.businessClient,
+      adaAccounts: assets.adaAccounts
     }
   };
+};
+
+const resolveOnboardingAssets = async (
+  state: ApiState,
+  application: BusinessOnboardingApplication,
+  stepPayloads: Record<string, Record<string, unknown>>
+): Promise<{ businessClient?: OnboardingBusinessClientView; adaAccounts: OnboardingAdaAccountView[] }> => {
+  const applicationId = uuidFromRuntimeId(application.id);
+  const tenantId = uuidFromRuntimeId(application.tenantId) ?? process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001";
+
+  if (postgresUrlFromEnv() && applicationId) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const businessClientResult = await client.query(
+          `select id, legal_name, country, onboarding_status
+             from business_clients
+            where platform_tenant_id = $1
+              and correlation_id = $2
+            order by created_at desc
+            limit 1`,
+          [tenantId, `business_onboarding:${applicationId}`]
+        );
+
+        const businessClientRow = businessClientResult.rows[0] as {
+          id: string;
+          legal_name: string;
+          country: string;
+          onboarding_status: string;
+        } | undefined;
+
+        if (!businessClientRow) {
+          return { businessClient: undefined, adaAccounts: [] };
+        }
+
+        const accountRows = await client.query(
+          `select account.id,
+                  account.business_client_id,
+                  account.account_name,
+                  account.use_purpose,
+                  account.status,
+                  account.asset_code,
+                  account.asset_rail,
+                  account.created_at,
+                  balance.available_minor_units,
+                  balance.pending_minor_units,
+                  balance.reserved_minor_units,
+                  balance.locked_minor_units,
+                  balance.suspense_minor_units,
+                  balance.updated_at as balance_updated_at
+             from accounts_of_digital_asset account
+             left join lateral (
+               select b.available_minor_units,
+                      b.pending_minor_units,
+                      b.reserved_minor_units,
+                      b.locked_minor_units,
+                      b.suspense_minor_units,
+                      b.updated_at
+                 from account_of_digital_asset_balances b
+                where b.platform_tenant_id = account.platform_tenant_id
+                  and b.account_of_digital_asset_id = account.id
+                order by b.updated_at desc
+                limit 1
+             ) balance on true
+            where account.platform_tenant_id = $1
+              and account.business_client_id = $2
+            order by account.created_at desc`,
+          [tenantId, businessClientRow.id]
+        ).catch(async (error: unknown) => {
+          if (!isMissingTableError(error, "account_of_digital_asset_balances")) throw error;
+          return client.query(
+            `select account.id,
+                    account.business_client_id,
+                    account.account_name,
+                    account.use_purpose,
+                    account.status,
+                    account.asset_code,
+                    account.asset_rail,
+                    account.created_at,
+                    null::bigint as available_minor_units,
+                    null::bigint as pending_minor_units,
+                    null::bigint as reserved_minor_units,
+                    null::bigint as locked_minor_units,
+                    null::bigint as suspense_minor_units,
+                    null::timestamptz as balance_updated_at
+               from accounts_of_digital_asset account
+              where account.platform_tenant_id = $1
+                and account.business_client_id = $2
+              order by account.created_at desc`,
+            [tenantId, businessClientRow.id]
+          );
+        });
+
+        return {
+          businessClient: {
+            id: businessClientRow.id,
+            legalName: businessClientRow.legal_name,
+            country: businessClientRow.country,
+            onboardingStatus: businessClientRow.onboarding_status
+          },
+          adaAccounts: accountRows.rows.map((row) => ({
+            id: String(row.id),
+            accountCode: buildAdaAccountCode(String(row.account_name), String(row.use_purpose), row.asset_code ? String(row.asset_code) : "USDC"),
+            accountName: String(row.account_name),
+            businessClientId: String(row.business_client_id),
+            businessClientName: businessClientRow.legal_name,
+            status: String(row.status),
+            usePurpose: String(row.use_purpose),
+            assetCode: row.asset_code ? String(row.asset_code) : undefined,
+            assetRail: row.asset_rail ? String(row.asset_rail) : undefined,
+            createdAt: timestampToOptionalIsoString(row.created_at),
+            balances: {
+              availableMinorUnits: String(row.available_minor_units ?? 0),
+              pendingMinorUnits: String(row.pending_minor_units ?? 0),
+              reservedMinorUnits: String(row.reserved_minor_units ?? 0),
+              lockedMinorUnits: String(row.locked_minor_units ?? 0),
+              suspenseMinorUnits: String(row.suspense_minor_units ?? 0),
+              updatedAt: timestampToOptionalIsoString(row.balance_updated_at)
+            }
+          }))
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in resolveOnboardingAssets; falling back", error);
+    }
+  }
+
+  // Never return simulated ADA account data to business users.
+  // If Postgres data is unavailable or missing, surface an empty list so UI reflects real backend state only.
+  return { businessClient: undefined, adaAccounts: [] };
 };
 
 export const handleSaveMyOnboardingStep = async (
@@ -327,30 +488,35 @@ const hydrateBusinessUserOnboarding = async (
 ): Promise<{ profile: BusinessUserProfile; application: BusinessOnboardingApplication } | undefined> => {
   const authUserId = uuidFromRuntimeId(auth.authUserId);
   if (postgresUrlFromEnv() && authUserId) {
-    return withPostgresTransaction(async (client) => {
-      const [profileResult, applicationResult] = await Promise.all([
-        client.query(
-        `select id, tenant_id, auth_user_id, email, role, status, created_at, updated_at
-         from business_user_profiles
-         where auth_user_id = $1
-         limit 1`,
-          [authUserId]
-        ),
-        client.query(
-        `select id, tenant_id, auth_user_id, email, current_step, status, submitted_at, created_at, updated_at
-         from business_onboarding_applications
-         where auth_user_id = $1
-         limit 1`,
-          [authUserId]
-        )
-      ]);
-      if (!profileResult.rows[0] || !applicationResult.rows[0]) return undefined;
-      const profile = mapStoredProfile(profileResult.rows[0] as Record<string, unknown>);
-      const application = mapStoredApplication(applicationResult.rows[0] as Record<string, unknown>);
-      upsertRuntimeProfile(state, profile);
-      upsertRuntimeApplication(state, application);
-      return { profile, application };
-    });
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const [profileResult, applicationResult] = await Promise.all([
+          client.query(
+          `select id, tenant_id, auth_user_id, email, role, status, created_at, updated_at
+           from business_user_profiles
+           where auth_user_id = $1
+           limit 1`,
+            [authUserId]
+          ),
+          client.query(
+          `select id, tenant_id, auth_user_id, email, current_step, status, submitted_at, created_at, updated_at
+           from business_onboarding_applications
+           where auth_user_id = $1
+           limit 1`,
+            [authUserId]
+          )
+        ]);
+        if (!profileResult.rows[0] || !applicationResult.rows[0]) return undefined;
+        const profile = mapStoredProfile(profileResult.rows[0] as Record<string, unknown>);
+        const application = mapStoredApplication(applicationResult.rows[0] as Record<string, unknown>);
+        upsertRuntimeProfile(state, profile);
+        upsertRuntimeApplication(state, application);
+        return { profile, application };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in hydrateBusinessUserOnboarding; falling back", error);
+    }
   }
 
   const supabase = supabaseAdminClient();
@@ -384,28 +550,38 @@ const hydrateOnboardingStepPayloads = async (
 ): Promise<Record<string, Record<string, unknown>>> => {
   const applicationId = uuidFromRuntimeId(application.id);
   if (postgresUrlFromEnv() && applicationId) {
-    return withPostgresTransaction(async (client) => {
-      const result = await client.query(
-      `select id, tenant_id, application_id, step_key, payload, saved_at
-       from onboarding_step_payloads
-       where application_id = $1`,
-        [applicationId]
-      );
-      const payloads: Record<string, Record<string, unknown>> = {};
-      for (const row of result.rows) {
-        const stepPayload = mapStoredStepPayload(row as Record<string, unknown>);
-        payloads[stepPayload.stepKey] = stepPayload.payload;
-        upsertRuntimeStepPayload(state, stepPayload);
-      }
-      if (!Object.keys(payloads).length) {
-        return Object.fromEntries(
-          state.onboardingStepPayloads
-            .filter((item) => item.applicationId === application.id)
-            .map((item) => [item.stepKey, item.payload])
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const result = await client.query(
+        `select id, tenant_id, application_id, step_key, payload, saved_at
+         from onboarding_step_payloads
+         where application_id = $1`,
+          [applicationId]
         );
-      }
-      return payloads;
-    });
+        const payloads: Record<string, Record<string, unknown>> = {};
+        for (const row of result.rows) {
+          const stepPayload = mapStoredStepPayload(row as Record<string, unknown>);
+          payloads[stepPayload.stepKey] = stepPayload.payload;
+          upsertRuntimeStepPayload(state, stepPayload);
+        }
+        if (!Object.keys(payloads).length) {
+          return Object.fromEntries(
+            state.onboardingStepPayloads
+              .filter((item) => item.applicationId === application.id)
+              .map((item) => [item.stepKey, item.payload])
+          );
+        }
+        return payloads;
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in hydrateOnboardingStepPayloads; falling back", error);
+      return Object.fromEntries(
+        state.onboardingStepPayloads
+          .filter((item) => item.applicationId === application.id)
+          .map((item) => [item.stepKey, item.payload])
+      );
+    }
   }
 
   const supabase = supabaseAdminClient();
@@ -438,33 +614,38 @@ const hydrateOnboardingRfiTasks = async (
 ): Promise<OnboardingRfiTask[]> => {
   const applicationId = uuidFromRuntimeId(application.id);
   if (postgresUrlFromEnv() && applicationId) {
-    return withPostgresTransaction(async (client) => {
-      const result = await client.query(
-        `select id, platform_tenant_id, onboarding_application_id, business_client_id, status, requested_fields, note, requester_email, assignee_email, due_at, resolved_at, created_at, updated_at
-         from onboarding_rfi_tasks
-         where onboarding_application_id = $1
-         order by created_at desc`,
-        [applicationId]
-      ).catch((error: unknown) => {
-        if (isMissingTableError(error, "onboarding_rfi_tasks")) return { rows: [] };
-        throw error;
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const result = await client.query(
+          `select id, platform_tenant_id, onboarding_application_id, business_client_id, status, requested_fields, note, requester_email, assignee_email, due_at, resolved_at, created_at, updated_at
+           from onboarding_rfi_tasks
+           where onboarding_application_id = $1
+           order by created_at desc`,
+          [applicationId]
+        ).catch((error: unknown) => {
+          if (isMissingTableError(error, "onboarding_rfi_tasks")) return { rows: [] };
+          throw error;
+        });
+        return result.rows.map((row) => ({
+          id: `onboarding_rfi_task_${String(row.id)}`,
+          tenantId: String(row.platform_tenant_id),
+          applicationId: `business_onboarding_application_${String(row.onboarding_application_id)}`,
+          businessClientId: row.business_client_id ? String(row.business_client_id) : undefined,
+          status: isRfiTaskStatus(row.status) ? row.status : "open",
+          requestedFields: Array.isArray(row.requested_fields) ? row.requested_fields.map(String) : [],
+          note: row.note ? String(row.note) : undefined,
+          requesterEmail: row.requester_email ? String(row.requester_email) : undefined,
+          assigneeEmail: row.assignee_email ? String(row.assignee_email) : undefined,
+          dueAt: row.due_at ? String(row.due_at) : undefined,
+          resolvedAt: row.resolved_at ? String(row.resolved_at) : undefined,
+          createdAt: String(row.created_at),
+          updatedAt: String(row.updated_at)
+        }));
       });
-      return result.rows.map((row) => ({
-        id: `onboarding_rfi_task_${String(row.id)}`,
-        tenantId: String(row.platform_tenant_id),
-        applicationId: `business_onboarding_application_${String(row.onboarding_application_id)}`,
-        businessClientId: row.business_client_id ? String(row.business_client_id) : undefined,
-        status: isRfiTaskStatus(row.status) ? row.status : "open",
-        requestedFields: Array.isArray(row.requested_fields) ? row.requested_fields.map(String) : [],
-        note: row.note ? String(row.note) : undefined,
-        requesterEmail: row.requester_email ? String(row.requester_email) : undefined,
-        assigneeEmail: row.assignee_email ? String(row.assignee_email) : undefined,
-        dueAt: row.due_at ? String(row.due_at) : undefined,
-        resolvedAt: row.resolved_at ? String(row.resolved_at) : undefined,
-        createdAt: String(row.created_at),
-        updatedAt: String(row.updated_at)
-      }));
-    });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in hydrateOnboardingRfiTasks; falling back", error);
+    }
   }
   return state.onboardingRfiTasks
     .filter((task) => task.applicationId === application.id)
@@ -693,6 +874,14 @@ const timestampToOptionalIsoString = (value: unknown): string | undefined => {
   return timestampToIsoString(value);
 };
 
+const buildAdaAccountCode = (accountName: string, usePurpose: string, assetCode: string): string => {
+  const normalizedPurpose = usePurpose.replace(/[^a-zA-Z]/g, "").toUpperCase().slice(0, 3) || "GEN";
+  const normalizedAsset = assetCode.replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 4) || "USDC";
+  const normalizedName = accountName.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+  const nameSegment = normalizedName.slice(0, 4).padEnd(4, "X");
+  return `DAA-${normalizedAsset}-${normalizedPurpose}-${nameSegment}`;
+};
+
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const uuidFromRuntimeId = (value?: string): string | undefined => {
@@ -706,42 +895,47 @@ const persistInvitation = async (invitation?: BusinessOnboardingInvitation): Pro
   const id = uuidFromRuntimeId(invitation.id);
   if (!id) return;
   if (postgresUrlFromEnv()) {
-    await withPostgresTransaction(async (client) => {
-      const existing = await client.query<{ id: string }>(
-        `select id
-         from business_onboarding_invitations
-         where tenant_id = $1
-           and lower(email) = lower($2)
-           and status = any($3::text[])
-         limit 1`,
-        [invitation.tenantId, invitation.email, ["requested", "sent", "accepted"]]
-      );
-      await client.query(
-        `insert into business_onboarding_invitations
-          (id, tenant_id, email, status, supabase_user_id, idempotency_key, invited_at, accepted_at, expires_at, created_at, updated_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         on conflict (id) do update set
-           status = excluded.status,
-           supabase_user_id = excluded.supabase_user_id,
-           invited_at = excluded.invited_at,
-           accepted_at = excluded.accepted_at,
-           expires_at = excluded.expires_at,
-           updated_at = excluded.updated_at`,
-        [
-          existing.rows[0]?.id ?? id,
-          invitation.tenantId,
-          invitation.email,
-          invitation.status,
-          uuidFromRuntimeId(invitation.supabaseUserId) ?? null,
-          invitation.idempotencyKey,
-          invitation.invitedAt ?? null,
-          invitation.acceptedAt ?? null,
-          invitation.expiresAt ?? null,
-          invitation.createdAt,
-          invitation.updatedAt
-        ]
-      );
-    });
+    try {
+      await withPostgresTransaction(async (client) => {
+        const existing = await client.query<{ id: string }>(
+          `select id
+           from business_onboarding_invitations
+           where tenant_id = $1
+             and lower(email) = lower($2)
+             and status = any($3::text[])
+           limit 1`,
+          [invitation.tenantId, invitation.email, ["requested", "sent", "accepted"]]
+        );
+        await client.query(
+          `insert into business_onboarding_invitations
+            (id, tenant_id, email, status, supabase_user_id, idempotency_key, invited_at, accepted_at, expires_at, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           on conflict (id) do update set
+             status = excluded.status,
+             supabase_user_id = excluded.supabase_user_id,
+             invited_at = excluded.invited_at,
+             accepted_at = excluded.accepted_at,
+             expires_at = excluded.expires_at,
+             updated_at = excluded.updated_at`,
+          [
+            existing.rows[0]?.id ?? id,
+            invitation.tenantId,
+            invitation.email,
+            invitation.status,
+            uuidFromRuntimeId(invitation.supabaseUserId) ?? null,
+            invitation.idempotencyKey,
+            invitation.invitedAt ?? null,
+            invitation.acceptedAt ?? null,
+            invitation.expiresAt ?? null,
+            invitation.createdAt,
+            invitation.updatedAt
+          ]
+        );
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in persistInvitation; skipping", error);
+    }
     return;
   }
   const supabase = supabaseAdminClient();
@@ -794,19 +988,24 @@ const persistBusinessUserProfile = async (profile: BusinessUserProfile): Promise
   const authUserId = uuidFromRuntimeId(profile.authUserId);
   if (!id || !authUserId) return;
   if (postgresUrlFromEnv()) {
-    await withPostgresTransaction(async (client) => {
-      await client.query(
-        `insert into business_user_profiles
-          (id, tenant_id, auth_user_id, email, role, status, created_at, updated_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8)
-         on conflict (auth_user_id) do update set
-           email = excluded.email,
-           role = excluded.role,
-           status = excluded.status,
-           updated_at = excluded.updated_at`,
-        [id, profile.tenantId, authUserId, profile.email, profile.role, profile.status, profile.createdAt, profile.updatedAt]
-      );
-    });
+    try {
+      await withPostgresTransaction(async (client) => {
+        await client.query(
+          `insert into business_user_profiles
+            (id, tenant_id, auth_user_id, email, role, status, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8)
+           on conflict (auth_user_id) do update set
+             email = excluded.email,
+             role = excluded.role,
+             status = excluded.status,
+             updated_at = excluded.updated_at`,
+          [id, profile.tenantId, authUserId, profile.email, profile.role, profile.status, profile.createdAt, profile.updatedAt]
+        );
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in persistBusinessUserProfile; skipping", error);
+    }
     return;
   }
   const supabase = supabaseAdminClient();
@@ -835,30 +1034,35 @@ const persistOnboardingApplication = async (application: BusinessOnboardingAppli
   const authUserId = uuidFromRuntimeId(application.authUserId);
   if (!id || !authUserId) return;
   if (postgresUrlFromEnv()) {
-    await withPostgresTransaction(async (client) => {
-      await client.query(
-        `insert into business_onboarding_applications
-          (id, tenant_id, auth_user_id, email, current_step, status, submitted_at, created_at, updated_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         on conflict (auth_user_id) do update set
-           email = excluded.email,
-           current_step = excluded.current_step,
-           status = excluded.status,
-           submitted_at = excluded.submitted_at,
-           updated_at = excluded.updated_at`,
-        [
-          id,
-          application.tenantId,
-          authUserId,
-          application.email,
-          application.currentStep,
-          application.status,
-          application.submittedAt ?? null,
-          application.createdAt,
-          application.updatedAt
-        ]
-      );
-    });
+    try {
+      await withPostgresTransaction(async (client) => {
+        await client.query(
+          `insert into business_onboarding_applications
+            (id, tenant_id, auth_user_id, email, current_step, status, submitted_at, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           on conflict (auth_user_id) do update set
+             email = excluded.email,
+             current_step = excluded.current_step,
+             status = excluded.status,
+             submitted_at = excluded.submitted_at,
+             updated_at = excluded.updated_at`,
+          [
+            id,
+            application.tenantId,
+            authUserId,
+            application.email,
+            application.currentStep,
+            application.status,
+            application.submittedAt ?? null,
+            application.createdAt,
+            application.updatedAt
+          ]
+        );
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in persistOnboardingApplication; skipping", error);
+    }
     return;
   }
   const supabase = supabaseAdminClient();
@@ -892,35 +1096,40 @@ const persistSubmittedBusinessClient = async (
   const tenantId = uuidFromRuntimeId(businessClient.tenantId);
   if (!id || !tenantId) return;
 
-  await withPostgresTransaction(async (client) => {
-    await client.query(
-      `insert into platform_tenants (id, tenant_name)
-       values ($1, 'Demo Tenant')
-       on conflict (id) do nothing`,
-      [tenantId]
-    );
-    await client.query(
-      `insert into business_clients
-        (id, platform_tenant_id, legal_name, country, onboarding_status, correlation_id, created_at, updated_at)
-       values ($1, $2, $3, $4, 'submitted', $5, $6, $7)
-       on conflict (id) do update set
-         platform_tenant_id = excluded.platform_tenant_id,
-         legal_name = excluded.legal_name,
-         country = excluded.country,
-         onboarding_status = excluded.onboarding_status,
-         correlation_id = excluded.correlation_id,
-         updated_at = excluded.updated_at`,
-      [
-        id,
-        tenantId,
-        businessClient.legalName,
-        businessClient.country,
-        `business_onboarding:${uuidFromRuntimeId(application.id) ?? application.id}`,
-        businessClient.createdAt,
-        application.updatedAt
-      ]
-    );
-  });
+  try {
+    await withPostgresTransaction(async (client) => {
+      await client.query(
+        `insert into platform_tenants (id, tenant_name)
+         values ($1, 'Demo Tenant')
+         on conflict (id) do nothing`,
+        [tenantId]
+      );
+      await client.query(
+        `insert into business_clients
+          (id, platform_tenant_id, legal_name, country, onboarding_status, correlation_id, created_at, updated_at)
+         values ($1, $2, $3, $4, 'submitted', $5, $6, $7)
+         on conflict (id) do update set
+           platform_tenant_id = excluded.platform_tenant_id,
+           legal_name = excluded.legal_name,
+           country = excluded.country,
+           onboarding_status = excluded.onboarding_status,
+           correlation_id = excluded.correlation_id,
+           updated_at = excluded.updated_at`,
+        [
+          id,
+          tenantId,
+          businessClient.legalName,
+          businessClient.country,
+          `business_onboarding:${uuidFromRuntimeId(application.id) ?? application.id}`,
+          businessClient.createdAt,
+          application.updatedAt
+        ]
+      );
+    });
+  } catch (error) {
+    if (!isPostgresConnectivityError(error)) throw error;
+    console.warn("[self-registration] Postgres unavailable in persistSubmittedBusinessClient; skipping", error);
+  }
 };
 
 const persistOnboardingStepPayload = async (step: OnboardingStepPayload): Promise<void> => {
@@ -928,17 +1137,22 @@ const persistOnboardingStepPayload = async (step: OnboardingStepPayload): Promis
   const applicationId = uuidFromRuntimeId(step.applicationId);
   if (!id || !applicationId) return;
   if (postgresUrlFromEnv()) {
-    await withPostgresTransaction(async (client) => {
-      await client.query(
-        `insert into onboarding_step_payloads
-          (id, tenant_id, application_id, step_key, payload, saved_at)
-         values ($1, $2, $3, $4, $5, $6)
-         on conflict (application_id, step_key) do update set
-           payload = excluded.payload,
-           saved_at = excluded.saved_at`,
-        [id, step.tenantId, applicationId, step.stepKey, JSON.stringify(step.payload), step.savedAt]
-      );
-    });
+    try {
+      await withPostgresTransaction(async (client) => {
+        await client.query(
+          `insert into onboarding_step_payloads
+            (id, tenant_id, application_id, step_key, payload, saved_at)
+           values ($1, $2, $3, $4, $5, $6)
+           on conflict (application_id, step_key) do update set
+             payload = excluded.payload,
+             saved_at = excluded.saved_at`,
+          [id, step.tenantId, applicationId, step.stepKey, JSON.stringify(step.payload), step.savedAt]
+        );
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in persistOnboardingStepPayload; skipping", error);
+    }
     return;
   }
   const supabase = supabaseAdminClient();
@@ -968,33 +1182,58 @@ const persistRfiResponse = async (
   if (!postgresUrlFromEnv()) return;
   const applicationId = uuidFromRuntimeId(application.id);
   if (!applicationId) return;
-  await withPostgresTransaction(async (client) => {
-    const businessClientId = await client.query<{ id: string }>(
-      `select id from business_clients where id = $1 or correlation_id = $2 limit 1`,
-      [applicationId, `business_onboarding:${applicationId}`]
-    );
-    const clientId = businessClientId.rows[0]?.id ?? null;
-    await client.query(
-      `update onboarding_rfi_tasks
-       set status = 'responded', resolved_at = $2, updated_at = $2
-       where onboarding_application_id = $1 and status = 'open'`,
-      [applicationId, now]
-    ).catch(() => undefined);
-    await client.query(
-      `insert into onboarding_status_events
-        (id, platform_tenant_id, onboarding_application_id, business_client_id, previous_status, next_status, source, actor_email, payload, created_at)
-       values ($1, $2, $3, $4, 'needs_information', 'pending_review', 'applicant', $5, $6, $7)`,
-      [
-        newId("onboarding_status_event").split("_").at(-1),
-        uuidFromRuntimeId(application.tenantId) ?? process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001",
-        applicationId,
-        clientId,
-        application.email,
-        JSON.stringify(payload),
-        now
-      ]
-    ).catch(() => undefined);
-  });
+  try {
+    await withPostgresTransaction(async (client) => {
+      const businessClientId = await client.query<{ id: string }>(
+        `select id from business_clients where id = $1 or correlation_id = $2 limit 1`,
+        [applicationId, `business_onboarding:${applicationId}`]
+      );
+      const clientId = businessClientId.rows[0]?.id ?? null;
+      await client.query(
+        `update onboarding_rfi_tasks
+         set status = 'responded', resolved_at = $2, updated_at = $2
+         where onboarding_application_id = $1 and status = 'open'`,
+        [applicationId, now]
+      ).catch(() => undefined);
+      await client.query(
+        `insert into onboarding_status_events
+          (id, platform_tenant_id, onboarding_application_id, business_client_id, previous_status, next_status, source, actor_email, payload, created_at)
+         values ($1, $2, $3, $4, 'needs_information', 'pending_review', 'applicant', $5, $6, $7)`,
+        [
+          newId("onboarding_status_event").split("_").at(-1),
+          uuidFromRuntimeId(application.tenantId) ?? process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001",
+          applicationId,
+          clientId,
+          application.email,
+          JSON.stringify(payload),
+          now
+        ]
+      ).catch(() => undefined);
+    });
+  } catch (error) {
+    if (!isPostgresConnectivityError(error)) throw error;
+    console.warn("[self-registration] Postgres unavailable in persistRfiResponse; skipping", error);
+  }
+};
+
+const isPostgresConnectivityError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown; errno?: unknown };
+  const code = typeof candidate.code === "string" ? candidate.code : "";
+  const errno = typeof candidate.errno === "string" ? candidate.errno : "";
+  const message = typeof candidate.message === "string" ? candidate.message.toLowerCase() : "";
+
+  return (
+    code === "ENOTFOUND" ||
+    code === "EAI_AGAIN" ||
+    code === "ECONNREFUSED" ||
+    errno === "ENOTFOUND" ||
+    errno === "EAI_AGAIN" ||
+    message.includes("getaddrinfo") ||
+    message.includes("enotfound") ||
+    message.includes("could not translate host name") ||
+    message.includes("connection terminated unexpectedly")
+  );
 };
 
 const persistentTenantId = (state: ApiState): string => {

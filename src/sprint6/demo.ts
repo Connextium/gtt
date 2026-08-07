@@ -60,7 +60,7 @@ const obligation = sprint5.sprint4.sprint3.obligations.createTradePayable(contex
   supplierBusinessClientId: supplier.id,
   amountMinorUnits: "500000000",
   dueDate: "2026-12-31",
-  externalReference: "INV-S6-DEMO"
+  reference: "INV-S6-DEMO"
 });
 sprint5.sprint4.sprint3.obligations.approveObligation(context, obligation.id);
 const reservation = sprint5.sprint4.sprint3.obligations.activateReservation(context, {
@@ -87,7 +87,7 @@ const failedObligation = sprint5.sprint4.sprint3.obligations.createTradePayable(
   supplierBusinessClientId: supplier.id,
   amountMinorUnits: "100000000",
   dueDate: "2027-01-15",
-  externalReference: "INV-S6-DEMO-FAIL"
+  reference: "INV-S6-DEMO-FAIL"
 });
 sprint5.sprint4.sprint3.obligations.approveObligation(context, failedObligation.id);
 const failedReservation = sprint5.sprint4.sprint3.obligations.activateReservation(context, {

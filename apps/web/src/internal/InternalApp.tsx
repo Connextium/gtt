@@ -9,9 +9,12 @@ import { InternalAccessInitialization, InternalOperationGateway } from "./auth/I
 import { BusinessClientManagementContent } from "./business-clients/BusinessClientManagementContent.js";
 import { EvidenceMonitorContent } from "./evidence/EvidenceMonitorContent.js";
 import { InternalShell } from "./InternalShell.js";
+import { LedgerJournalsContent } from "./ledger/LedgerJournalsContent.js";
 import { LedgerOperationsContent } from "./ledger/LedgerOperationsContent.js";
 import { LedgerRegistryContent } from "./ledger/LedgerRegistryContent.js";
 import { InternalCommandCenterContent } from "./operations/InternalCommandCenterContent.js";
+import { InternalFundingInstructionContent } from "./operations/InternalFundingInstructionContent.js";
+import { InternalFundingInstructionOrderConsoleContent } from "./operations/InternalFundingInstructionOrderConsoleContent.js";
 import { TenantActivationContent } from "./tenant-activation/TenantActivationContent.js";
 import type { AppUser, RoleCode, UserStatus } from "../identity.js";
 import { isTreasuryWorksRoute, TreasuryWorksContent } from "./treasury-works/TreasuryWorksApp.js";
@@ -350,6 +353,18 @@ export const InternalApp = ({
     );
   }
 
+  const ledgerJournalMatch = path.match(/^\/internal\/operations\/ledger\/journals(?:\/([^/]+))?$/);
+  if (path === "/internal/operations/ledger/journals" || ledgerJournalMatch) {
+    return (
+      <InternalShell activePath="/internal/operations/ledger/journals" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <LedgerJournalsContent
+          journalId={ledgerJournalMatch?.[1] ? decodeURIComponent(ledgerJournalMatch[1]) : undefined}
+          navigate={navigate}
+        />
+      </InternalShell>
+    );
+  }
+
   if (path === "/internal/operations/audit" || path === "/internal/operations/events/outbox" || path === "/internal/operations/events/inbox") {
     return (
       <InternalShell activePath={path} currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
@@ -360,13 +375,46 @@ export const InternalApp = ({
     );
   }
 
-  const adaDetailMatch = path.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)(?:\/(instruments|linked-instruments)(?:\/(new|success|circle\/confirm|circle\/success))?)?$/);
-  if (path === "/internal/operations/accounts-of-digital-asset" || path === "/internal/operations/accounts-of-digital-asset/new" || path === "/internal/operations/accounts-of-digital-asset/success" || adaDetailMatch) {
+  const fundingInstructionOrdersMatch = path.match(/^\/internal\/operations\/funding-instructions(?:\/([^/]+))?\/orders$/);
+  if (path === "/internal/operations/funding-instructions/orders" || fundingInstructionOrdersMatch) {
+    return (
+      <InternalShell activePath="/internal/operations/funding-instructions/orders" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <InternalFundingInstructionOrderConsoleContent
+          fundingInstructionId={fundingInstructionOrdersMatch?.[1] ? decodeURIComponent(fundingInstructionOrdersMatch[1]) : undefined}
+          navigate={navigate}
+        />
+      </InternalShell>
+    );
+  }
+
+  const fundingInstructionMatch = path.match(/^\/internal\/operations\/funding-instructions(?:\/([^/]+))?$/);
+  if (path === "/internal/operations/funding-instructions" || fundingInstructionMatch) {
+    return (
+      <InternalShell activePath="/internal/operations/funding-instructions" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <InternalFundingInstructionContent
+          fundingInstructionId={fundingInstructionMatch?.[1] ? decodeURIComponent(fundingInstructionMatch[1]) : undefined}
+          navigate={navigate}
+        />
+      </InternalShell>
+    );
+  }
+
+  const adaDetailMatch = path.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)(?:\/(instruments|linked-instruments)(?:\/(new|success|circle\/confirm|circle\/success|fiat\/new|fiat\/success|fiat\/details)(?:\/([^/]+))?)?)?$/);
+  const adaStatementMatch = path.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)\/statements$/);
+  const adaSettlementAnalyticsMatch = path.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)\/settlement-analytics$/);
+  const adaAccountControlMatch = path.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)\/account-control$/);
+  if (path === "/internal/operations/accounts-of-digital-asset" || path === "/internal/operations/accounts-of-digital-asset/new" || path === "/internal/operations/accounts-of-digital-asset/success" || adaDetailMatch || adaStatementMatch || adaSettlementAnalyticsMatch || adaAccountControlMatch) {
     const mode =
       path === "/internal/operations/accounts-of-digital-asset/new"
         ? "new"
         : path === "/internal/operations/accounts-of-digital-asset/success"
           ? "success"
+          : adaAccountControlMatch
+            ? "accountControl"
+          : adaSettlementAnalyticsMatch
+            ? "settlementAnalytics"
+            : adaStatementMatch
+              ? "statements"
           : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "new"
             ? "linkRail"
             : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "success"
@@ -375,6 +423,12 @@ export const InternalApp = ({
                 ? "circleConfirm"
                 : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "circle/success"
                   ? "circleSuccess"
+                  : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "fiat/new"
+                    ? "linkFiat"
+                  : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "fiat/success"
+                    ? "linkFiatSuccess"
+                    : adaDetailMatch?.[2] === "linked-instruments" && adaDetailMatch?.[3] === "fiat/details"
+                      ? "linkFiatDetail"
               : adaDetailMatch?.[2] === "instruments" || adaDetailMatch?.[2] === "linked-instruments"
             ? "instruments"
             : adaDetailMatch
@@ -383,7 +437,12 @@ export const InternalApp = ({
 
     return (
       <InternalShell activePath="/internal/operations/accounts-of-digital-asset" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
-        <AdaManagementContent accountId={adaDetailMatch?.[1]} mode={mode} navigate={navigate} />
+        <AdaManagementContent
+          accountId={adaDetailMatch?.[1] ?? adaStatementMatch?.[1] ?? adaSettlementAnalyticsMatch?.[1] ?? adaAccountControlMatch?.[1]}
+          fiatLinkId={adaDetailMatch?.[4] ? decodeURIComponent(adaDetailMatch[4]) : undefined}
+          mode={mode}
+          navigate={navigate}
+        />
       </InternalShell>
     );
   }

@@ -1,0 +1,447 @@
+.ada-settlement-analytics-scope {
+  --asa-background: #f9f9f9;
+  --asa-surface: #f9f9f9;
+  --asa-surface-container: #eeeeee;
+  --asa-primary: #000000;
+  --asa-on-primary: #ffffff;
+  --asa-secondary: #5e5e5e;
+  --asa-hairline: #e0e0e0;
+  --asa-canvas-soft: #f5f5f5;
+  --asa-status-active: #000000;
+  --asa-status-pending: #757575;
+  --asa-font-display: "Libre Caslon Text", Georgia, serif;
+  --asa-font-body: "Libre Franklin", ui-sans-serif, system-ui, sans-serif;
+  --asa-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  background: var(--asa-background);
+}
+
+.ada-settlement-analytics-scope .asa-shell {
+  box-sizing: border-box;
+  margin: 0;
+  max-width: 1320px;
+  padding: 20px 0 0 24px;
+  width: 100%;
+}
+
+.ada-settlement-analytics-scope .asa-header {
+  align-items: end;
+  border-bottom: 1px solid var(--asa-hairline);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding-bottom: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-header h1 {
+  color: var(--asa-primary);
+  font-family: var(--asa-font-display);
+  font-size: 32px;
+  font-weight: 400;
+  letter-spacing: -0.4px;
+  line-height: 36px;
+  margin: 0;
+}
+
+.ada-settlement-analytics-scope .asa-header p {
+  color: var(--asa-secondary);
+  font-family: var(--asa-font-body);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.4px;
+  line-height: 14px;
+  margin: 4px 0 0;
+}
+
+.ada-settlement-analytics-scope .asa-header button,
+.ada-settlement-analytics-scope .asa-throughput-card header .asa-range-tabs span,
+.ada-settlement-analytics-scope .asa-table-card header button {
+  align-items: center;
+  background: var(--asa-surface);
+  border: 1px solid var(--asa-hairline);
+  color: var(--asa-secondary);
+  display: inline-flex;
+  font-family: var(--asa-font-body);
+  font-size: 9px;
+  font-weight: 700;
+  gap: 2px;
+  letter-spacing: 1px;
+  line-height: 12px;
+  min-height: 18px;
+  padding: 2px 4px;
+  text-transform: uppercase;
+}
+
+.ada-settlement-analytics-scope .asa-kpi-grid {
+  background: var(--asa-surface);
+  border: 1px solid var(--asa-hairline);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 20px;
+}
+
+.ada-settlement-analytics-scope .asa-kpi-grid article {
+  border-right: 1px solid var(--asa-hairline);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 16px;
+}
+
+.ada-settlement-analytics-scope .asa-kpi-grid article:last-child {
+  border-right: 0;
+}
+
+.ada-settlement-analytics-scope .asa-kpi-grid span {
+  color: var(--asa-secondary);
+  display: block;
+  font-family: var(--asa-font-body);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 12px;
+  margin-bottom: 24px;
+  text-transform: uppercase;
+}
+
+.ada-settlement-analytics-scope .asa-kpi-grid strong {
+  color: var(--asa-primary);
+  font-family: var(--asa-font-display);
+  font-size: 24px;
+  font-weight: 400;
+  letter-spacing: -0.3px;
+  line-height: 28px;
+}
+
+.ada-settlement-analytics-scope .asa-kpi-grid small {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--asa-font-body);
+  font-size: 11px;
+  gap: 2px;
+  letter-spacing: 0.4px;
+  line-height: 14px;
+  margin-top: 4px;
+}
+
+.ada-settlement-analytics-scope .asa-kpi-grid .up {
+  color: var(--asa-status-active);
+}
+
+.ada-settlement-analytics-scope .asa-kpi-grid .down,
+.ada-settlement-analytics-scope .asa-kpi-grid .flat {
+  color: var(--asa-secondary);
+}
+
+.ada-settlement-analytics-scope .asa-main-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.ada-settlement-analytics-scope .asa-throughput-card {
+  border: 1px solid var(--asa-hairline);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ada-settlement-analytics-scope .asa-throughput-card header {
+  align-items: center;
+  border-bottom: 1px solid var(--asa-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-throughput-card h3,
+.ada-settlement-analytics-scope .asa-side-card h3,
+.ada-settlement-analytics-scope .asa-table-card h3 {
+  font-family: var(--asa-font-body);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.28px;
+  line-height: 18px;
+  margin: 0;
+}
+
+.ada-settlement-analytics-scope .asa-range-tabs {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.ada-settlement-analytics-scope .asa-range-tabs .active {
+  background: var(--asa-primary);
+  border-color: var(--asa-primary);
+  color: var(--asa-on-primary);
+}
+
+.ada-settlement-analytics-scope .asa-throughput-chart {
+  background:
+    linear-gradient(to right, var(--asa-hairline) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--asa-hairline) 1px, transparent 1px),
+    var(--asa-canvas-soft);
+  background-size: 20px 20px;
+  min-height: 200px;
+  padding: 16px;
+  position: relative;
+}
+
+.ada-settlement-analytics-scope .asa-throughput-chart svg {
+  height: 100%;
+  left: 16px;
+  position: absolute;
+  top: 16px;
+  width: calc(100% - 32px);
+}
+
+.ada-settlement-analytics-scope .asa-x-axis,
+.ada-settlement-analytics-scope .asa-y-axis {
+  color: var(--asa-secondary);
+  font-family: var(--asa-font-mono);
+  font-size: 10px;
+  line-height: 12px;
+  position: absolute;
+}
+
+.ada-settlement-analytics-scope .asa-x-axis {
+  bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  left: 16px;
+  right: 16px;
+}
+
+.ada-settlement-analytics-scope .asa-y-axis {
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  left: 4px;
+  top: 16px;
+}
+
+.ada-settlement-analytics-scope .asa-side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-side-card {
+  background: var(--asa-surface);
+  border: 1px solid var(--asa-hairline);
+  padding: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-side-header {
+  align-items: start;
+  color: var(--asa-secondary);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-sector-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-sector-row {
+  color: var(--asa-secondary);
+  display: flex;
+  font-family: var(--asa-font-body);
+  font-size: 11px;
+  justify-content: space-between;
+  line-height: 14px;
+  margin-bottom: 2px;
+}
+
+.ada-settlement-analytics-scope .asa-sector-row span:last-child {
+  color: var(--asa-primary);
+  font-family: var(--asa-font-mono);
+}
+
+.ada-settlement-analytics-scope .asa-bar {
+  background: var(--asa-canvas-soft);
+  border: 1px solid var(--asa-hairline);
+  height: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-bar > div {
+  background: var(--asa-primary);
+  height: 100%;
+}
+
+.ada-settlement-analytics-scope .asa-attribution-list {
+  border-top: 1px solid var(--asa-hairline);
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+}
+
+.ada-settlement-analytics-scope .asa-attribution-list li {
+  border-bottom: 1px solid var(--asa-hairline);
+  padding-bottom: 6px;
+}
+
+.ada-settlement-analytics-scope .asa-attribution-list li > div:first-child {
+  align-items: center;
+  color: var(--asa-secondary);
+  display: inline-flex;
+  font-family: var(--asa-font-body);
+  font-size: 11px;
+  gap: 4px;
+  line-height: 14px;
+}
+
+.ada-settlement-analytics-scope .asa-attribution-list li > span {
+  color: var(--asa-primary);
+  float: right;
+  font-family: var(--asa-font-mono);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.ada-settlement-analytics-scope .asa-attribution-list .dot {
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+}
+
+.ada-settlement-analytics-scope .asa-attribution-list .dot-1 {
+  background: var(--asa-primary);
+}
+
+.ada-settlement-analytics-scope .asa-attribution-list .dot-2 {
+  border: 1px solid var(--asa-primary);
+}
+
+.ada-settlement-analytics-scope .asa-attribution-list .dot-3 {
+  background: #c7c6c6;
+  border: 1px solid var(--asa-hairline);
+}
+
+.ada-settlement-analytics-scope .asa-table-card {
+  background: var(--asa-surface);
+  border: 1px solid var(--asa-hairline);
+  margin-top: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-table-card header {
+  align-items: center;
+  border-bottom: 1px solid var(--asa-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding: 8px;
+}
+
+.ada-settlement-analytics-scope .asa-table-card header button {
+  border: 0;
+  padding: 0;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap {
+  overflow-x: auto;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap table {
+  border-collapse: collapse;
+  min-width: 920px;
+  width: 100%;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap th,
+.ada-settlement-analytics-scope .asa-table-wrap td {
+  border-bottom: 1px solid var(--asa-hairline);
+  font-family: var(--asa-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  padding: 6px;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap th {
+  background: var(--asa-canvas-soft);
+  color: var(--asa-secondary);
+  font-family: var(--asa-font-body);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap th:first-child,
+.ada-settlement-analytics-scope .asa-table-wrap td:first-child {
+  padding-left: 12px;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap th:last-child,
+.ada-settlement-analytics-scope .asa-table-wrap td:last-child {
+  padding-right: 12px;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap td:nth-child(2) {
+  color: var(--asa-primary);
+  font-family: var(--asa-font-body);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap td:nth-child(3) {
+  color: var(--asa-secondary);
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap .rail-chip {
+  border: 1px solid var(--asa-hairline);
+  display: inline-flex;
+  padding: 2px;
+  text-transform: uppercase;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap .status-chip {
+  align-items: center;
+  border: 1px solid var(--asa-primary);
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px 4px;
+  text-transform: uppercase;
+}
+
+.ada-settlement-analytics-scope .asa-table-wrap .status-chip::before {
+  background: var(--asa-primary);
+  content: "";
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+}
+
+.ada-settlement-analytics-scope .right {
+  text-align: right;
+}
+
+@media (max-width: 1100px) {
+  .ada-settlement-analytics-scope .asa-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ada-settlement-analytics-scope .asa-main-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .ada-settlement-analytics-scope .asa-shell {
+    padding-left: 14px;
+    padding-top: 14px;
+  }
+
+  .ada-settlement-analytics-scope .asa-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ada-settlement-analytics-scope .asa-header {
+    align-items: start;
+    flex-direction: column;
+    gap: 8px;
+  }
+}

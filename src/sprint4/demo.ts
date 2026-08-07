@@ -45,7 +45,7 @@ const obligation = sprint3.obligations.createTradePayable(ctx, {
   supplierBusinessClientId: supplier.id,
   amountMinorUnits: "700000000",
   dueDate: "2026-10-15",
-  externalReference: "INV-S4-DEMO"
+  reference: "INV-S4-DEMO"
 });
 sprint3.obligations.approveObligation(ctx, obligation.id);
 sprint3.obligations.activateReservation(ctx, {

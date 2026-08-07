@@ -1,8 +1,12 @@
 import {
   ArrowLeft,
+  ArrowRight,
   ArrowUpRight,
+  BadgeCheck,
   Calendar,
+  Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Circle,
   CircleDollarSign,
@@ -10,27 +14,35 @@ import {
   Download,
   Edit2,
   Eye,
+  Fingerprint,
   Filter,
   History,
   Info,
   Link as LinkIcon,
   Lock,
+  Landmark,
   MoreHorizontal,
   Network,
   PersonStanding,
   Plus,
+  RefreshCw,
+  ShieldCheck,
   SlidersHorizontal,
+  User,
   X
 } from "lucide-react";
 import type React from "react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { AdaAccountControlContent } from "./AdaAccountControlContent.js";
+import { AdaSettlementAnalyticsContent } from "./AdaSettlementAnalyticsContent.js";
+import { AdaStatementContent } from "./AdaStatementContent.js";
 import "./ada-management-scope.css";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 const gttApiKey = import.meta.env.VITE_GTT_API_KEY ?? "gtt_live_api_key_dev.dev_secret";
 
-type AdaRouteMode = "list" | "new" | "success" | "detail" | "instruments" | "linkRail" | "linkRailSuccess" | "circleConfirm" | "circleSuccess";
+type AdaRouteMode = "list" | "new" | "success" | "detail" | "instruments" | "linkRail" | "linkRailSuccess" | "circleConfirm" | "circleSuccess" | "linkFiat" | "linkFiatSuccess" | "linkFiatDetail" | "statements" | "settlementAnalytics" | "accountControl";
 
 interface AdaAccount {
   id: string;
@@ -42,6 +54,7 @@ interface AdaAccount {
   status: string;
   assetCode?: string;
   assetRail?: string;
+  metadata?: Record<string, unknown>;
   createdAt?: string;
 }
 
@@ -61,15 +74,41 @@ interface ProvisionedAdaSummary {
 interface LinkedInstrumentRail {
   id: string;
   instrumentType: string;
+  purpose?: string;
   railCode?: string;
   railName?: string;
   assetCode?: string;
-  externalReference?: string;
   status: string;
   networkCode?: string;
   isDefault?: boolean;
   provider?: string;
-  providerReferenceId?: string;
+  metadata?: {
+    walletId?: string;
+    address?: string;
+    walletAddress?: string;
+    businessWireAccountId?: string;
+    trackingRef?: string;
+  };
+}
+
+interface LinkedFiatFormInput {
+  bankName: string;
+  holderName: string;
+  purpose: string;
+  routingNumber: string;
+  accountNumber: string;
+  accountType: string;
+  allocation: string;
+  isDefault: boolean;
+  billingLine1: string;
+  billingCity: string;
+  billingDistrict: string;
+  billingPostalCode: string;
+  billingCountry: string;
+  bankAddressLine1: string;
+  bankAddressCity: string;
+  bankAddressDistrict: string;
+  bankAddressCountry: string;
 }
 
 interface LinkedFiatAccount {
@@ -77,7 +116,10 @@ interface LinkedFiatAccount {
   bankName: string;
   accountNumberLast4: string;
   routingNumber?: string;
+  purpose?: string;
+  canUpdatePurpose?: boolean;
   status: string;
+  createdAt?: string;
 }
 
 interface LinkedActivity {
@@ -98,6 +140,7 @@ interface LinkedAuditEvent {
 
 interface LinkedInstrumentsPayload {
   accountId: string;
+  account?: AdaAccount;
   circleWallets: LinkedInstrumentRail[];
   rails: LinkedInstrumentRail[];
   fiatLinks: LinkedFiatAccount[];
@@ -109,7 +152,9 @@ interface ProviderMapping {
   id: string;
   operationType: string;
   status: string;
-  providerReferenceId?: string;
+  requestPayload?: Record<string, unknown>;
+  responsePayload?: Record<string, unknown>;
+  providerRequestId?: string;
   providerAccountId?: string;
   providerWalletId?: string;
   providerAddressId?: string;
@@ -128,6 +173,22 @@ interface LinkedRailSummary {
   rail: LinkedInstrumentRail;
   correlationId: string;
   idempotencyKey: string;
+}
+
+interface LinkedFiatSummary {
+  account: AdaAccount;
+  linkedInstrument: LinkedInstrumentRail;
+  correlationId: string;
+  idempotencyKey: string;
+  form: {
+    bankName: string;
+    holderName: string;
+    purpose: string;
+    routingNumber: string;
+    accountNumberLast4: string;
+    accountType: string;
+    allocation: string;
+  };
 }
 
 interface CircleProvisionSummary {
@@ -158,12 +219,24 @@ interface TenantCircleActivationPayload {
   };
 }
 
+interface BusinessClientWalletSetPayload {
+  businessClient?: {
+    id: string;
+    legalName: string;
+    country?: string;
+    onboardingStatus: string;
+    circleWalletSetId?: string;
+  };
+}
+
 export const AdaManagementContent = ({
   accountId,
+  fiatLinkId,
   mode,
   navigate
 }: {
   accountId?: string;
+  fiatLinkId?: string;
   mode: AdaRouteMode;
   navigate: (path: string) => void;
 }) => {
@@ -174,6 +247,7 @@ export const AdaManagementContent = ({
   const [provisioned, setProvisioned] = useState<ProvisionedAdaSummary | undefined>();
   const [linkedRail, setLinkedRail] = useState<LinkedRailSummary | undefined>();
   const [circleProvisioned, setCircleProvisioned] = useState<CircleProvisionSummary | undefined>();
+  const [linkedFiat, setLinkedFiat] = useState<LinkedFiatSummary | undefined>();
 
   const load = async () => {
     setLoadStatus("loading");
@@ -236,7 +310,6 @@ export const AdaManagementContent = ({
     account: AdaAccount,
     input: {
       assetCode: string;
-      externalReference: string;
       instrumentType: string;
       isDefault: boolean;
       purpose: string;
@@ -252,7 +325,6 @@ export const AdaManagementContent = ({
       {
         body: {
           assetCode: input.assetCode,
-          externalReference: input.externalReference,
           instrumentType: input.instrumentType,
           isDefault: input.isDefault,
           purpose: input.purpose,
@@ -289,7 +361,7 @@ export const AdaManagementContent = ({
     return normalized;
   };
 
-  const provisionCircleWallet = async (account: AdaAccount) => {
+  const provisionCircleWallet = async (account: AdaAccount, network?: string) => {
     const idempotencyKey = `ada-provision-circle-${crypto.randomUUID()}`;
     const correlationId = `corr-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const payload = await apiFetch<{
@@ -298,7 +370,11 @@ export const AdaManagementContent = ({
       linkedInstrument?: LinkedInstrumentRail;
       reusedExistingMapping?: boolean;
     }>(`/accounts-of-digital-asset/${encodeURIComponent(account.id)}/provision-circle`, {
-      body: { reason: "Provision Circle developer-controlled wallet", idempotencyKey },
+      body: {
+        reason: "Provision Circle developer-controlled wallet",
+        idempotencyKey,
+        ...(network ? { walletBlockchains: [network] } : {})
+      },
       headers: {
         "idempotency-key": idempotencyKey,
         "x-correlation-id": correlationId
@@ -317,6 +393,73 @@ export const AdaManagementContent = ({
     setAccounts((current) => current.map((item) => item.id === normalized.id ? normalized : item));
     setCircleProvisioned(summary);
     navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(account.id)}/linked-instruments/circle/success`);
+  };
+
+  const linkFiatAccount = async (
+    account: AdaAccount,
+    input: LinkedFiatFormInput
+  ) => {
+    const correlationId = `corr-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const idempotencyKey = `ada-fiat-${crypto.randomUUID()}`;
+    const requestBody = {
+      assetCode: account.assetCode ?? "USDC",
+      instrumentType: "fiat_wire_bank_account",
+      isDefault: input.isDefault,
+      networkCode: input.routingNumber,
+      purpose: input.purpose,
+      railCode: `fiat-${input.accountType}-${input.routingNumber}`.toLowerCase(),
+      railName: input.bankName,
+      railType: "fiat",
+      wireAccount: {
+        accountNumber: input.accountNumber,
+        routingNumber: input.routingNumber,
+        billingDetails: {
+          name: input.holderName,
+          line1: input.billingLine1,
+          city: input.billingCity,
+          district: input.billingDistrict,
+          postalCode: input.billingPostalCode,
+          country: input.billingCountry
+        },
+        bankAddress: {
+          bankName: input.bankName,
+          line1: input.bankAddressLine1,
+          city: input.bankAddressCity,
+          district: input.bankAddressDistrict,
+          country: input.bankAddressCountry
+        }
+      }
+    };
+    console.log("[Link New Bank Account: Fiat Infrastructure] Request body", requestBody);
+    const payload = await apiFetch<{ linkedInstrument: LinkedInstrumentRail }>(
+      `/accounts-of-digital-asset/${encodeURIComponent(account.id)}/linked-instruments`,
+      {
+        body: requestBody,
+        headers: {
+          "idempotency-key": idempotencyKey,
+          "x-correlation-id": correlationId
+        },
+        method: "POST"
+      }
+    );
+
+    setLinkedFiat({
+      account,
+      linkedInstrument: payload.linkedInstrument,
+      correlationId,
+      idempotencyKey,
+      form: {
+        bankName: input.bankName,
+        holderName: input.holderName,
+        purpose: input.purpose,
+        routingNumber: input.routingNumber,
+        accountNumberLast4: input.accountNumber.slice(-4),
+        accountType: input.accountType,
+        allocation: input.allocation
+      }
+    });
+
+    navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(account.id)}/linked-instruments/fiat/success`);
   };
 
   if (mode === "new") {
@@ -340,7 +483,7 @@ export const AdaManagementContent = ({
     );
   }
 
-  if (mode === "detail" || mode === "instruments" || mode === "linkRail" || mode === "linkRailSuccess" || mode === "circleConfirm" || mode === "circleSuccess") {
+  if (mode === "detail" || mode === "instruments" || mode === "linkRail" || mode === "linkRailSuccess" || mode === "circleConfirm" || mode === "circleSuccess" || mode === "linkFiat" || mode === "linkFiatSuccess" || mode === "linkFiatDetail" || mode === "statements" || mode === "settlementAnalytics" || mode === "accountControl") {
     const selectedAccount = findAdaAccount(accounts, accountId);
     if (!selectedAccount) {
       return (
@@ -367,7 +510,7 @@ export const AdaManagementContent = ({
       <AdaProvisionCircleConfirm
         account={selectedAccount}
         onBack={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/instruments`)}
-        onConfirm={() => provisionCircleWallet(selectedAccount)}
+        onConfirm={(network) => provisionCircleWallet(selectedAccount, network)}
       />
     ) : mode === "circleSuccess" ? (
       <AdaProvisionCircleSuccess
@@ -376,12 +519,47 @@ export const AdaManagementContent = ({
         onViewAda={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}`)}
         result={circleProvisioned?.account.id === selectedAccount.id ? circleProvisioned : undefined}
       />
+    ) : mode === "linkFiat" ? (
+      <AdaLinkFiatAccountView
+        account={selectedAccount}
+        onBack={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/instruments`)}
+        onSubmit={(input) => linkFiatAccount(selectedAccount, input)}
+      />
+    ) : mode === "linkFiatSuccess" ? (
+      <AdaLinkFiatAccountSuccess
+        account={selectedAccount}
+        onReturn={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/instruments`)}
+        onViewAda={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}`)}
+        summary={linkedFiat?.account.id === selectedAccount.id ? linkedFiat : undefined}
+      />
+    ) : mode === "linkFiatDetail" ? (
+      <AdaLinkedFiatAccountDetailView
+        account={selectedAccount}
+        fiatLinkId={fiatLinkId}
+        onBack={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/instruments`)}
+      />
     ) : mode === "instruments" ? (
       <AdaLinkedInstrumentsView
         account={selectedAccount}
         onBack={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}`)}
         onNewRail={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/linked-instruments/new`)}
+        onLinkFiat={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/linked-instruments/fiat/new`)}
+        onViewFiatDetails={(linkedFiatId) => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/linked-instruments/fiat/details/${encodeURIComponent(linkedFiatId)}`)}
         onProvisionCircle={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/linked-instruments/circle/confirm`)}
+      />
+    ) : mode === "statements" ? (
+      <AdaStatementContent
+        account={selectedAccount}
+        onBack={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}`)}
+      />
+    ) : mode === "settlementAnalytics" ? (
+      <AdaSettlementAnalyticsContent
+        account={selectedAccount}
+        onOpenStatement={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/statements`)}
+      />
+    ) : mode === "accountControl" ? (
+      <AdaAccountControlContent
+        account={selectedAccount}
       />
     ) : (
       <AdaDetailView
@@ -389,6 +567,9 @@ export const AdaManagementContent = ({
         onBack={() => navigate("/internal/operations/accounts-of-digital-asset")}
         onLifecycleAction={runAdaAction}
         onLinkedInstruments={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/instruments`)}
+        onAccountControl={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/account-control`)}
+        onSettlementAnalytics={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/settlement-analytics`)}
+        onStatements={() => navigate(`/internal/operations/accounts-of-digital-asset/${encodeURIComponent(selectedAccount.id)}/statements`)}
       />
     );
   }
@@ -530,12 +711,18 @@ const AdaDetailView = ({
   account,
   onBack,
   onLifecycleAction,
-  onLinkedInstruments
+  onLinkedInstruments,
+  onAccountControl,
+  onSettlementAnalytics,
+  onStatements
 }: {
   account: AdaAccount;
   onBack: () => void;
   onLifecycleAction: (account: AdaAccount, action: string, reason?: string) => Promise<AdaAccount>;
   onLinkedInstruments: () => void;
+  onAccountControl: () => void;
+  onSettlementAnalytics: () => void;
+  onStatements: () => void;
 }) => {
   const [currentAccount, setCurrentAccount] = useState(account);
   const [providerMappings, setProviderMappings] = useState<ProviderMapping[]>([]);
@@ -601,6 +788,9 @@ const AdaDetailView = ({
             <h1>{currentAccount.accountName}</h1>
           </div>
           <div>
+            <button onClick={onAccountControl} type="button"><ShieldCheck size={15} /> Account Control</button>
+            <button onClick={onSettlementAnalytics} type="button"><Circle size={15} /> Settlement Analytics</button>
+            <button onClick={onStatements} type="button"><CircleDollarSign size={15} /> ADA Statement</button>
             <button onClick={onLinkedInstruments} type="button"><Network size={15} /> Linked Instruments</button>
             <button disabled={actionStatus !== "" || normalizedStatus === "active"} onClick={() => void runAction("activate", "Activation gate review passed")} type="button"><CheckCircle2 size={15} /> Activate</button>
             <button disabled={actionStatus !== "" || normalizedStatus === "restricted" || normalizedStatus === "closed"} onClick={() => void runAction("restrict", "Manual compliance restriction")} type="button"><Lock size={15} /> Restrict</button>
@@ -623,6 +813,7 @@ const AdaDetailView = ({
               <DetailItem label="Account Name" value={currentAccount.accountName} />
               <DetailItem label="Purpose" value={capitalize(currentAccount.usePurpose)} />
               <DetailItem label="Asset / Rail" value={`${currentAccount.assetCode ?? "USDC"} / ${formatRailLabel(currentAccount.assetRail)}`} />
+              <DetailItem label="Business Client Wallet Set ID" value={latestMapping?.providerAccountId ?? "Not provisioned"} />
               <DetailItem label="Circle Wallet ID" value={latestMapping?.providerWalletId ?? "Not provisioned"} />
               <DetailItem label="Circle Wallet Address" value={latestMapping?.providerAddressId ?? "Not provisioned"} />
             </div>
@@ -688,7 +879,7 @@ const AdaDetailView = ({
   );
 };
 
-const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail, onProvisionCircle }: { account: AdaAccount; onBack: () => void; onNewRail: () => void; onProvisionCircle: () => void }) => {
+const AdaLinkedInstrumentsView = ({ account, onBack, onLinkFiat, onNewRail, onProvisionCircle, onViewFiatDetails }: { account: AdaAccount; onBack: () => void; onLinkFiat: () => void; onNewRail: () => void; onProvisionCircle: () => void; onViewFiatDetails: (linkedFiatId: string) => void }) => {
   const [payload, setPayload] = useState<LinkedInstrumentsPayload | undefined>();
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
@@ -769,7 +960,7 @@ const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail, onProvisionCircl
                 {circleWallets.map((wallet) => (
                   <tr key={wallet.id}>
                     <td>{wallet.railName ?? "Circle Wallet"}</td>
-                    <td><code>{wallet.externalReference ?? wallet.providerReferenceId ?? wallet.id}</code></td>
+                    <td><code>{wallet.id}</code></td>
                     <td>{wallet.networkCode ?? wallet.railCode ?? "Pending"}</td>
                     <td><StatusPill status={wallet.status} /></td>
                     <td>{wallet.isDefault ? <CheckCircle2 size={15} /> : "-"}</td>
@@ -805,7 +996,7 @@ const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail, onProvisionCircl
                 {rails.map((rail, index) => (
                   <tr key={rail.id}>
                     <td>{rail.railName ?? rail.railCode ?? rail.instrumentType}</td>
-                    <td><code>{rail.externalReference ?? rail.railCode ?? rail.id}</code></td>
+                    <td><code>{rail.railCode ?? rail.id}</code></td>
                     <td><span>{rail.instrumentType}</span></td>
                     <td><StatusPill status={rail.status} /></td>
                     <td>{index === 0 ? <CheckCircle2 size={15} /> : "—"}</td>
@@ -820,6 +1011,7 @@ const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail, onProvisionCircl
         <InstrumentSection
           actionIcon={LinkIcon}
           actionLabel="Link New Bank Account"
+          onAction={onLinkFiat}
           title="Fiat Links (Bank Accounts)"
         >
           <div className="ada-bank-grid">
@@ -834,7 +1026,10 @@ const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail, onProvisionCircl
                 </div>
                 <div>
                   <StatusPill status={bank.status} />
-                  <button type="button">Deactivate <ArrowUpRight size={14} /></button>
+                  <div className="ada-bank-actions">
+                    <button onClick={() => onViewFiatDetails(bank.id)} type="button">View Details <ArrowRight size={14} /></button>
+                    <button type="button">Deactivate <ArrowUpRight size={14} /></button>
+                  </div>
                 </div>
               </article>
             ))}
@@ -873,6 +1068,517 @@ const AdaLinkedInstrumentsView = ({ account, onBack, onNewRail, onProvisionCircl
   );
 };
 
+const AdaLinkedFiatAccountDetailView = ({
+  account,
+  fiatLinkId,
+  onBack
+}: {
+  account: AdaAccount;
+  fiatLinkId?: string;
+  onBack: () => void;
+}) => {
+  const [payload, setPayload] = useState<LinkedInstrumentsPayload | undefined>();
+  const [providerMappings, setProviderMappings] = useState<ProviderMapping[]>([]);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isAccordionOpen, setIsAccordionOpen] = useState(false);
+  const [purposeDraft, setPurposeDraft] = useState("");
+  const [purposeSaving, setPurposeSaving] = useState(false);
+  const [purposeNotice, setPurposeNotice] = useState("");
+
+  const copyStyle = {
+    addressOnFile: "Address On File",
+    cityDistrictOnFile: "City, District On File",
+    cityDistrictPostalOnFile: "City, District, Postal On File",
+    bankOnFile: "Bank On File",
+    timelineInstructionsRetrieved: "Instructions Retrieved",
+    timelineRegistrationInitiated: "Registration Initiated"
+  } as const;
+
+  const loadDetails = async ({ silent }: { silent?: boolean } = {}) => {
+    setError("");
+    if (!silent) {
+      setStatus("loading");
+    }
+    try {
+      const [instrumentsPayload, mappingsPayload] = await Promise.all([
+        apiFetch<LinkedInstrumentsPayload>(`/accounts-of-digital-asset/${encodeURIComponent(account.id)}/linked-instruments`),
+        apiFetch<ProviderMappingsPayload>(`/accounts-of-digital-asset/${encodeURIComponent(account.id)}/provider-mappings`).catch(() => ({ accountId: account.id, mappings: [] }))
+      ]);
+      setPayload(instrumentsPayload);
+      setProviderMappings(mappingsPayload.mappings ?? []);
+      setStatus("ready");
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "linked_fiat_detail_fetch_failed";
+      if (silent && status === "ready") {
+        // Keep the current detail view mounted during refresh failures.
+        setError(message);
+        return;
+      }
+      setPayload(undefined);
+      setProviderMappings([]);
+      setStatus("error");
+      setError(message);
+    }
+  };
+
+  useEffect(() => {
+    void loadDetails();
+  }, [account.id]);
+
+  const refreshDetails = async () => {
+    setRefreshing(true);
+    try {
+      await loadDetails({ silent: true });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const fiatLinks = payload?.fiatLinks ?? [];
+  const selectedFiat = useMemo(() => {
+    if (fiatLinks.length === 0) return undefined;
+    if (fiatLinkId) return fiatLinks.find((item) => item.id === fiatLinkId) ?? fiatLinks[0];
+    const updatable = fiatLinks.find((item) => item.canUpdatePurpose);
+    return updatable ?? fiatLinks[0];
+  }, [fiatLinkId, fiatLinks]);
+
+  const purposeOptions = useMemo(() => linkedFiatPurposeOptionsForAccount(account), [account]);
+
+  useEffect(() => {
+    const defaultPurpose = purposeOptions[0]?.value ?? "minting";
+    if (!selectedFiat) {
+      setPurposeDraft(defaultPurpose);
+      setPurposeNotice("");
+      return;
+    }
+    setPurposeDraft(normalizeLinkedFiatPurpose(selectedFiat.purpose) ?? defaultPurpose);
+    setPurposeNotice("");
+  }, [purposeOptions, selectedFiat?.id, selectedFiat?.purpose]);
+
+  const wireMappings = useMemo(
+    () => providerMappings.filter((item) => /wire|fiat|bank/i.test(item.operationType)),
+    [providerMappings]
+  );
+  const latestWireMapping = wireMappings[0] ?? providerMappings[0];
+  const accountMetadata = toRecord(payload?.account?.metadata);
+  const wireFunding = toRecord(accountMetadata?.wireFunding);
+  const responsePayload = toRecord(latestWireMapping?.responsePayload);
+  const wireSetup = toRecord(responsePayload?.wireSetup);
+  const wireAccount = toRecord(wireSetup?.wireAccount);
+  const billingDetails = toRecord(wireAccount?.billingDetails);
+  const billingAddress = toRecord(billingDetails?.address);
+  const bankAddress = toRecord(wireAccount?.bankAddress);
+  const wireInstructions = toRecord(wireSetup?.wireInstructions) ?? toRecord(wireFunding?.wireInstructions);
+  const beneficiary = toRecord(wireInstructions?.beneficiary);
+  const beneficiaryAddress = toRecord(beneficiary?.address);
+  const beneficiaryBank = toRecord(wireInstructions?.beneficiaryBank);
+  const beneficiaryBankAddress = toRecord(beneficiaryBank?.address);
+
+  const trackingRef =
+    toStringOrUndefined(wireFunding?.trackingRef)
+    ?? toStringOrUndefined(wireFunding?.wireTrackingRef)
+    ?? toStringOrUndefined(wireSetup?.trackingRef)
+    ?? toStringOrUndefined(wireInstructions?.trackingRef)
+    ?? "Unavailable";
+  const businessWireAccountId =
+    toStringOrUndefined(wireFunding?.businessWireAccountId)
+    ?? toStringOrUndefined(wireSetup?.businessWireAccountId)
+    ?? latestWireMapping?.providerAccountId
+    ?? "Unavailable";
+  const providerRequestId =
+    latestWireMapping?.providerRequestId
+    ?? toStringOrUndefined(wireSetup?.providerRequestId)
+    ?? "Unavailable";
+
+  const billingName =
+    toStringOrUndefined(billingDetails?.name)
+    ?? account.businessClientName
+    ?? account.businessClientId;
+  const billingLine = addressLine([
+    toStringOrUndefined(billingAddress?.line1),
+    toStringOrUndefined(billingAddress?.line2)
+  ], copyStyle.addressOnFile);
+  const billingCityLine = addressLine([
+    toStringOrUndefined(billingAddress?.city),
+    toStringOrUndefined(billingAddress?.district),
+    toStringOrUndefined(billingAddress?.postalCode)
+  ], copyStyle.cityDistrictPostalOnFile);
+  const billingCountry = toStringOrUndefined(billingAddress?.country) ?? "US";
+
+  const bankName = selectedFiat?.bankName ?? toStringOrUndefined(bankAddress?.bankName) ?? copyStyle.bankOnFile;
+  const bankLine = addressLine([
+    toStringOrUndefined(bankAddress?.line1),
+    toStringOrUndefined(bankAddress?.line2)
+  ], copyStyle.addressOnFile);
+  const bankCityLine = addressLine([
+    toStringOrUndefined(bankAddress?.city),
+    toStringOrUndefined(bankAddress?.district)
+  ], copyStyle.cityDistrictOnFile);
+  const bankCountry = toStringOrUndefined(bankAddress?.country) ?? "US";
+
+  const beneficiaryName = toStringOrUndefined(beneficiary?.name) ?? "CIRCLE INTERNET";
+  const beneficiaryLine = addressLine([
+    toStringOrUndefined(beneficiaryAddress?.line1),
+    toStringOrUndefined(beneficiaryAddress?.line2)
+  ], copyStyle.addressOnFile);
+  const beneficiaryCityLine = addressLine([
+    toStringOrUndefined(beneficiaryAddress?.city),
+    toStringOrUndefined(beneficiaryAddress?.district),
+    toStringOrUndefined(beneficiaryAddress?.postalCode)
+  ], copyStyle.cityDistrictPostalOnFile);
+  const beneficiaryCountry = toStringOrUndefined(beneficiaryAddress?.country) ?? "SG";
+
+  const beneficiaryBankName = toStringOrUndefined(beneficiaryBank?.name) ?? "STANDARD CHARTERED BANK";
+  const beneficiaryBankLine = addressLine([
+    toStringOrUndefined(beneficiaryBankAddress?.line1),
+    toStringOrUndefined(beneficiaryBankAddress?.line2)
+  ], copyStyle.addressOnFile);
+  const beneficiaryBankCityLine = addressLine([
+    toStringOrUndefined(beneficiaryBankAddress?.city),
+    toStringOrUndefined(beneficiaryBankAddress?.district),
+    toStringOrUndefined(beneficiaryBankAddress?.postalCode)
+  ], copyStyle.cityDistrictPostalOnFile);
+  const beneficiaryBankCountry = toStringOrUndefined(beneficiaryBankAddress?.country) ?? "SG";
+
+  const beneficiaryBankRouting = toRecord(beneficiaryBank?.routingNumber);
+  const swiftCode = toStringOrUndefined(beneficiaryBankRouting?.swiftCode) ?? "Unavailable";
+  const routingMask = maskEndDigits(selectedFiat?.routingNumber, 4, "****0248");
+  const accountMask = maskEndDigits(selectedFiat?.accountNumberLast4, 4, "****7890");
+  const beneficiaryAccountMask = maskEndDigits(toStringOrUndefined(beneficiaryBank?.accountNumber), 4, "****0499");
+
+  const registerTime = latestWireMapping?.createdAt ?? selectedFiat?.createdAt;
+  const instructionsUpdated = latestWireMapping?.createdAt ?? selectedFiat?.createdAt;
+  const lastUpdated = payload?.audit?.[0]?.createdAt ?? instructionsUpdated;
+
+  const registerResponsePreview = {
+    status: latestWireMapping?.status ?? "pending",
+    providerId: providerRequestId
+  };
+  const instructionsResponsePreview = {
+    beneficiary: beneficiaryName,
+    bank: beneficiaryBankName
+  };
+
+  const rawPreview = JSON.stringify({
+    registerResponse: registerResponsePreview,
+    instructionsResponse: instructionsResponsePreview
+  }, null, 2);
+
+  const copyValue = async (value: string) => {
+    if (!value || value === "Unavailable") return;
+    await navigator.clipboard?.writeText(value);
+  };
+
+  const updatePurpose = async () => {
+    if (!selectedFiat) return;
+    if (!selectedFiat.canUpdatePurpose) {
+      setPurposeNotice("Purpose reset unavailable for this legacy wire account record.");
+      return;
+    }
+    setPurposeSaving(true);
+    setPurposeNotice("");
+    const idempotencyKey = `ada-fiat-purpose-${crypto.randomUUID()}`;
+    const correlationId = `corr-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    try {
+      const payload = await apiFetch<{ linkedInstrument: LinkedInstrumentRail }>(
+        `/accounts-of-digital-asset/${encodeURIComponent(account.id)}/linked-instruments/${encodeURIComponent(selectedFiat.id)}`,
+        {
+          body: { purpose: purposeDraft },
+          headers: {
+            "idempotency-key": idempotencyKey,
+            "x-correlation-id": correlationId
+          },
+          method: "PATCH"
+        }
+      );
+      const updatedPurpose = normalizeLinkedFiatPurpose(payload.linkedInstrument.purpose) ?? purposeDraft;
+      setPurposeDraft(updatedPurpose);
+      setPayload((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          fiatLinks: current.fiatLinks.map((item) => item.id === selectedFiat.id ? { ...item, purpose: updatedPurpose } : item)
+        };
+      });
+      setPurposeNotice(`Purpose updated to ${linkedFiatPurposeLabel(updatedPurpose)}.`);
+      await loadDetails({ silent: true });
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "linked_fiat_purpose_update_failed";
+      setPurposeNotice(`Unable to update purpose: ${message}`);
+    } finally {
+      setPurposeSaving(false);
+    }
+  };
+
+  return (
+    <section className="ada-scope">
+      <div className="ada-wire-view-shell">
+        <nav className="ada-breadcrumbs" aria-label="Linked wire account breadcrumb">
+          <button onClick={onBack} type="button">Linked Instruments</button>
+          <ChevronRight size={13} />
+          <span>Linked Wire Account</span>
+        </nav>
+
+        <header className="ada-wire-view-header">
+          <div>
+            <h1>Linked Wire Account</h1>
+            <div className="ada-wire-view-badges">
+              <div>
+                <span>ID</span>
+                <code>{selectedFiat?.id ?? "Unavailable"}</code>
+              </div>
+              <div className="status">
+                <span>STATUS</span>
+                <code>{(selectedFiat?.status ?? "pending").toUpperCase()}</code>
+              </div>
+              <div>
+                <span>TRACKING REF</span>
+                <code>{trackingRef}</code>
+              </div>
+              <div>
+                <span>PURPOSE</span>
+                <code>{linkedFiatPurposeLabel(selectedFiat?.purpose ?? account.usePurpose)}</code>
+              </div>
+            </div>
+          </div>
+
+          <div className="ada-wire-view-header-meta">
+            <div>
+              <Fingerprint size={14} />
+              <span>Virtual Account Enabled</span>
+            </div>
+            <p>
+              Last Updated: <code>{formatIsoStamp(lastUpdated)}</code>
+            </p>
+          </div>
+        </header>
+
+        {status === "error" || error ? <div className="ada-management-notice">Unable to load linked wire account details: {error || "linked_fiat_detail_fetch_failed"}</div> : null}
+        {status === "loading" ? <div className="ada-management-notice">Loading linked wire account details...</div> : null}
+        {status === "ready" && !selectedFiat ? <div className="ada-management-notice">No linked wire account found for this ADA account.</div> : null}
+
+        {status === "ready" && selectedFiat ? (
+          <div className="ada-wire-view-layout">
+            <div className="ada-wire-view-main">
+              <section className="ada-wire-view-section">
+                <h3>Wire Account Registration Profile</h3>
+                <div className="ada-wire-view-profile-grid">
+                  <article>
+                    <h4><User size={14} /> Billing Details</h4>
+                    <div>
+                      <strong>{billingName}</strong>
+                      <p>
+                        {billingLine}<br />
+                        {billingCityLine}<br />
+                        {billingCountry}
+                      </p>
+                    </div>
+                  </article>
+
+                  <article>
+                    <h4><Landmark size={14} /> Bank Details</h4>
+                    <div>
+                      <strong>{bankName}</strong>
+                      <p>
+                        {bankLine}<br />
+                        {bankCityLine}<br />
+                        {bankCountry}
+                      </p>
+                    </div>
+                  </article>
+
+                  <div className="ada-wire-view-mask-row">
+                    <div>
+                      <span>Account Number</span>
+                      <code>{accountMask}</code>
+                    </div>
+                    <div>
+                      <span>Routing Number</span>
+                      <code>{routingMask}</code>
+                    </div>
+                  </div>
+
+                  <div className="ada-wire-view-meta-row">
+                    <div>
+                      <span>Register Time</span>
+                      <code>{formatIsoStamp(registerTime)}</code>
+                    </div>
+                    <div>
+                      <span>Provider Req ID</span>
+                      <code>{providerRequestId}</code>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="ada-wire-view-section">
+                <h3>Wire Instructions Profile</h3>
+                <div className="ada-wire-view-instructions">
+                  <div>
+                    <h4>Beneficiary</h4>
+                    <strong>{beneficiaryName}</strong>
+                    <p>
+                      {beneficiaryLine}<br />
+                      {beneficiaryCityLine}<br />
+                      Country: {beneficiaryCountry}
+                    </p>
+                  </div>
+                  <div>
+                    <h4>Beneficiary Bank</h4>
+                    <strong>{beneficiaryBankName}</strong>
+                    <p>
+                      {beneficiaryBankLine}<br />
+                      {beneficiaryBankCityLine}<br />
+                      Country: {beneficiaryBankCountry}
+                    </p>
+                    <div className="ada-wire-view-instructions-meta">
+                      <div>
+                        <span>SWIFT</span>
+                        <code>{swiftCode}</code>
+                      </div>
+                      <div>
+                        <span>CURRENCY</span>
+                        <code>{account.assetCode ?? "USD"}</code>
+                      </div>
+                      <div>
+                        <span>ROUTING</span>
+                        <code>{routingMask}</code>
+                      </div>
+                      <div>
+                        <span>ACCOUNT</span>
+                        <code>{beneficiaryAccountMask}</code>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <footer>
+                  <div>
+                    <span>Instructions Updated</span>
+                    <code>{formatIsoStamp(instructionsUpdated)}</code>
+                  </div>
+                  <div>
+                    <span>Provider Req ID</span>
+                    <code>{providerRequestId}</code>
+                  </div>
+                </footer>
+              </section>
+            </div>
+
+            <aside className="ada-wire-view-side">
+              <section className="ada-wire-side-card">
+                <h3>Operations</h3>
+                <div>
+                  <button disabled={refreshing} onClick={() => void refreshDetails()} type="button">
+                    <RefreshCw className={refreshing ? "spin" : ""} size={12} />
+                    <span>{refreshing ? "Refreshing..." : "Refresh"}</span>
+                  </button>
+                  <button onClick={() => void copyValue(trackingRef)} type="button"><Copy size={12} /> Copy Tracking Ref</button>
+                  <button onClick={() => void copyValue(businessWireAccountId)} type="button"><Copy size={12} /> Copy Business ID</button>
+                </div>
+                <div className="ada-wire-purpose-reset">
+                  <label htmlFor="linked-fiat-purpose-reset">Purpose</label>
+                  <select
+                    disabled={purposeSaving || !selectedFiat?.canUpdatePurpose}
+                    id="linked-fiat-purpose-reset"
+                    onChange={(event) => setPurposeDraft(event.target.value)}
+                    value={purposeDraft}
+                  >
+                    {purposeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                  <button
+                    disabled={purposeSaving || !selectedFiat?.canUpdatePurpose || !purposeDraft}
+                    onClick={() => void updatePurpose()}
+                    type="button"
+                  >
+                    {purposeSaving ? "Updating..." : "Reset Purpose"}
+                  </button>
+                  <small>
+                    {selectedFiat?.canUpdatePurpose
+                      ? "Updates linked-instrument routing purpose for this wire account."
+                      : "Legacy wire account record: purpose reset unavailable."}
+                  </small>
+                  {purposeNotice ? <p className={purposeNotice.startsWith("Unable") ? "error" : "success"}>{purposeNotice}</p> : null}
+                </div>
+              </section>
+
+              <section className="ada-wire-side-card">
+                <h3>Timeline</h3>
+                <div className="ada-wire-view-timeline">
+                  <article>
+                    <strong>{copyStyle.timelineInstructionsRetrieved}</strong>
+                    <code>{formatIsoStamp(instructionsUpdated)}</code>
+                  </article>
+                  <article>
+                    <strong>{copyStyle.timelineRegistrationInitiated}</strong>
+                    <code>{formatIsoStamp(registerTime)}</code>
+                  </article>
+                </div>
+              </section>
+
+              <section className={`ada-wire-side-card ${isAccordionOpen || isDrawerOpen ? "active" : ""}`}>
+                <button
+                  aria-expanded={isAccordionOpen}
+                  className="ada-wire-payload-toggle"
+                  onClick={() => {
+                    setIsAccordionOpen((open) => !open);
+                    setIsDrawerOpen(true);
+                  }}
+                  type="button"
+                >
+                  <h3>Raw Payload (Role-Gated)</h3>
+                  <ChevronDown className={isAccordionOpen ? "open" : ""} size={14} />
+                </button>
+                {isAccordionOpen ? (
+                  <div className="ada-wire-inline-payload">
+                    <pre>{rawPreview}</pre>
+                  </div>
+                ) : null}
+              </section>
+            </aside>
+          </div>
+        ) : null}
+      </div>
+
+      {isDrawerOpen ? (
+        <>
+          <button aria-label="Close payload drawer overlay" className="ada-wire-payload-overlay" onClick={() => {
+            setIsDrawerOpen(false);
+            setIsAccordionOpen(false);
+          }} type="button" />
+          <aside className="ada-wire-payload-drawer">
+            <header>
+              <h2>Audit Evidence: Raw Payload</h2>
+              <button aria-label="Close payload drawer" onClick={() => {
+                setIsDrawerOpen(false);
+                setIsAccordionOpen(false);
+              }} type="button">
+                <X size={14} />
+              </button>
+            </header>
+            <div>
+              <section>
+                <h3>Register Response</h3>
+                <pre>{JSON.stringify(registerResponsePreview, null, 2)}</pre>
+              </section>
+              <section>
+                <h3>Instructions Response</h3>
+                <pre>{JSON.stringify(instructionsResponsePreview, null, 2)}</pre>
+              </section>
+            </div>
+            <footer>
+              <p>Access Level: Administrator / Auditor</p>
+            </footer>
+          </aside>
+        </>
+      ) : null}
+    </section>
+  );
+};
+
 const AdaProvisionCircleConfirm = ({
   account,
   onBack,
@@ -880,51 +1586,83 @@ const AdaProvisionCircleConfirm = ({
 }: {
   account: AdaAccount;
   onBack: () => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: (network: string) => Promise<void>;
 }) => {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [activation, setActivation] = useState<TenantCircleActivationPayload | undefined>();
   const [activationStatus, setActivationStatus] = useState<"loading" | "ready" | "error">("loading");
   const [activationError, setActivationError] = useState("");
+  const [businessClientWalletSetId, setBusinessClientWalletSetId] = useState<string | undefined>();
+  const [existingCircleWallet, setExistingCircleWallet] = useState<LinkedInstrumentRail | undefined>();
+  const [walletStatus, setWalletStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [walletError, setWalletError] = useState("");
+  const [selectedNetwork, setSelectedNetwork] = useState("ARC-TESTNET");
 
   useEffect(() => {
     let active = true;
     setActivationStatus("loading");
     setActivationError("");
-    apiFetch<TenantCircleActivationPayload>("/tenants/current/activation")
-      .then((payload) => {
+    setWalletStatus("loading");
+    setWalletError("");
+    Promise.all([
+      apiFetch<TenantCircleActivationPayload>("/tenants/current/activation"),
+      apiFetch<BusinessClientWalletSetPayload>(`/business-clients/${encodeURIComponent(account.businessClientId)}`).catch(() => undefined),
+      apiFetch<LinkedInstrumentsPayload>(`/accounts-of-digital-asset/${encodeURIComponent(account.id)}/linked-instruments`).catch(() => undefined)
+    ])
+      .then(([activationPayload, businessClientPayload, linkedPayload]) => {
         if (!active) return;
-        setActivation(payload);
+        setActivation(activationPayload);
+        setBusinessClientWalletSetId(businessClientPayload?.businessClient?.circleWalletSetId);
         setActivationStatus("ready");
+        const availableNetworks = activationPayload.circleIntegration?.walletBlockchains?.length
+          ? activationPayload.circleIntegration.walletBlockchains
+          : activationPayload.walletSet?.walletBlockchains ?? [];
+        if (availableNetworks.length > 0) {
+          setSelectedNetwork(availableNetworks[0]!);
+        }
+        const activeCircleWallet = linkedPayload?.circleWallets?.find((wallet) => normalizeStatus(wallet.status) === "active");
+        setExistingCircleWallet(activeCircleWallet ?? linkedPayload?.circleWallets?.[0]);
+        setWalletStatus("ready");
       })
       .catch((caught) => {
         if (!active) return;
         setActivation(undefined);
+        setBusinessClientWalletSetId(undefined);
         setActivationStatus("error");
         setActivationError(caught instanceof Error ? caught.message : "tenant_activation_fetch_failed");
+        setExistingCircleWallet(undefined);
+        setWalletStatus("error");
+        setWalletError(caught instanceof Error ? caught.message : "linked_instruments_fetch_failed");
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [account.id]);
 
   const integration = activation?.circleIntegration;
   const walletSet = activation?.walletSet;
-  const walletSetId = integration?.walletSetId ?? walletSet?.walletSetId;
-  const walletSetName = integration?.walletSetName ?? walletSet?.walletSetName;
+  const walletSetId = businessClientWalletSetId;
+  const walletSetName = account.businessClientName ? `${account.businessClientName} Wallet Set` : "Business Client Wallet Set";
   const walletSetEnvironment = integration?.environment ?? walletSet?.environment;
   const walletSetStatus = integration?.status ?? walletSet?.status;
   const walletBlockchains = integration?.walletBlockchains?.length
     ? integration.walletBlockchains
     : walletSet?.walletBlockchains ?? [];
+  const selectableNetworks = walletBlockchains.length > 0 ? walletBlockchains : ["ARC-TESTNET", "ARC", "MATIC-AMOY", "ETH-SEPOLIA", "ARB-SEPOLIA", "BASE-SEPOLIA", "OP-SEPOLIA"];
   const walletAccountType = integration?.walletAccountType ?? walletSet?.walletAccountType ?? "SCA";
+  const existingWalletId = existingCircleWallet?.metadata?.walletId ?? "Unavailable";
+  const existingWalletAddress =
+    existingCircleWallet?.metadata?.address
+    ?? existingCircleWallet?.metadata?.walletAddress
+    ?? existingCircleWallet?.metadata?.walletId
+    ?? "Unavailable";
 
   const confirm = async () => {
     setSubmitting(true);
     setSubmitError("");
     try {
-      await onConfirm();
+      await onConfirm(selectedNetwork);
     } catch (caught) {
       setSubmitError(caught instanceof Error ? caught.message : "circle_wallet_provision_failed");
       setSubmitting(false);
@@ -963,24 +1701,49 @@ const AdaProvisionCircleConfirm = ({
           <section className="ada-link-rail-section">
             <h2>02. Circle Wallet Behavior</h2>
             <div className="ada-circle-confirm-list">
-              <div><Circle size={17} /><span>A developer-controlled Circle wallet will be created using the active tenant Circle wallet set.</span></div>
+              <div><Circle size={17} /><span>A developer-controlled Circle wallet will be created using this business client's wallet set.</span></div>
               <div><LinkIcon size={17} /><span>The created wallet is persisted as a <code>circle_wallet</code> linked instrument.</span></div>
-              <div><CheckCircle2 size={17} /><span>If a verified active Circle wallet already exists, the existing wallet will be reused.</span></div>
+              <div><CheckCircle2 size={17} /><span>Legacy tenant-level wallet mappings are ignored. Provisioning confirms business-client wallet set and wallet address.</span></div>
             </div>
           </section>
 
           <section className="ada-link-rail-section">
-            <h2>03. Tenant Circle Wallet Set</h2>
-            {activationStatus === "error" ? <div className="ada-management-notice">Unable to load tenant wallet set: {activationError}</div> : null}
+            <h2>03. Business Client Wallet Set</h2>
+            {activationStatus === "error" ? <div className="ada-management-notice">Unable to load wallet set context: {activationError}</div> : null}
             <div className="ada-circle-confirm-grid">
               <DetailItem label="Wallet Set Name" value={activationStatus === "loading" ? "Loading..." : walletSetName ?? "Not configured"} />
-              <DetailItem label="Wallet Set ID" value={activationStatus === "loading" ? "Loading..." : walletSetId ?? "Not configured"} />
+              <DetailItem label="Wallet Set ID" value={activationStatus === "loading" ? "Loading..." : walletSetId ?? "Will be created on provision"} />
               <DetailItem label="Environment" value={activationStatus === "loading" ? "Loading..." : walletSetEnvironment ?? "Unavailable"} />
               <DetailItem label="Network Scope" value={activationStatus === "loading" ? "Loading..." : walletBlockchains.join(", ") || "Not configured"} />
               <DetailItem label="Wallet Type" value={activationStatus === "loading" ? "Loading..." : walletAccountType} />
               <DetailItem label="Activation Status" value={activationStatus === "loading" ? "Loading..." : capitalize(walletSetStatus ?? "draft")} />
               <DetailItem label="Provider" value="Circle" />
             </div>
+            <div className="ada-circle-network-picker">
+              <label>
+                <span>Provision Network</span>
+                <select onChange={(event) => setSelectedNetwork(event.target.value)} value={selectedNetwork}>
+                  {selectableNetworks.map((network) => <option key={network} value={network}>{network}</option>)}
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section className="ada-link-rail-section">
+            <h2>04. Existing Circle Wallet (If Already Provisioned)</h2>
+            {walletStatus === "error" ? <div className="ada-management-notice">Unable to load linked wallet details: {walletError}</div> : null}
+            {walletStatus === "loading" ? <p className="ada-empty-line">Loading linked wallet details...</p> : null}
+            {walletStatus === "ready" && existingCircleWallet ? (
+              <div className="ada-circle-confirm-grid">
+                <DetailItem label="Wallet ID" value={existingWalletId} />
+                <DetailItem label="Wallet Address" value={existingWalletAddress} />
+                <DetailItem label="Network" value={existingCircleWallet.networkCode ?? "Tenant default"} />
+                <DetailItem label="Instrument Status" value={capitalize(existingCircleWallet.status)} />
+              </div>
+            ) : null}
+            {walletStatus === "ready" && !existingCircleWallet ? (
+              <p className="ada-empty-line">No Circle wallet is linked yet. Confirm to provision a new wallet for this ADA account.</p>
+            ) : null}
           </section>
 
           {submitError ? <div className="form-error">Circle wallet provisioning failed: {submitError}</div> : null}
@@ -1036,8 +1799,18 @@ const AdaProvisionCircleSuccess = ({
             <div className="ada-link-success-grid">
               <DetailItem label="Linked Instrument ID" value={wallet?.id ?? "Unavailable"} />
               <DetailItem label="Instrument Type" value={formatActivityType(wallet?.instrumentType ?? "circle_wallet")} />
-              <DetailItem label="Wallet ID" value={wallet?.providerReferenceId ?? operation?.providerWalletId ?? "Unavailable"} />
-              <DetailItem label="Wallet Address" value={wallet?.externalReference ?? operation?.providerAddressId ?? "Unavailable"} />
+              <DetailItem label="Business Client Wallet Set ID" value={operation?.providerAccountId ?? "Unavailable"} />
+              <DetailItem label="Wallet ID" value={wallet?.metadata?.walletId ?? operation?.providerWalletId ?? "Unavailable"} />
+              <DetailItem
+                label="Wallet Address"
+                value={
+                  wallet?.metadata?.address
+                  ?? wallet?.metadata?.walletAddress
+                  ?? wallet?.metadata?.walletId
+                  ?? operation?.providerAddressId
+                  ?? "Unavailable"
+                }
+              />
               <DetailItem label="Network" value={wallet?.networkCode ?? "Tenant default"} />
               <DetailItem label="Status" value={capitalize(wallet?.status ?? operation?.status ?? "active")} />
             </div>
@@ -1048,12 +1821,22 @@ const AdaProvisionCircleSuccess = ({
             <TraceLine label="Correlation ID" value={result?.correlationId ?? operation?.correlationId ?? "Unavailable"} />
             <TraceLine label="Idempotency Key" value={result?.idempotencyKey ?? operation?.idempotencyKey ?? "Unavailable"} />
             <TraceLine label="Circle Operation ID" value={operation?.id ?? "Unavailable"} />
-            <TraceLine label="Provider Request ID" value={operation?.providerReferenceId ?? "Unavailable"} />
+            <TraceLine label="Provider Request ID" value={operation?.providerRequestId ?? "Unavailable"} />
           </section>
 
           <section className="ada-circle-copy-grid">
-            <CopyLine label="Wallet ID" onCopy={copy} value={wallet?.providerReferenceId ?? operation?.providerWalletId ?? "Unavailable"} />
-            <CopyLine label="Wallet Address" onCopy={copy} value={wallet?.externalReference ?? operation?.providerAddressId ?? "Unavailable"} />
+            <CopyLine label="Wallet ID" onCopy={copy} value={wallet?.metadata?.walletId ?? operation?.providerWalletId ?? "Unavailable"} />
+            <CopyLine
+              label="Wallet Address"
+              onCopy={copy}
+              value={
+                wallet?.metadata?.address
+                ?? wallet?.metadata?.walletAddress
+                ?? wallet?.metadata?.walletId
+                ?? operation?.providerAddressId
+                ?? "Unavailable"
+              }
+            />
           </section>
 
           <footer>
@@ -1075,7 +1858,6 @@ const AdaLinkRailView = ({
   onBack: () => void;
   onSubmit: (input: {
     assetCode: string;
-    externalReference: string;
     instrumentType: string;
     isDefault: boolean;
     purpose: string;
@@ -1096,11 +1878,9 @@ const AdaLinkRailView = ({
     const network = stringForm(form, "network", "ethereum");
     const purpose = stringForm(form, "purpose", "settlement");
     const assetCode = stringForm(form, "assetCode", "USDC");
-    const externalReference = stringForm(form, "externalReference");
     try {
       await onSubmit({
         assetCode,
-        externalReference,
         instrumentType: railType === "on-chain" ? "on_chain_wallet" : "fiat_wire",
         isDefault: form.get("isDefault") === "on",
         purpose,
@@ -1157,11 +1937,6 @@ const AdaLinkRailView = ({
           <section className="ada-link-rail-section">
             <h2>02. Configuration</h2>
             <div className="ada-link-rail-fields">
-              <label className="wide">
-                <span>Address / Account ID</span>
-                <input name="externalReference" placeholder={railType === "on-chain" ? "0x..." : "IBAN / account reference"} required />
-                <small>Verify the public address or account identifier before initialization.</small>
-              </label>
               <label>
                 <span>Blockchain / Network</span>
                 <select name="network">
@@ -1216,6 +1991,358 @@ const AdaLinkRailView = ({
             <div><span>Idempotency Key</span><code>Generated on submit</code></div>
           </aside>
         </form>
+      </div>
+    </section>
+  );
+};
+
+const AdaLinkFiatAccountView = ({
+  account,
+  onBack,
+  onSubmit
+}: {
+  account: AdaAccount;
+  onBack: () => void;
+  onSubmit: (input: LinkedFiatFormInput) => Promise<void>;
+}) => {
+  const [step, setStep] = useState<"form" | "saved" | "confirm">("form");
+  const [draftInput, setDraftInput] = useState<LinkedFiatFormInput | undefined>();
+  const [attested, setAttested] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [submitToast, setSubmitToast] = useState<{ message: string; providerRequestId?: string } | undefined>();
+  const purposeOptions = useMemo(() => linkedFiatPurposeOptionsForAccount(account), [account]);
+
+  const parseDraftInput = (form: FormData): LinkedFiatFormInput => ({
+    bankName: stringForm(form, "bankName"),
+    holderName: stringForm(form, "holderName"),
+    purpose: stringForm(form, "purpose", purposeOptions[0]?.value ?? account.usePurpose),
+    routingNumber: stringForm(form, "routingNumber"),
+    accountNumber: stringForm(form, "accountNumber"),
+    accountType: "corporate",
+    allocation: "minting",
+    isDefault: true,
+    billingLine1: stringForm(form, "billingLine1"),
+    billingCity: stringForm(form, "billingCity"),
+    billingDistrict: stringForm(form, "billingDistrict"),
+    billingPostalCode: stringForm(form, "billingPostalCode"),
+    billingCountry: stringForm(form, "billingCountry"),
+    bankAddressLine1: stringForm(form, "bankAddressLine1"),
+    bankAddressCity: stringForm(form, "bankAddressCity"),
+    bankAddressDistrict: stringForm(form, "bankAddressDistrict"),
+    bankAddressCountry: stringForm(form, "bankAddressCountry")
+  });
+
+  const handleDraftSave = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setDraftInput(parseDraftInput(form));
+    setStep("saved");
+    setSubmitError("");
+    setSubmitToast(undefined);
+  };
+
+  const handleAuthorizeProvision = async () => {
+    if (!draftInput) return;
+    setSubmitting(true);
+    setSubmitError("");
+    setSubmitToast(undefined);
+    try {
+      await onSubmit(draftInput);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "fiat_link_create_failed";
+      const providerRequestId = caught instanceof ApiRequestError
+        ? caught.providerRequestId
+        : parseProviderRequestIdFromMessage(message);
+      setSubmitError(message);
+      setSubmitToast({
+        message: "Unable to link bank account",
+        providerRequestId
+      });
+      setSubmitting(false);
+    }
+  };
+
+  const maskedAccountNumber = draftInput?.accountNumber
+    ? `**** **** ${draftInput.accountNumber.slice(-4)}`
+    : "Unavailable";
+
+  const formDefaults = draftInput;
+
+  const copyProviderRequestId = async () => {
+    if (!submitToast?.providerRequestId) return;
+    try {
+      await navigator.clipboard.writeText(submitToast.providerRequestId);
+      setSubmitToast({ ...submitToast, message: "Provider Request ID copied" });
+    } catch {
+      setSubmitToast({ ...submitToast, message: "Copy failed. Please copy manually." });
+    }
+  };
+
+  return (
+    <section className="ada-scope">
+      <div className="ada-fiat2-shell">
+        <nav className="ada-breadcrumbs" aria-label="Link new bank account breadcrumb">
+          <button onClick={onBack} type="button">Linked Instruments</button>
+          <ChevronRight size={13} />
+          <span>Link New Bank Account</span>
+        </nav>
+
+        {step === "form" ? (
+          <main className="ada-fiat2-layout">
+            <section className="ada-fiat2-context">
+              <h1>Link New Bank Account: Circle Infrastructure</h1>
+              <p>
+                Establish a secure fiat rail for institutional minting and redemption operations. All accounts are subject to rigorous automated KYC/AML verification upon linkage. Ensure the institutional name exactly matches your platform verification profile to avoid settlement delays.
+              </p>
+              <aside>
+                <h2>Security Protocol Active</h2>
+                <p>Information is transmitted via highly encrypted channels. Linking process may require a 1-cent micro-deposit confirmation taking 1-2 business days depending on the underlying banking network.</p>
+              </aside>
+            </section>
+
+            <form className="ada-fiat2-form-card" onSubmit={handleDraftSave}>
+              <header>
+                <h2><Landmark size={18} /> Circle Registration Requirements</h2>
+              </header>
+
+              <div className="ada-fiat2-form-grid">
+                <h3>Banking Infrastructure</h3>
+                <label>
+                  <span>Routing Number (ABA/SWIFT)</span>
+                  <input defaultValue={formDefaults?.routingNumber ?? ""} id="routingNumber" name="routingNumber" placeholder="9-Digit ABA or SWIFT Code" required />
+                </label>
+                <label>
+                  <span>Account Number</span>
+                  <input defaultValue={formDefaults?.accountNumber ?? ""} id="accountNumber" name="accountNumber" placeholder="e.g. 00123456789" required />
+                </label>
+                <label>
+                  <span>Purpose</span>
+                  <select defaultValue={formDefaults?.purpose ?? purposeOptions[0]?.value ?? account.usePurpose} id="purpose" name="purpose" required>
+                    {purposeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+
+                <h3>Billing Details</h3>
+                <label className="wide">
+                  <span>Full Name (Billing Name)</span>
+                  <input
+                    defaultValue={formDefaults?.holderName ?? account.businessClientName ?? ""}
+                    id="holderName"
+                    name="holderName"
+                    placeholder="Institutional Entity Name exactly as it appears on account"
+                    required
+                  />
+                  <small>Must match the verified entity name: Ledger & Lineage Alpha Node</small>
+                </label>
+                <label className="wide">
+                  <span>Address Line 1</span>
+                  <input defaultValue={formDefaults?.billingLine1 ?? ""} id="billingLine1" name="billingLine1" required />
+                </label>
+                <label>
+                  <span>City</span>
+                  <input defaultValue={formDefaults?.billingCity ?? ""} id="billingCity" name="billingCity" required />
+                </label>
+                <label>
+                  <span>District/State</span>
+                  <input defaultValue={formDefaults?.billingDistrict ?? ""} id="billingDistrict" name="billingDistrict" required />
+                </label>
+                <label>
+                  <span>Postal Code</span>
+                  <input defaultValue={formDefaults?.billingPostalCode ?? ""} id="billingPostalCode" name="billingPostalCode" required />
+                </label>
+                <label>
+                  <span>Country</span>
+                  <input defaultValue={formDefaults?.billingCountry ?? "US"} id="billingCountry" name="billingCountry" readOnly required />
+                </label>
+
+                <h3>Bank Address</h3>
+                <label className="wide">
+                  <span>Bank Name</span>
+                  <input defaultValue={formDefaults?.bankName ?? ""} id="bankName" name="bankName" placeholder="e.g. Signature Bank, Silvergate" required />
+                </label>
+                <label className="wide">
+                  <span>Address Line 1</span>
+                  <input defaultValue={formDefaults?.bankAddressLine1 ?? ""} id="bankAddressLine1" name="bankAddressLine1" required />
+                </label>
+                <label>
+                  <span>City</span>
+                  <input defaultValue={formDefaults?.bankAddressCity ?? ""} id="bankAddressCity" name="bankAddressCity" required />
+                </label>
+                <label>
+                  <span>District/State</span>
+                  <input defaultValue={formDefaults?.bankAddressDistrict ?? ""} id="bankAddressDistrict" name="bankAddressDistrict" required />
+                </label>
+                <label>
+                  <span>Country</span>
+                  <input defaultValue={formDefaults?.bankAddressCountry ?? "US"} id="bankAddressCountry" name="bankAddressCountry" readOnly required />
+                </label>
+              </div>
+
+              <footer>
+                <button onClick={onBack} type="button">Cancel</button>
+                <button className="primary" type="submit">
+                  LINK TO CIRCLE INFRASTRUCTURE <ArrowRight size={14} />
+                </button>
+              </footer>
+            </form>
+          </main>
+        ) : null}
+
+        {step === "saved" && draftInput ? (
+          <main className="ada-fiat2-stage-card">
+            <header>
+              <div>
+                <h1>Record Saved</h1>
+                <p>The institutional bank details have been securely recorded. Provisioning to Circle requires explicit initiation.</p>
+              </div>
+              <span>PENDING VERIFICATION</span>
+            </header>
+
+            <div className="ada-fiat2-stage-grid">
+              <article>
+                <h2>Institution Details</h2>
+                <DetailItem label="Bank Name" value={draftInput.bankName} />
+                <DetailItem label="Account Name" value={draftInput.holderName} />
+                <DetailItem label="Routing Number (ABA)" value={draftInput.routingNumber} />
+                <DetailItem label="Account Number" value={maskedAccountNumber} />
+                <DetailItem label="Purpose" value={linkedFiatPurposeLabel(draftInput.purpose)} />
+                <DetailItem label="Currency" value="USD" />
+              </article>
+
+              <article>
+                <h2>Billing Profile</h2>
+                <DetailItem label="Entity Address" value={`${draftInput.billingLine1}, ${draftInput.billingCity}, ${draftInput.billingDistrict} ${draftInput.billingPostalCode}, ${draftInput.billingCountry}`} />
+                <DetailItem label="Target ADA Endpoint" value={account.id} />
+                <div>
+                  <span>Compliance Framework</span>
+                  <p><BadgeCheck size={14} /> KYB/AML Cleared</p>
+                </div>
+              </article>
+            </div>
+
+            <footer>
+              <p>Initiating provisioning will lock these details and submit a formal link request to the Circle API. This action cannot be reversed without support intervention.</p>
+              <div>
+                <button onClick={() => setStep("form")} type="button">Edit Details</button>
+                <button className="primary" onClick={() => setStep("confirm")} type="button">PROVISION TO CIRCLE <ArrowRight size={14} /></button>
+              </div>
+            </footer>
+          </main>
+        ) : null}
+
+        {step === "confirm" && draftInput ? (
+          <main className="ada-fiat2-confirm-card">
+            <header>
+              <span>Fiat Gateway</span>
+              <h1>Confirm Bank Account Linking</h1>
+              <p>
+                Review the institutional account details before finalizing authorization. This action will initialize the Circle API provisioning call and create a permanent settlement path.
+              </p>
+            </header>
+
+            <div className="ada-fiat2-confirm-grid">
+              <DetailItem label="Bank Name" value={draftInput.bankName} />
+              <DetailItem label="Account Number" value={maskedAccountNumber} />
+              <DetailItem label="Routing (ABA)" value={draftInput.routingNumber} />
+              <DetailItem label="Purpose" value={linkedFiatPurposeLabel(draftInput.purpose)} />
+              <DetailItem label="Billing Details" value={draftInput.holderName} />
+              <DetailItem label="Bank Address" value={`${draftInput.bankAddressLine1}, ${draftInput.bankAddressCity}, ${draftInput.bankAddressDistrict}, ${draftInput.bankAddressCountry}`} />
+            </div>
+
+            <label className="ada-fiat2-attestation">
+              <input checked={attested} onChange={(event) => setAttested(event.target.checked)} type="checkbox" />
+              <span>I confirm this bank account is owned by the business client and authorized for institutional wire operations.</span>
+            </label>
+
+            {submitError ? <div className="form-error">Unable to link bank account: {submitError}</div> : null}
+
+            {submitToast ? (
+              <aside className="ada-toast ada-toast-error" role="alert">
+                <div className="ada-toast-header">
+                  <strong>{submitToast.message}</strong>
+                  <button aria-label="Dismiss error toast" onClick={() => setSubmitToast(undefined)} type="button">
+                    <X size={14} />
+                  </button>
+                </div>
+                {submitToast.providerRequestId ? (
+                  <div className="ada-toast-request-id">
+                    <span>Provider Request ID</span>
+                    <div>
+                      <code>{submitToast.providerRequestId}</code>
+                      <button onClick={copyProviderRequestId} type="button"><Copy size={12} /> Copy</button>
+                    </div>
+                  </div>
+                ) : null}
+              </aside>
+            ) : null}
+
+            <footer>
+              <button disabled={submitting} onClick={() => setStep("saved")} type="button">Cancel</button>
+              <button className="primary" disabled={!attested || submitting} onClick={handleAuthorizeProvision} type="button">
+                {submitting ? "Authorizing..." : "Authorize & Provision"}
+              </button>
+            </footer>
+          </main>
+        ) : null}
+      </div>
+    </section>
+  );
+};
+
+const AdaLinkFiatAccountSuccess = ({
+  account,
+  onReturn,
+  onViewAda,
+  summary
+}: {
+  account: AdaAccount;
+  onReturn: () => void;
+  onViewAda: () => void;
+  summary?: LinkedFiatSummary;
+}) => {
+  const linked = summary?.linkedInstrument;
+  const masked = summary?.form.accountNumberLast4 ? `**** **** **** ${summary.form.accountNumberLast4}` : "Unavailable";
+
+  return (
+    <section className="ada-scope">
+      <div className="ada-fiat2-success-shell">
+        <section className="ada-fiat2-success-card">
+          <header>
+            <div><Check size={26} /></div>
+            <h1>Bank Account Linked</h1>
+            <p>The external settlement account has been successfully verified and mapped to the institutional treasury ledger.</p>
+          </header>
+
+          <div className="ada-fiat2-success-grid">
+            <article>
+              <h2>Linked Instrument</h2>
+              <DetailItem label="Institution" value={summary?.form.bankName ?? "Unavailable"} />
+              <DetailItem label="Account Identification" value={masked} />
+              <DetailItem label="Purpose Tag" value={linkedFiatPurposeLabel(summary?.form.purpose)} />
+              <DetailItem label="Status" value={capitalize(linked?.status ?? "active")} />
+            </article>
+
+            <article>
+              <h2>Ledger Mapping</h2>
+              <DetailItem label="Internal Sub-Account ID" value={account.id} />
+              <DetailItem label="Circle Account Reference" value={linked?.metadata?.businessWireAccountId ?? "Unavailable"} />
+              <DetailItem label="Routing Verification" value="Micro-deposit sequence complete" />
+              <DetailItem label="Linked Instrument ID" value={linked?.id ?? "Unavailable"} />
+            </article>
+          </div>
+
+          <section className="ada-fiat2-trace">
+            <h2>Security & Audit Proof</h2>
+            <TraceLine label="Correlation ID" value={summary?.correlationId ?? "Unavailable"} />
+            <TraceLine label="Idempotency Key" value={summary?.idempotencyKey ?? "Unavailable"} />
+          </section>
+
+          <footer>
+            <button onClick={onViewAda} type="button">View Audit Log</button>
+            <button className="primary" onClick={onReturn} type="button">Return to Linked Instruments</button>
+          </footer>
+        </section>
       </div>
     </section>
   );
@@ -1426,7 +2553,7 @@ const AdaProvisionSuccess = ({
           <h2>Audit Traceability</h2>
           <TraceLine label="Correlation ID" value={provisioned?.correlationId ?? "Unavailable"} />
           <TraceLine label="Idempotency Key" value={provisioned?.idempotencyKey ?? "Unavailable"} />
-          <TraceLine label="Ledger Reference ID" value={account?.id ?? "Unavailable"} />
+          <TraceLine label="Ledger ID" value={account?.id ?? "Unavailable"} />
           <TraceLine label="Provision Status" value={account?.status ? normalizeStatus(account.status).toUpperCase() : "UNAVAILABLE"} />
         </article>
       </section>
@@ -1554,6 +2681,11 @@ const StatusPill = ({ status }: { status: string }) => {
   return <span className={`ada-status ${normalized}`}>{normalized.replace(/_/g, " ")}</span>;
 };
 
+class ApiRequestError extends Error {
+  providerRequestId?: string;
+  step?: string;
+}
+
 const apiFetch = async <T,>(path: string, options: { body?: Record<string, unknown>; headers?: Record<string, string>; method?: string } = {}): Promise<T> => {
   const response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}${path}`, {
     method: options.method ?? "GET",
@@ -1564,12 +2696,92 @@ const apiFetch = async <T,>(path: string, options: { body?: Record<string, unkno
     },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
-  const payload = await response.json() as T & { detail?: string; error?: string };
+  const payload = await response.json() as T & {
+    detail?: string;
+    error?: string;
+    providerRequestId?: string;
+    step?: string;
+    authDebug?: Record<string, unknown>;
+    circleOperation?: {
+      providerRequestId?: string;
+      responsePayload?: {
+        providerRequestId?: string;
+        authDebug?: Record<string, unknown>;
+        provider?: {
+          authDebug?: Record<string, unknown>;
+        };
+      };
+    };
+  };
   if (!response.ok) {
-    const message = [payload.error ?? `${path}:${response.status}`, payload.detail].filter(Boolean).join(" - ");
-    throw new Error(message);
+    const authDebug = payload.authDebug
+      ?? payload.circleOperation?.responsePayload?.authDebug
+      ?? payload.circleOperation?.responsePayload?.provider?.authDebug;
+    const providerRequestId = payload.providerRequestId
+      ?? payload.circleOperation?.providerRequestId
+      ?? payload.circleOperation?.responsePayload?.providerRequestId
+      ?? (typeof authDebug?.providerRequestId === "string" ? authDebug.providerRequestId : undefined);
+    const step = payload.step;
+    const debugDetail = authDebug
+      ? [
+          typeof authDebug.baseUrl === "string" ? `baseUrl=${authDebug.baseUrl}` : undefined,
+          typeof authDebug.endpoint === "string" ? `endpoint=${authDebug.endpoint}` : undefined,
+          typeof authDebug.providerRequestId === "string" ? `requestId=${authDebug.providerRequestId}` : undefined,
+          typeof authDebug.apiKeyConfigured !== "undefined" ? `apiKeyConfigured=${String(authDebug.apiKeyConfigured)}` : undefined,
+          typeof authDebug.entitySecretConfigured !== "undefined" ? `entitySecretConfigured=${String(authDebug.entitySecretConfigured)}` : undefined,
+          typeof authDebug.apiKeyPrefix === "string" ? `apiKeyPrefix=${authDebug.apiKeyPrefix}` : undefined,
+          typeof authDebug.entitySecretPrefix === "string" ? `entitySecretPrefix=${authDebug.entitySecretPrefix}` : undefined
+        ].filter(Boolean).join("; ")
+      : undefined;
+    const message = [
+      payload.error ?? `${path}:${response.status}`,
+      payload.detail,
+      providerRequestId ? `providerRequestId=${providerRequestId}` : undefined,
+      typeof step === "string" ? `step=${step}` : undefined,
+      debugDetail
+    ].filter(Boolean).join(" - ");
+    const error = new ApiRequestError(message);
+    error.providerRequestId = providerRequestId;
+    error.step = typeof step === "string" ? step : undefined;
+    throw error;
   }
   return payload;
+};
+
+const parseProviderRequestIdFromMessage = (message: string): string | undefined => {
+  const match = message.match(/(?:providerRequestId|requestId)=([^\s;]+)/i);
+  return match?.[1];
+};
+
+const toRecord = (value: unknown): Record<string, unknown> | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+};
+
+const toStringOrUndefined = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const addressLine = (parts: Array<string | undefined>, fallback: string): string => {
+  const line = parts.filter(Boolean).join(", ");
+  return line || fallback;
+};
+
+const maskEndDigits = (value: string | undefined, revealCount: number, fallback: string): string => {
+  if (!value) return fallback;
+  const normalized = value.replace(/\s+/g, "");
+  if (!normalized) return fallback;
+  if (normalized.length <= revealCount) return `${"*".repeat(Math.max(0, revealCount - normalized.length))}${normalized}`;
+  return `${"*".repeat(Math.max(4, normalized.length - revealCount))}${normalized.slice(-revealCount)}`;
+};
+
+const formatIsoStamp = (value?: string): string => {
+  if (!value) return "Unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toISOString();
 };
 
 const normalizeAdaAccount = (account: AdaAccount, clients: BusinessClient[]): AdaAccount => {
@@ -1622,6 +2834,38 @@ const formatRailLabel = (value?: string): string => {
     .split("_")
     .map((part) => capitalize(part))
     .join(" ");
+};
+
+const linkedFiatPurposeValues = ["minting", "redemption", "bidirectional"] as const;
+
+const normalizeLinkedFiatPurpose = (value?: string): string | undefined => {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["minting", "settlement"].includes(normalized)) return "minting";
+  if (["redemption", "payment"].includes(normalized)) return "redemption";
+  if (["bidirectional", "dual-purpose", "dual_purpose", "dual purpose", "operating", "custody"].includes(normalized)) {
+    return "bidirectional";
+  }
+  return undefined;
+};
+
+const linkedFiatPurposeLabel = (value?: string): string => {
+  const normalized = normalizeLinkedFiatPurpose(value);
+  const labels: Record<string, string> = {
+    minting: "Minting",
+    redemption: "Redemption",
+    bidirectional: "Bidirectional (Dual-Purpose)"
+  };
+  if (normalized) return labels[normalized] ?? capitalize(normalized);
+  return value ? capitalize(value) : "Unavailable";
+};
+
+const linkedFiatPurposeOptionsForAccount = (account: AdaAccount): Array<{ value: string; label: string }> => {
+  void account;
+  return linkedFiatPurposeValues.map((value) => ({
+    value,
+    label: linkedFiatPurposeLabel(value)
+  }));
 };
 
 const ledgerRowsForAccount = (account: AdaAccount) => {

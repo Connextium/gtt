@@ -9,4 +9,6 @@ export const BusinessApp = ({
 }: {
   navigate: (path: string) => void;
   path: string;
-}) => <SelfRegistrationRouter path={path} navigate={navigate} />;
+}) => {
+  return <SelfRegistrationRouter path={path} navigate={navigate} />;
+};

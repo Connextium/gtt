@@ -1,0 +1,312 @@
+.ada-account-control-scope {
+  --acc-background: #f9f9f9;
+  --acc-surface: #f9f9f9;
+  --acc-canvas-soft: #f5f5f5;
+  --acc-hairline: #e0e0e0;
+  --acc-primary: #000000;
+  --acc-secondary: #5e5e5e;
+  --acc-on-primary: #ffffff;
+  --acc-font-display: "Libre Caslon Text", Georgia, serif;
+  --acc-font-body: "Libre Franklin", ui-sans-serif, system-ui, sans-serif;
+  --acc-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  background: var(--acc-background);
+}
+
+.ada-account-control-scope .acc-shell {
+  box-sizing: border-box;
+  margin: 0;
+  max-width: 1320px;
+  padding: 20px 0 0 24px;
+  width: 100%;
+}
+
+.ada-account-control-scope .acc-page-header {
+  align-items: end;
+  border-bottom: 1px solid var(--acc-hairline);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+}
+
+.ada-account-control-scope .acc-page-header p {
+  color: var(--acc-secondary);
+  font-family: var(--acc-font-body);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 11px;
+  margin: 0 0 5px;
+  text-transform: uppercase;
+}
+
+.ada-account-control-scope .acc-page-header h1 {
+  color: var(--acc-primary);
+  font-family: var(--acc-font-display);
+  font-size: 43px;
+  font-weight: 400;
+  letter-spacing: -0.5px;
+  line-height: 41px;
+  margin: 0;
+}
+
+.ada-account-control-scope .acc-status-stack {
+  text-align: right;
+}
+
+.ada-account-control-scope .acc-status-stack > p {
+  color: var(--acc-secondary);
+  font-family: var(--acc-font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 14px;
+  margin: 0 0 2px;
+  text-transform: none;
+}
+
+.ada-account-control-scope .acc-status-stack > div {
+  align-items: center;
+  background: var(--acc-canvas-soft);
+  border: 1px solid var(--acc-primary);
+  display: inline-flex;
+  gap: 5px;
+  padding: 2px 5px;
+}
+
+.ada-account-control-scope .acc-status-stack span {
+  background: var(--acc-primary);
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
+.ada-account-control-scope .acc-status-stack strong {
+  color: var(--acc-primary);
+  font-family: var(--acc-font-body);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 11px;
+  text-transform: uppercase;
+}
+
+.ada-account-control-scope .acc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.ada-account-control-scope .acc-section > header {
+  align-items: baseline;
+  border-bottom: 1px solid var(--acc-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 5px;
+}
+
+.ada-account-control-scope .acc-section > header h2 {
+  color: var(--acc-primary);
+  font-family: var(--acc-font-body);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.28px;
+  line-height: 16px;
+  margin: 0;
+}
+
+.ada-account-control-scope .acc-section > header span {
+  color: var(--acc-secondary);
+  font-family: var(--acc-font-mono);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.ada-account-control-scope .acc-summary-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ada-account-control-scope .acc-summary-grid article {
+  background: var(--acc-canvas-soft);
+  border: 1px solid var(--acc-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px;
+}
+
+.ada-account-control-scope .acc-summary-grid article p,
+.ada-account-control-scope .acc-liability-grid article p {
+  color: var(--acc-secondary);
+  font-family: var(--acc-font-body);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 11px;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.ada-account-control-scope .acc-summary-grid article strong,
+.ada-account-control-scope .acc-liability-grid article strong {
+  color: var(--acc-primary);
+  font-family: var(--acc-font-display);
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: -0.3px;
+  line-height: 24px;
+}
+
+.ada-account-control-scope .state-card {
+  align-items: center;
+  background: var(--acc-surface) !important;
+  border-color: var(--acc-primary) !important;
+  justify-content: center;
+  text-align: center;
+}
+
+.ada-account-control-scope .state-card > div {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+}
+
+.ada-account-control-scope .state-card p {
+  color: var(--acc-primary) !important;
+}
+
+.ada-account-control-scope .state-card span,
+.ada-account-control-scope .state-card small {
+  color: var(--acc-secondary);
+  font-family: var(--acc-font-mono);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.ada-account-control-scope .acc-table-wrap {
+  border: 1px solid var(--acc-hairline);
+  overflow-x: auto;
+}
+
+.ada-account-control-scope .acc-table-wrap table {
+  border-collapse: collapse;
+  min-width: 720px;
+  width: 100%;
+}
+
+.ada-account-control-scope .acc-table-wrap th,
+.ada-account-control-scope .acc-table-wrap td {
+  border-bottom: 1px solid var(--acc-hairline);
+  font-family: var(--acc-font-mono);
+  font-size: 10px;
+  line-height: 14px;
+  padding: 7px 9px;
+}
+
+.ada-account-control-scope .acc-table-wrap th {
+  background: var(--acc-canvas-soft);
+  color: var(--acc-secondary);
+  font-family: var(--acc-font-body);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.ada-account-control-scope .acc-table-wrap td:nth-child(2) {
+  color: var(--acc-primary);
+  font-family: var(--acc-font-body);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ada-account-control-scope .acc-table-wrap .negative {
+  color: var(--acc-secondary);
+}
+
+.ada-account-control-scope .right {
+  text-align: right;
+}
+
+.ada-account-control-scope .acc-liability-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.ada-account-control-scope .acc-liability-grid article {
+  border: 1px solid var(--acc-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  justify-content: space-between;
+  padding: 11px;
+}
+
+.ada-account-control-scope .acc-liability-grid article.soft {
+  background: var(--acc-canvas-soft);
+}
+
+.ada-account-control-scope .acc-liability-grid article small {
+  color: var(--acc-secondary);
+  font-family: var(--acc-font-body);
+  font-size: 10px;
+  line-height: 13px;
+}
+
+.ada-account-control-scope .acc-liability-grid article.state-card {
+  align-items: center;
+  gap: 5px;
+}
+
+.ada-account-control-scope .acc-export-row {
+  border-top: 1px solid var(--acc-hairline);
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 9px;
+}
+
+.ada-account-control-scope .acc-export-row button {
+  align-items: center;
+  background: var(--acc-surface);
+  border: 1px solid var(--acc-primary);
+  color: var(--acc-primary);
+  display: inline-flex;
+  font-family: var(--acc-font-body);
+  font-size: 8px;
+  font-weight: 700;
+  gap: 5px;
+  letter-spacing: 1px;
+  line-height: 11px;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+
+.ada-account-control-scope .acc-export-row button:hover {
+  background: var(--acc-primary);
+  color: var(--acc-on-primary);
+}
+
+@media (max-width: 1100px) {
+  .ada-account-control-scope .acc-summary-grid,
+  .ada-account-control-scope .acc-liability-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ada-account-control-scope .acc-shell {
+    padding-right: 12px;
+  }
+
+  .ada-account-control-scope .acc-page-header {
+    align-items: start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .ada-account-control-scope .acc-status-stack {
+    text-align: left;
+  }
+}

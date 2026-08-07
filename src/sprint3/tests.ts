@@ -76,7 +76,7 @@ const testFullPartialAndOverReservation = (): void => {
     supplierBusinessClientId: supplier.id,
     amountMinorUnits: "800000000",
     dueDate: "2026-08-31",
-    externalReference: "INV-001"
+    reference: "INV-001"
   });
   app.obligations.approveObligation(context, obligation.id);
   const reservation = app.obligations.activateReservation(context, {
@@ -100,7 +100,7 @@ const testFullPartialAndOverReservation = (): void => {
     amountMinorUnits: "300000000",
     disputedMinorUnits: "50000000",
     dueDate: "2026-09-15",
-    externalReference: "INV-002"
+    reference: "INV-002"
   });
   app.obligations.approveObligation(context, partial.id);
   app.obligations.activateReservation(context, {
@@ -131,7 +131,7 @@ const testReleaseExpireCancelReasonsAndTimeline = (): void => {
     supplierBusinessClientId: supplier.id,
     amountMinorUnits: "500000000",
     dueDate: "2026-08-31",
-    externalReference: "INV-003"
+    reference: "INV-003"
   });
   app.obligations.approveObligation(context, obligation.id);
   const reservation = app.obligations.activateReservation(context, {
@@ -177,7 +177,7 @@ const testConcurrencyAndTenantIsolation = (): void => {
     supplierBusinessClientId: supplier.id,
     amountMinorUnits: "1000000000",
     dueDate: "2026-08-31",
-    externalReference: "INV-004"
+    reference: "INV-004"
   });
   app.obligations.approveObligation(context, obligation.id);
   const result = app.obligations.simulateConcurrentReservationAttempts(context, [
@@ -208,7 +208,7 @@ const testAccountingEvidenceBalanced = (): void => {
     supplierBusinessClientId: supplier.id,
     amountMinorUnits: "100000000",
     dueDate: "2026-08-31",
-    externalReference: "INV-005"
+    reference: "INV-005"
   });
   app.obligations.approveObligation(context, obligation.id);
   const reservation = app.obligations.activateReservation(context, {

@@ -926,7 +926,7 @@ const insertCircleKybEvidenceWithPostgres = async (
 
   await client.query(
     `insert into circle_api_operations
-      (id, platform_tenant_id, operation_type, idempotency_key, request_payload, response_payload, provider_reference_id, status, onboarding_application_id, business_client_id, correlation_id, created_at)
+      (id, platform_tenant_id, operation_type, idempotency_key, request_payload, response_payload, provider_account_id, status, onboarding_application_id, business_client_id, correlation_id, created_at)
      values ($1, $2, 'client_onboarding', $3, $4, $5, $6, 'complete', $7, $8, $9, $10)`,
     [
       randomUUID(),

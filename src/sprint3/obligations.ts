@@ -42,7 +42,7 @@ export class ObligationReservationService {
       amountMinorUnits: string | number | bigint;
       disputedMinorUnits?: string | number | bigint;
       dueDate: string;
-      externalReference?: string;
+      reference?: string;
     }
   ): SettlementObligation {
     this.requireOperator(context);
@@ -67,7 +67,7 @@ export class ObligationReservationService {
       status: "draft",
       fundingStatus: "unfunded",
       dueDate: input.dueDate,
-      externalReference: input.externalReference,
+      reference: input.reference,
       version: 1,
       createdAt: now,
       updatedAt: now
@@ -75,7 +75,7 @@ export class ObligationReservationService {
     this.obligations.set(obligation.id, obligation);
     this.recordAudit(context, obligation.id, "settlement_obligation.created", undefined, {
       amountMinorUnits: amount.toString(),
-      externalReference: input.externalReference
+      reference: input.reference
     });
     this.recordAccounting(context, "settlement_obligation.created", obligation.id, [], true);
     return obligation;

@@ -49,7 +49,7 @@ const fullObligation = app.obligations.createTradePayable(operator, {
   supplierBusinessClientId: supplier.id,
   amountMinorUnits: "700000000",
   dueDate: "2026-08-31",
-  externalReference: "INV-DEMO-001"
+  reference: "INV-DEMO-001"
 });
 app.obligations.approveObligation(operator, fullObligation.id);
 const fullReservation = app.obligations.activateReservation(operator, {
@@ -66,7 +66,7 @@ const partialObligation = app.obligations.createTradePayable(operator, {
   amountMinorUnits: "500000000",
   disputedMinorUnits: "100000000",
   dueDate: "2026-09-15",
-  externalReference: "INV-DEMO-002"
+  reference: "INV-DEMO-002"
 });
 app.obligations.approveObligation(operator, partialObligation.id);
 const partialReservation = app.obligations.activateReservation(operator, {

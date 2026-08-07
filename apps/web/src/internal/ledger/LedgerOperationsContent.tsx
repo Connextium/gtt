@@ -183,18 +183,18 @@ const LedgerDashboardView = ({
       <header className="ledger-ops-hero">
         <div>
           <span>Custody Operations</span>
-          <h1>Active Ledgers</h1>
+          <h1>Initializing Journal</h1>
           <p>Real-time monitoring of institutional clearing accounts and rail parity.</p>
         </div>
         <div>
           <button type="button"><Download size={15} /> Export Audit Log</button>
           <button className="primary" type="button"><RefreshCw size={15} /> Reconcile Now</button>
-          <button className="primary" onClick={onRegister} type="button">Register Ledger</button>
+          <button className="primary" onClick={onRegister} type="button">Initializing</button>
         </div>
       </header>
 
       <section className="ledger-ops-stat-grid">
-        <LedgerOpsStat detail="Loaded from accounts_of_digital_asset" icon label="Total Active Ledgers" value={String(stats.active)} />
+        <LedgerOpsStat detail="Loaded from accounts_of_digital_asset" icon label="Total Initializing Journal" value={String(stats.active)} />
         <LedgerOpsStat detail="Reconciliation data not loaded" label="Aggregate Parity" value="Unavailable" />
         <LedgerOpsStat detail="Journal totals require statement query" label="24H Volume" value="Unavailable" />
         <LedgerOpsStat detail="Non-active ADA accounts" label="Open Recon Breaks" value={String(stats.restricted)} />
@@ -212,7 +212,7 @@ const LedgerDashboardView = ({
           <table className="ledger-ops-table">
             <thead>
               <tr>
-                <th>ADA ID</th>
+                <th>ADA Code</th>
                 <th>Client Entity</th>
                 <th>Purpose</th>
                 <th>Asset</th>
@@ -222,11 +222,11 @@ const LedgerDashboardView = ({
               </tr>
             </thead>
             <tbody>
-              {loading ? <tr><td colSpan={7}>Loading active ledgers from database...</td></tr> : null}
-              {!loading && accounts.length === 0 ? <tr><td colSpan={7}>No active ledgers found.</td></tr> : null}
+              {loading ? <tr><td colSpan={7}>Loading initializing journal records from database...</td></tr> : null}
+              {!loading && accounts.length === 0 ? <tr><td colSpan={7}>No initializing journal records found.</td></tr> : null}
               {!loading && accounts.map((account) => (
                 <tr key={account.id}>
-                  <td><code>{account.id}</code></td>
+                  <td><code>{displayAdaAccountCode(account)}</code></td>
                   <td>{account.businessClientName ?? account.businessClientId}</td>
                   <td><span>{formatLabel(account.usePurpose)}</span></td>
                   <td>{account.assetCode ?? "USDC"}</td>
@@ -239,7 +239,7 @@ const LedgerDashboardView = ({
           </table>
         </div>
         <footer>
-          <span>Showing {accounts.length} database-backed ADA ledger references.</span>
+          <span>Showing {accounts.length} database-backed ADA initializing journal references.</span>
           <div>
             <button type="button"><ChevronLeft size={14} /> Previous</button>
             <button type="button">Next <ChevronRight size={14} /></button>
@@ -325,27 +325,23 @@ const RegisterNewLedgerView = ({
       <section className="ledger-ops-register-card">
         <header>
           <span>Operational Treasury</span>
-          <h1>Register New Ledger</h1>
-          <p>Initialize a cryptographically verifiable settlement ledger. All entries are immutable and subject to the Node Alpha governance protocol.</p>
+          <h1>Initializing</h1>
+          <p>Initialize a cryptographically verifiable settlement journal. All entries are immutable and subject to the Node Alpha governance protocol.</p>
         </header>
 
         <form onSubmit={handleSubmit}>
-          <LedgerFormBlock index="01" title="Ledger Definition">
+          <LedgerFormBlock index="01" title="Journal Definition">
             <label>
-              <span>Ledger Name</span>
+              <span>Journal Name</span>
               <input defaultValue="Q4_SETTLEMENT_CORE" name="ledgerName" placeholder="e.g. Q4_SETTLEMENT_CORE" required type="text" />
             </label>
             <label>
               <span>Client Entity</span>
-              <select defaultValue={selectedAccount?.businessClientName ?? selectedAccount?.businessClientId ?? ""} name="clientEntity">
-                {accounts.length ? accounts.map((account) => (
-                  <option key={account.id} value={account.businessClientName ?? account.businessClientId}>
-                    {account.businessClientName ?? account.businessClientId}
-                  </option>
-                )) : (
-                  <option value="">No database-backed ADA account available</option>
-                )}
-              </select>
+              <input
+                readOnly
+                value={selectedAccount ? displayClientEntityName(selectedAccount) : "No database-backed ADA account available"}
+              />
+              <input name="clientEntity" type="hidden" value={selectedAccount ? displayClientEntityName(selectedAccount) : ""} />
             </label>
             <div className="wide">
               <span>Purpose</span>
@@ -421,7 +417,7 @@ const RegisterNewLedgerView = ({
             </label>
             <label className="wide">
               <span>Business Justification</span>
-              <textarea name="businessJustification" placeholder="Briefly describe the purpose of this ledger for audit purposes..." rows={4} />
+              <textarea name="businessJustification" placeholder="Briefly describe the purpose of this journal for audit purposes..." rows={4} />
             </label>
           </LedgerFormBlock>
 
@@ -429,7 +425,7 @@ const RegisterNewLedgerView = ({
           <footer>
             <button onClick={onCancel} type="button">Cancel</button>
             <button className="primary" disabled={submitting || accounts.length === 0} type="submit">
-              {submitting ? "Posting..." : "Register Ledger"}
+              {submitting ? "Posting..." : "Initializing"}
             </button>
           </footer>
         </form>
@@ -523,7 +519,7 @@ const LedgerRegisterView = ({
     <div className="ledger-ops-open-journal">
       <header className="open-journal-header">
         <div>
-          <h1>Post Opening Journal</h1>
+          <h1>Posting Journal</h1>
           <p>Establish new asset positions in the master ledger hierarchy.</p>
         </div>
         <button onClick={onReviewPostingRules} type="button">Review Posting Rules</button>
@@ -806,6 +802,9 @@ const formatLabel = (value: string): string => value.replace(/_/g, " ").replace(
 
 const displayAdaAccountCode = (account: AdaAccount): string =>
   account.id.toUpperCase().startsWith("ADA") ? account.id : `ADA-${account.id.replace(/[^a-z0-9]/gi, "").slice(-8).toUpperCase()}`;
+
+const displayClientEntityName = (account: AdaAccount): string =>
+  account.businessClientName?.trim() || account.businessClientId;
 
 const formatUsdcAmount = (value: string): string => {
   const amount = Number(value.replace(/,/g, ""));

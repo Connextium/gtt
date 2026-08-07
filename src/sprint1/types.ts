@@ -66,7 +66,7 @@ export interface LinkedInstrument {
   accountOfDigitalAssetId: Id;
   instrumentType: "circle_wallet" | "fiat_wire" | "external_usdc_address";
   status: "pending" | "active" | "inactive";
-  externalReference?: string;
+  reference?: string;
   createdAt: IsoTimestamp;
 }
 

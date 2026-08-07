@@ -38,6 +38,11 @@ interface TenantActivationPayload {
     providerRequestId?: string;
     responsePayload?: Record<string, unknown>;
   };
+  tenantWallet?: {
+    providerWalletId?: string;
+    providerAddressId?: string;
+    status?: string;
+  };
   activationAccepted?: boolean;
   error?: string;
   detail?: string;
@@ -49,6 +54,8 @@ interface CircleIntegration {
   provider?: string;
   environment?: string;
   walletSetId?: string;
+  tenantWalletId?: string;
+  tenantWalletAddress?: string;
   walletSetName?: string;
   walletBlockchains?: string[];
   walletStrategy?: string;
@@ -73,6 +80,28 @@ interface ActivationFormState {
   settlementNetwork: string;
 }
 
+interface AccountOfDigitalAsset {
+  id: string;
+  accountName?: string;
+  status?: string;
+  assetCode?: string;
+  usePurpose?: string;
+  businessClientId?: string;
+  businessClientName?: string;
+}
+
+interface LinkedInstrumentRail {
+  metadata?: {
+    walletId?: string;
+    address?: string;
+    walletAddress?: string;
+  };
+}
+
+interface LinkedInstrumentsPayload {
+  circleWallets?: LinkedInstrumentRail[];
+}
+
 interface TenantActivationContentProps {
   mode: TenantActivationMode;
   navigate: (path: string) => void;
@@ -94,12 +123,6 @@ const settlementNetworks = [
   { code: "solana", label: "Solana" }
 ];
 
-const environmentOptions = [
-  { value: "simulator", label: "Simulator" },
-  { value: "circle-sandbox", label: "Sandbox" },
-  { value: "circle-production", label: "Production" }
-];
-
 const defaultWalletBlockchains = ["ARC-TESTNET", "SOL-DEVNET"];
 
 const strategyOptions = [
@@ -110,6 +133,9 @@ const strategyOptions = [
 
 export const TenantActivationContent = ({ mode, navigate }: TenantActivationContentProps) => {
   const [payload, setPayload] = useState<TenantActivationPayload | undefined>();
+  const [tenantCentralAda, setTenantCentralAda] = useState<AccountOfDigitalAsset | undefined>();
+  const [tenantAdaLinkedWalletId, setTenantAdaLinkedWalletId] = useState<string | undefined>();
+  const [tenantAdaLinkedWalletAddress, setTenantAdaLinkedWalletAddress] = useState<string | undefined>();
   const [form, setForm] = useState<ActivationFormState>({
     tenantAlias: "Demo Tenant",
     displayName: "DEMO",
@@ -127,8 +153,38 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
   const loadActivation = async (signal?: AbortSignal) => {
     setLoadStatus("loading");
     setLoadError("");
-    const current = await apiFetch<TenantActivationPayload>("/tenants/current/activation", { signal });
+    const [current, adaPayload] = await Promise.all([
+      apiFetch<TenantActivationPayload>("/tenants/current/activation", { signal }),
+      apiFetch<{ accounts?: AccountOfDigitalAsset[] }>("/accounts-of-digital-asset", { signal })
+    ]);
+    const accounts = Array.isArray(adaPayload.accounts) ? adaPayload.accounts : [];
+    const central = accounts.find(
+      (item) =>
+        item.usePurpose === "tenant_central"
+        || (item.accountName ?? "").trim().toLowerCase() === "tenant ada (central)"
+    );
+
+    let linkedWallet: LinkedInstrumentRail | undefined;
+    if (central?.id) {
+      try {
+        const linkedPayload = await apiFetch<LinkedInstrumentsPayload>(
+          `/accounts-of-digital-asset/${encodeURIComponent(central.id)}/linked-instruments`,
+          { signal }
+        );
+        linkedWallet = (linkedPayload.circleWallets ?? [])[0];
+      } catch {
+        linkedWallet = undefined;
+      }
+    }
+
     setPayload(current);
+    setTenantCentralAda(central);
+    setTenantAdaLinkedWalletId(linkedWallet?.metadata?.walletId);
+    setTenantAdaLinkedWalletAddress(
+      linkedWallet?.metadata?.address
+      ?? linkedWallet?.metadata?.walletAddress
+      ?? linkedWallet?.metadata?.walletId
+    );
     setForm(formFromPayload(current));
     setLoadStatus("ready");
   };
@@ -144,7 +200,13 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
   }, []);
 
   const integration = payload?.circleIntegration;
+  const tenantWalletId = tenantAdaLinkedWalletId;
+  const tenantWalletAddress = tenantAdaLinkedWalletAddress
+    ?? integration?.tenantWalletAddress
+    ?? payload?.tenantWallet?.providerAddressId;
   const tenantName = tenantDisplayName(payload);
+  const tenantAdaPresetName = "Tenant ADA (central)";
+  const tenantInternalBusinessClientLabel = `${tenantName} (The Tenant)`;
   const circleEnvironment = integration?.environment ?? payload?.walletSet?.environment ?? "simulator";
   const selectedWalletBlockchains = form.walletBlockchains.length ? form.walletBlockchains : defaultWalletBlockchains;
   const walletBlockchainDisplay = selectedWalletBlockchains.join(", ");
@@ -200,9 +262,12 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
     return (
       <TenantActivationSuccess
         error={loadStatus === "error" ? loadError : ""}
+        linkedTenantWalletAddress={tenantAdaLinkedWalletAddress}
+        linkedTenantWalletId={tenantAdaLinkedWalletId}
         navigate={navigate}
         payload={payload}
         reload={() => void loadActivation()}
+        tenantCentralAda={tenantCentralAda}
       />
     );
   }
@@ -228,7 +293,7 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
 
           <section className="tenant-activation-columns">
             <div className="tenant-activation-module tenant-activation-identity">
-              <ModuleHeading index="MODULE 01" title="Tenant Identity & Brand">
+              <ModuleHeading index="STEP 01" title="Tenant Identity & Brand">
                 Configure institutional surfacing and white-label parameters for this tenant environment.
               </ModuleHeading>
 
@@ -267,7 +332,7 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
             </div>
 
             <div className="tenant-activation-module tenant-activation-wallet">
-              <ModuleHeading index="MODULE 02" title="Wallet Infrastructure Strategy">
+              <ModuleHeading index="STEP 02" title="Wallet Infrastructure Strategy">
                 Define key management, settlement architecture, and Circle wallet-set integration for this tenant.
               </ModuleHeading>
 
@@ -321,16 +386,12 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
 
                 <div className="tenant-activation-control-card">
                   <div className="tenant-activation-field-title">
-                    <span>Environment</span>
-                    <small>Configured by API runtime</small>
+                    <span>Current Runtime Environment</span>
+                    <small>Resolved by API runtime (CIRCLE_ENVIRONMENT / API credentials)</small>
                   </div>
-                  <div className="tenant-activation-environment-list">
-                    {environmentOptions.map((environment) => (
-                      <div className={circleEnvironment === environment.value ? "active" : ""} key={environment.value}>
-                        <span>{environment.label}</span>
-                        <small>{environment.value}</small>
-                      </div>
-                    ))}
+                  <div className="tenant-activation-select-card">
+                    <span>{formatStatus(circleEnvironment)}</span>
+                    <small>{circleEnvironment}</small>
                   </div>
                 </div>
 
@@ -380,9 +441,39 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
                 <div>
                   <EndpointRow label="Settlement Network" value={formatStatus(form.settlementNetwork)} provider="GTT Rail Policy" status="Scoped" />
                   <EndpointRow label="Environment" value={circleEnvironment} provider="API Runtime" status={formatStatus(integration?.status ?? "draft")} />
+                  <EndpointRow label="Tenant Wallet ID" value={tenantWalletId ?? "Not provisioned"} provider="Circle Wallets" status={tenantWalletAddress ?? "Pending"} />
                   <EndpointRow label="Network Scope" value={walletBlockchainDisplay} provider="Circle Wallets" status={selectedStrategy?.title ?? "Configured"} />
                   <EndpointRow label="Current Activation" value={integration?.walletSetId ?? "Not provisioned"} provider="Tenant Registry" status={formatStatus(integration?.status ?? "draft")} />
                 </div>
+              </div>
+
+              <div className="tenant-activation-ada-preview">
+                <div className="tenant-activation-ada-preview-head">
+                  <span>Tenant ADA Preview</span>
+                  <small>Created at tenant activation</small>
+                </div>
+                {tenantCentralAda ? (
+                  <div className="tenant-activation-ada-preview-grid">
+                    <PreviewField label="Account ID" value={tenantCentralAda.id} />
+                    <PreviewField label="Name" value={tenantAdaPresetName} />
+                    <PreviewField label="Use Purpose" value={tenantCentralAda.usePurpose ?? "tenant_central"} />
+                    <PreviewField label="Asset" value={tenantCentralAda.assetCode ?? "USDC"} />
+                    <PreviewField label="Tenant Wallet ID (Linked Instrument)" value={tenantWalletId ?? "Not linked"} />
+                    <PreviewField label="Circle Wallet Address" value={tenantWalletAddress ?? "Not linked"} />
+                    <PreviewField label="Internal Business Client" value={tenantInternalBusinessClientLabel} />
+                    <div className="tenant-activation-ada-preview-field tenant-activation-ada-status-field">
+                      <span>Status</span>
+                      <strong className={`tenant-activation-ada-status ${statusClass(tenantCentralAda.status)}`}>
+                        {formatStatus(tenantCentralAda.status ?? "unknown")}
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="tenant-activation-ada-preview-missing">
+                    <X size={14} />
+                    <span>Tenant ADA (central) not found. Commit Tenant Activation to provision it.</span>
+                  </div>
+                )}
               </div>
             </div>
           </section>
@@ -397,7 +488,7 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
               <p>Network Scope controls the network selected for wallet creation under the same tenant wallet set.</p>
             </div>
             <div className="tenant-activation-module-visual">
-              <span>ACTIVE MODULES: [CIRCLE-WALLET-SET] [NET-GUARD] [AUDIT]</span>
+              <span>ACTIVE CONTROLS: [CIRCLE-WALLET-SET] [NET-GUARD] [AUDIT]</span>
             </div>
           </section>
         </div>
@@ -437,19 +528,33 @@ export const TenantActivationContent = ({ mode, navigate }: TenantActivationCont
 
 const TenantActivationSuccess = ({
   error,
+  linkedTenantWalletAddress,
+  linkedTenantWalletId,
   navigate,
   payload,
-  reload
+  reload,
+  tenantCentralAda
 }: {
   error: string;
+  linkedTenantWalletAddress?: string;
+  linkedTenantWalletId?: string;
   navigate: (path: string) => void;
   payload?: TenantActivationPayload;
   reload: () => void;
+  tenantCentralAda?: AccountOfDigitalAsset;
 }) => {
   const integration = payload?.circleIntegration;
   const walletSet = payload?.walletSet;
   const timestamp = integration?.activatedAt ?? integration?.updatedAt ?? new Date().toISOString();
   const walletSetId = integration?.walletSetId ?? walletSet?.walletSetId ?? "Pending provider wallet set";
+  const tenantWalletId = linkedTenantWalletId ?? "Pending tenant wallet linked instrument";
+  const tenantWalletAddress = linkedTenantWalletAddress
+    ?? integration?.tenantWalletAddress
+    ?? payload?.tenantWallet?.providerAddressId
+    ?? "Pending tenant wallet address linked instrument";
+  const tenantName = tenantDisplayName(payload);
+  const tenantAdaPresetName = "Tenant ADA (central)";
+  const tenantInternalBusinessClientLabel = `${tenantName} (The Tenant)`;
   return (
     <div className="tenant-activation-scope">
       <main className="tenant-activation-success">
@@ -494,6 +599,10 @@ const TenantActivationSuccess = ({
                 <span>Wallet Set ID</span>
                 <code>{walletSetId}</code>
               </div>
+              <div className="tenant-activation-wallet-set-id">
+                <span>Tenant Wallet ID</span>
+                <code>{tenantWalletId}</code>
+              </div>
               <div className="tenant-activation-audit">
                 <div>
                   <span>AUDIT TRAIL // FINAL COMMITS</span>
@@ -502,9 +611,40 @@ const TenantActivationSuccess = ({
                 <ul>
                   <AuditLine label="Network Scoping" value={walletBlockchainsFromIntegration(integration, walletSet).join(", ") || "Created"} />
                   <AuditLine label="Circle Wallet Set" value={walletSetId} />
+                  <AuditLine label="Tenant Wallet" value={tenantWalletId} />
+                  <AuditLine label="Tenant Wallet Address" value={tenantWalletAddress} />
                   <AuditLine label="Tenant Registry" value={`${tenantDisplayName(payload)} mapping active`} />
                   <AuditLine label="Provider Status" value={formatStatus(walletSet?.status ?? integration?.status ?? "active")} />
                 </ul>
+              </div>
+
+              <div className="tenant-activation-ada-preview">
+                <div className="tenant-activation-ada-preview-head">
+                  <span>Tenant ADA Preview</span>
+                  <small>Activation output</small>
+                </div>
+                {tenantCentralAda ? (
+                  <div className="tenant-activation-ada-preview-grid">
+                    <PreviewField label="Account ID" value={tenantCentralAda.id} />
+                    <PreviewField label="Name" value={tenantAdaPresetName} />
+                    <PreviewField label="Use Purpose" value={tenantCentralAda.usePurpose ?? "tenant_central"} />
+                    <PreviewField label="Asset" value={tenantCentralAda.assetCode ?? "USDC"} />
+                    <PreviewField label="Tenant Wallet ID (Linked Instrument)" value={tenantWalletId} />
+                    <PreviewField label="Circle Wallet Address" value={tenantWalletAddress} />
+                    <PreviewField label="Internal Business Client" value={tenantInternalBusinessClientLabel} />
+                    <div className="tenant-activation-ada-preview-field tenant-activation-ada-status-field">
+                      <span>Status</span>
+                      <strong className={`tenant-activation-ada-status ${statusClass(tenantCentralAda.status)}`}>
+                        {formatStatus(tenantCentralAda.status ?? "unknown")}
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="tenant-activation-ada-preview-missing">
+                    <X size={14} />
+                    <span>Tenant ADA (central) is not yet visible. Refresh Archive Proof to reload latest activation output.</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -560,6 +700,13 @@ const AuditLine = ({ label, value }: { label: string; value: string }) => (
     <span>{label}</span>
     <code>{value}</code>
   </li>
+);
+
+const PreviewField = ({ label, value }: { label: string; value: string }) => (
+  <div className="tenant-activation-ada-preview-field">
+    <span>{label}</span>
+    <strong>{value}</strong>
+  </div>
 );
 
 const apiFetch = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
@@ -672,4 +819,12 @@ const sameStringSet = (left: string[], right: string[]): boolean => {
   const leftSet = new Set(left);
   const rightSet = new Set(right);
   return leftSet.size === rightSet.size && [...leftSet].every((item) => rightSet.has(item));
+};
+
+const statusClass = (value?: string): string => {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "active" || normalized === "approved" || normalized === "ready") return "positive";
+  if (normalized === "failed" || normalized === "rejected" || normalized === "blocked") return "negative";
+  if (normalized === "pending" || normalized === "draft" || normalized === "activating") return "attention";
+  return "neutral";
 };

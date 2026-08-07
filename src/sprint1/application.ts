@@ -37,7 +37,7 @@ export interface CreateLinkedInstrumentInput {
   accountOfDigitalAssetId: string;
   instrumentType: LinkedInstrument["instrumentType"];
   status: LinkedInstrument["status"];
-  externalReference?: string;
+  reference?: string;
 }
 
 export class Sprint1Application {
@@ -163,7 +163,7 @@ export class Sprint1Application {
         accountOfDigitalAssetId: input.accountOfDigitalAssetId,
         instrumentType: input.instrumentType,
         status: input.status,
-        externalReference: input.externalReference,
+        reference: input.reference,
         createdAt: nowIso()
       };
       state.linkedInstruments.set(instrument.id, instrument);

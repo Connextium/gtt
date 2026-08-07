@@ -33,7 +33,7 @@ app.onboarding.saveOnboardingSection(operator, onboarding.id, "business_informat
 app.onboarding.addDocumentMetadata(operator, onboarding.id, {
   documentType: "business_registration",
   fileName: "business-registration.pdf",
-  externalReference: "sim-doc-demo"
+  reference: "sim-doc-demo"
 });
 await app.onboarding.submitOnboardingApplication(operator, onboarding.id);
 const approved = await app.onboarding.pollOnboardingStatus(operator, onboarding.id);

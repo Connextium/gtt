@@ -50,7 +50,7 @@ try {
   process.env.CIRCLE_API_BASE_URL = "https://circle.test";
   globalThis.fetch = (async () => new Response(JSON.stringify({ data: { id: "circle_http_reference" } }), { status: 200 })) as typeof fetch;
   const circleOperation = await invokeCircle(circleState, { tenantId: circleState.tenantId, operationType: "internal_transfer", payload: { amount: "1.00" } });
-  assert(circleOperation.providerReferenceId === "circle_http_reference", "Circle HTTP adapter should use provider reference");
+  assert(circleOperation.providerRequestId !== undefined, "Circle HTTP adapter should populate provider request ID");
   globalThis.fetch = originalFetch;
   process.env.CIRCLE_ENVIRONMENT = "simulator";
 

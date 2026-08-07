@@ -53,7 +53,7 @@ const prepareApprovedAda = async () => {
   const document = app.onboarding.addDocumentMetadata(context, onboarding.id, {
     documentType: "articles_of_incorporation",
     fileName: "articles.pdf",
-    externalReference: "sim-doc-001"
+    reference: "sim-doc-001"
   });
   await app.onboarding.submitOnboardingApplication(context, onboarding.id);
   const approved = await app.onboarding.pollOnboardingStatus(context, onboarding.id);

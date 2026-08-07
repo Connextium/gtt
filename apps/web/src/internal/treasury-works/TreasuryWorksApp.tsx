@@ -17,9 +17,13 @@ import {
   ReleaseReadiness,
   UatEvidence
 } from "./OperationWorkflowRoutes.js";
+import { Sprint52SettlementContent } from "./Sprint52SettlementContent.js";
 import { internalRouteForPath } from "../internal-routes.js";
 
 export const treasuryWorksRoutes = new Set([
+  "/internal/operations/settlement-advance",
+  "/internal/operations/tenant-disbursements",
+  "/internal/operations/platform-wire-mint",
   "/internal/operations/rebalancing",
   "/internal/operations/rebalancing/approvals",
   "/internal/operations/reconciliation",
@@ -123,6 +127,15 @@ export const TreasuryWorksContent = ({
       )}
       {path.startsWith("/internal/operations/reconciliation/breaks/") && selectedBreak && (
         <BreakDetail reconciliationBreak={selectedBreak} onAssign={assignBreak} onResolve={resolveBreak} />
+      )}
+      {path === "/internal/operations/settlement-advance" && (
+        <Sprint52SettlementContent mode="settlement" navigate={navigate} />
+      )}
+      {path === "/internal/operations/tenant-disbursements" && (
+        <Sprint52SettlementContent mode="disbursements" navigate={navigate} />
+      )}
+      {path === "/internal/operations/platform-wire-mint" && (
+        <Sprint52SettlementContent mode="wire" navigate={navigate} />
       )}
       {path === "/internal/operations/daily-close" && (
         <DailyClose openBreaks={openBreaks} assignedBreaks={assignedBreaks} resolvedBreaks={resolvedBreaks} />

@@ -146,6 +146,46 @@ export const migrationCatalog: MigrationCatalogEntry[] = [
     version: "0024",
     fileName: "0024_sprint3_2_circle_wallet_linked_instruments.sql",
     domainModules: ["digital-accounts", "circle-integration"]
+  },
+  {
+    version: "0025",
+    fileName: "0025_business_client_circle_wallet_set_override.sql",
+    domainModules: ["client-onboarding", "digital-accounts", "circle-integration"]
+  },
+  {
+    version: "0026",
+    fileName: "0026_drop_linked_instruments_external_reference.sql",
+    domainModules: ["digital-accounts", "circle-integration"]
+  },
+  {
+    version: "0027",
+    fileName: "0027_drop_linked_instruments_provider_reference_id.sql",
+    domainModules: ["digital-accounts", "circle-integration"]
+  },
+  {
+    version: "0028",
+    fileName: "0028_drop_circle_api_operations_provider_reference_id.sql",
+    domainModules: ["circle-integration", "events"]
+  },
+  {
+    version: "0029",
+    fileName: "0029_accounts_of_digital_asset_metadata.sql",
+    domainModules: ["digital-accounts", "circle-integration"]
+  },
+  {
+    version: "0030",
+    fileName: "0030_fiat_wire_accounts_business_wire_account_id.sql",
+    domainModules: ["payment-execution", "digital-accounts", "circle-integration"]
+  },
+  {
+    version: "0031",
+    fileName: "0031_replace_fiat_wire_accounts_with_linked_instruments.sql",
+    domainModules: ["payment-execution", "digital-accounts"]
+  },
+  {
+    version: "0032",
+    fileName: "0032_sprint5_funding_instruction_orchestration.sql",
+    domainModules: ["payment-execution", "circle-integration", "reconciliation", "events"]
   }
 ];
 

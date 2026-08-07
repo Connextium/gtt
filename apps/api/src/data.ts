@@ -25,6 +25,7 @@ export interface BusinessClient {
   onboardingStatus: "draft" | "submitted" | "approved" | "restricted" | "closed";
   circleClientEntityId?: string;
   circleApplicationId?: string;
+  circleWalletSetId?: string;
   createdAt: string;
 }
 
@@ -255,6 +256,7 @@ export interface FiatWireAccount {
   bankName: string;
   accountNumberLast4: string;
   routingNumber: string;
+  businessWireAccountId?: string;
   status: "active" | "disabled";
 }
 
@@ -331,7 +333,10 @@ export interface CircleOperation {
   operationType: string;
   requestPayload: Record<string, unknown>;
   responsePayload: Record<string, unknown>;
-  providerReferenceId: string;
+  providerRequestId?: string;
+  providerAccountId?: string;
+  providerWalletId?: string;
+  providerAddressId?: string;
   status: "complete" | "failed";
   createdAt: string;
 }
@@ -345,6 +350,20 @@ export interface CircleWebhookPayload {
   normalizedPayload: Record<string, unknown>;
   status: "received" | "processed" | "rejected";
   receivedAt: string;
+}
+
+export interface FiatMintHistoryRecord {
+  id: string;
+  tenantId: string;
+  wireAccountId: string;
+  targetAccountOfDigitalAssetId: string;
+  amountMinorUnits: bigint;
+  status: "completed" | "failed";
+  providerMintId?: string;
+  providerWalletId?: string;
+  destinationWalletId?: string;
+  circleOperationId?: string;
+  createdAt: string;
 }
 
 export interface ApiState {
@@ -371,6 +390,7 @@ export interface ApiState {
   reservations: FundingReservation[];
   payments: PaymentExecution[];
   wireAccounts: FiatWireAccount[];
+  fiatMintHistory: FiatMintHistoryRecord[];
   redemptions: FiatRedemption[];
   recommendations: RebalanceRecommendation[];
   reconciliationBreaks: ReconciliationBreak[];
@@ -561,6 +581,7 @@ export const createInitialState = (): ApiState => {
     reservations: [],
     payments: [],
     wireAccounts: [],
+    fiatMintHistory: [],
     redemptions: [],
     recommendations: [
       {

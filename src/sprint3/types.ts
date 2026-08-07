@@ -23,7 +23,7 @@ export interface SettlementObligation {
   status: ObligationStatus;
   fundingStatus: FundingStatus;
   dueDate: string;
-  externalReference?: string;
+  reference?: string;
   version: number;
   approvedAt?: string;
   cancelledAt?: string;

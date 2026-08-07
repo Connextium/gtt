@@ -137,7 +137,7 @@ export const InternalShell = ({
             <nav className="command-center-sidepanel-nav">
               {internalShellNavItems.map((item) => {
                 const Icon = item.icon;
-                const children = item.children ?? [];
+                const children = (item.children ?? []).filter((child) => child.showInShellNav !== false);
                 const hasChildren = children.length > 0;
                 const expanded = hasChildren && expandedNavGroups[item.path] !== false;
                 return (

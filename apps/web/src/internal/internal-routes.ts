@@ -122,22 +122,70 @@ export const internalRoutes: InternalRouteDefinition[] = [
         showInShellNav: true
       },
       {
-        label: "Active Ledgers",
+        label: "Initializing Journal",
         path: "/internal/operations/ledger/active-ledgers",
-        description: "Monitor active ADA-backed ledgers, rail status, and reconciliation posture.",
+        description: "Monitor initializing journal records for ADA-backed ledgers, rail status, and reconciliation posture.",
         workflow: "ledger",
         icon: Landmark,
         showInShellNav: true
       },
       {
-        label: "Opening Journal",
+        label: "Post Journal",
         path: "/internal/operations/ledger/opening-journal",
-        description: "Post controlled opening journal events to approved ADA accounts.",
+        description: "Post controlled journal events to approved ADA accounts.",
+        workflow: "ledger",
+        icon: ClipboardCheck,
+        showInShellNav: false
+      },
+      {
+        label: "Journal Entries",
+        path: "/internal/operations/ledger/journals",
+        description: "Inspect posted journals, view lines, and execute controlled reversals.",
         workflow: "ledger",
         icon: ClipboardCheck,
         showInShellNav: true
       }
     ],
+    showInShellNav: true
+  },
+  {
+    label: "Funding Instructions",
+    path: "/internal/operations/funding-instructions",
+    description: "Create and authorize internal treasury mint funding instructions for ADA account topology.",
+    workflow: "liquidity-rebalancing",
+    icon: Workflow,
+    showInShellNav: true
+  },
+  {
+    label: "Funding Order Console",
+    path: "/internal/operations/funding-instructions/orders",
+    description: "Monitor funding instruction orchestration, order statuses, and settlement evidence.",
+    workflow: "liquidity-rebalancing",
+    icon: Workflow,
+    showInShellNav: true
+  },
+  {
+    label: "Settlement Advance",
+    path: "/internal/operations/settlement-advance",
+    description: "Operate reservation and activation lifecycle for Sprint 5-2.",
+    workflow: "liquidity-rebalancing",
+    icon: BanknoteArrowUp,
+    showInShellNav: true
+  },
+  {
+    label: "Tenant Disbursements",
+    path: "/internal/operations/tenant-disbursements",
+    description: "Operate tenant activation gating before disbursement execution.",
+    workflow: "liquidity-rebalancing",
+    icon: Workflow,
+    showInShellNav: true
+  },
+  {
+    label: "Platform Wire Mint",
+    path: "/internal/operations/platform-wire-mint",
+    description: "Operate platform wire account setup and fiat to USDC mint path.",
+    workflow: "liquidity-rebalancing",
+    icon: Landmark,
     showInShellNav: true
   },
   {
