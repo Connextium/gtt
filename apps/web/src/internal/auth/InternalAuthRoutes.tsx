@@ -1,7 +1,7 @@
 import { ArrowRight, CheckCircle2, Circle, Eye, HelpCircle, Lock, ShieldAlert } from "lucide-react";
 import type { FormEvent } from "react";
 import { useState } from "react";
-import adaOfficeInhouseImageUrl from "../../assets-ada/office-inhouse.jpg";
+import adaInternalHouseImageUrl from "../../assets-ada/internal-house.jpg";
 import internalHouseImageUrl from "../../assets-internal/internal-house.jpg";
 import {
   canAccessOperations,
@@ -12,7 +12,7 @@ import {
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 const internalLoginImageUrl = window.location.hostname.startsWith("ada-")
-  ? adaOfficeInhouseImageUrl
+  ? adaInternalHouseImageUrl
   : internalHouseImageUrl;
 
 interface InternalAuthResponse {
