@@ -9,7 +9,7 @@ export interface JsonResponse {
 
 export const corsHeaders = (origin?: string | string[]): Record<string, string> => {
   const headers: Record<string, string> = {
-    "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PATCH,PUT,OPTIONS",
     "access-control-allow-headers": "authorization,content-type,idempotency-key,x-correlation-id,x-gtt-api-key,x-dev-auth-user-id,x-dev-auth-email"
   };
   const allowedOrigin = allowedCorsOrigin(Array.isArray(origin) ? origin[0] : origin);

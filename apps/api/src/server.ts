@@ -6,7 +6,7 @@ import type { ApiAuthContext } from "./auth/index.js";
 import { authenticateApiRequestWithDatabaseFallback } from "./auth/middleware.js";
 import { createInitialState, emitAudit } from "./data.js";
 import { postgresUrlFromEnv } from "./db/connection.js";
-import { handleSprint1PostgresRoute, isSprint1PostgresRoute } from "./db/sprint1-postgres-unit-of-work.js";
+import { handlePostgresRoute, isPostgresApiRoute } from "./db/postgres-route-handler.js";
 import { withApiStateTransaction } from "./db/state-transaction.js";
 import { loadApiStateSnapshot, saveApiStateSnapshot } from "./db/state-store.js";
 import { persistInternalIdentityTables, refreshInternalIdentityStateFromTables, shouldPersistInternalIdentity, shouldRefreshInternalIdentity } from "./db/internal-identity-store.js";
@@ -49,7 +49,7 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
     const url = parseRequestUrl(request.url ?? "/");
     try {
       const state = await statePromise;
-      const isMutatingRequest = ["POST", "PATCH"].includes(request.method ?? "GET");
+      const isMutatingRequest = ["POST", "PATCH", "PUT"].includes(request.method ?? "GET");
       const rawBody = isMutatingRequest ? await readRawBody(request) : "";
       const body = rawBody.trim() ? JSON.parse(rawBody) as Record<string, unknown> : {};
       if (shouldRefreshInternalIdentity(url.pathname)) {
@@ -71,9 +71,9 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
         ? headers["idempotency-key"] ?? stringFromBody(body, "idempotencyKey")
         : undefined;
       const hasPostgres = Boolean(postgresUrlFromEnv());
-      const isPostgresRoute = isSprint1PostgresRoute(request.method ?? "GET", url.pathname);
+      const isPostgresRoute = isPostgresApiRoute(request.method ?? "GET", url.pathname);
       if (hasPostgres && isPostgresRoute) {
-        const result = await handleSprint1PostgresRoute({
+        const result = await handlePostgresRoute({
           method: request.method ?? "GET",
           pathname: url.pathname,
           query: Object.fromEntries(url.searchParams.entries()),

@@ -10,142 +10,148 @@ import {
 import { requestHash } from "../events/idempotency.js";
 import type { JsonResponse } from "../http/index.js";
 import {
-  checkCircleHealth,
   circleEnvironment,
   circleWalletAccountType,
-  initializeCircleWalletSet,
-  initializeTenantCircleWallet,
-  mintFiatToCircleWallet,
-  provisionAdaCircleMapping,
-  provisionSandboxWireFundingInstructions,
-  retrieveSandboxWireFundingInstructions,
-  verifyCircleWebhook
 } from "../modules/circle/index.js";
+import { circleGateway } from "../modules/circle/circle-gateway.js";
+import { createCircleDiagnosticsService } from "../services/circle-diagnostics-service.js";
+import { createCircleTreasuryService } from "../services/circle-treasury-service.js";
+import {
+  circleWebhookIdempotencyKey,
+  createCircleWebhookService,
+  type CircleWebhookService,
+  type NormalizedCircleWebhookEvent
+} from "../services/circle-webhook-service.js";
+import { isPostgresRoute } from "./components/postgres-route-registry.js";
+import { createCircleOperationRepository } from "./repositories/circle-operation-repository.js";
+import { createCircleWebhookRepository } from "./repositories/circle-webhook-repository.js";
+import { createAdaCircleProvisionRepository } from "./repositories/ada-circle-provision-repository.js";
+import { createFiatWireMintRepository } from "./repositories/fiat-wire-mint-repository.js";
+import { createTenantActivationRepository } from "./repositories/tenant-activation-repository.js";
+import {
+  provisionCircleAccountService,
+  type ProvisionCircleAccountResult
+} from "../services/ada-circle-provision-service.js";
+import { mintFromFiatWireAccountService } from "../services/fiat-wire-mint-service.js";
+import { activateTenantService } from "../services/tenant-activation-service.js";
+import { createClientFundingService } from "../services/client-funding-service.js";
+import { authenticateBusinessUser } from "../modules/client-onboarding/index.js";
+import { createClientFundingRepository } from "./repositories/client-funding-repository.js";
+import type { PostgresQueryClient, PostgresRouteInput } from "./postgres-route-types.js";
 import { withPostgresTransaction, type PostgresClient } from "./transaction.js";
 
 const defaultTenantId = (): string => process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001";
 
-export interface Sprint1PostgresCommandInput {
-  method: string;
-  pathname: string;
-  query?: Record<string, string>;
-  body: Record<string, unknown>;
-  rawBody?: string;
-  headers?: Record<string, string | undefined>;
-  idempotencyKey?: string;
-  correlationId: string;
-  apiKeyId?: string;
-  apiClientId?: string;
-  actorUserId?: string;
-  actorRole?: string;
-}
+const circleWebhooks = (client: PostgresQueryClient): CircleWebhookService => createCircleWebhookService({
+  repository: createCircleWebhookRepository(client),
+  processFundingEvent: processFundingInstructionWebhookEvent,
+  writeAuditAndOutbox
+});
 
-export const isSprint1PostgresRoute = (method: string, pathname: string): boolean => {
-  if (method === "GET") {
-    return pathname === "/api-keys"
-      || /^\/api-keys\/[^/]+$/.test(pathname)
-      || pathname === "/business-clients"
-      || /^\/business-clients\/[^/]+$/.test(pathname)
-      || pathname === "/accounts-of-digital-asset"
-      || /^\/accounts-of-digital-asset\/[^/]+$/.test(pathname)
-      || /^\/accounts-of-digital-asset\/[^/]+\/balances$/.test(pathname)
-      || /^\/accounts-of-digital-asset\/[^/]+\/statement$/.test(pathname)
-      || /^\/accounts-of-digital-asset\/[^/]+\/statements$/.test(pathname)
-      || /^\/accounts-of-digital-asset\/[^/]+\/linked-instruments$/.test(pathname)
-      || /^\/accounts-of-digital-asset\/[^/]+\/provider-mappings$/.test(pathname)
-      || pathname === "/ledger/chart-of-accounts"
-      || pathname === "/ledger/posting-rules"
-      || pathname === "/ledger/journals"
-      || /^\/ledger\/journals\/[^/]+$/.test(pathname)
-      || pathname === "/funding-instructions"
-      || pathname === "/funding-reservations"
-      || /^\/funding-reservations\/[^/]+$/.test(pathname)
-      || /^\/funding-instructions\/[^/]+$/.test(pathname)
-      || /^\/funding-instructions\/[^/]+\/orders$/.test(pathname)
-      || pathname === "/payments"
-      || /^\/payments\/[^/]+$/.test(pathname)
-      || pathname === "/fiat/wire-accounts"
-      || pathname === "/fiat/mints"
-      || pathname === "/fiat/redemptions"
-      || /^\/fiat\/redemptions\/[^/]+$/.test(pathname)
-      || /^\/accounts-of-digital-asset\/[^/]+\/funding-routes$/.test(pathname)
-      || pathname === "/reconciliation/breaks"
-      || /^\/reconciliation\/breaks\/[^/]+$/.test(pathname)
-      || pathname === "/balances/projection-runs"
-      || pathname === "/treasury-accounting/trial-balance"
-      || pathname === "/treasury-accounting/customer-liability-control"
-      || pathname === "/events/outbox"
-      || pathname === "/events/inbox"
-      || pathname === "/audit-log"
-      || pathname === "/audit-events"
-      || pathname === "/tenants/current/activation"
-      || pathname === "/integrations/circle/health";
-  }
-  if (method === "PATCH") {
-    return /^\/accounts-of-digital-asset\/[^/]+\/linked-instruments\/[^/]+$/.test(pathname);
-  }
-  return method === "POST" && (
-    [
-      "/api-keys",
-    "/business-clients",
-    "/accounts-of-digital-asset",
-    "/ledger/events/opening-journal",
-    "/ledger/journals"
-    ].includes(pathname)
-    || /^\/api-keys\/[^/]+\/(revoke|rotate)$/.test(pathname)
-    || /^\/business-clients\/[^/]+\/(submit-onboarding|map-circle|restrict|close)$/.test(pathname)
-    || /^\/accounts-of-digital-asset\/[^/]+\/linked-instruments$/.test(pathname)
-    || /^\/accounts-of-digital-asset\/[^/]+\/linked-instruments\/[^/]+\/(verify|disable)$/.test(pathname)
-    || /^\/accounts-of-digital-asset\/[^/]+\/(activate|restrict|unrestrict|freeze|unfreeze|close|provision-circle)$/.test(pathname)
-    || pathname === "/tenants/current/activate"
-    || pathname === "/integrations/circle/sandbox-check"
-    || pathname === "/funding-instructions"
-    || pathname === "/funding-reservations"
-    || pathname === "/payments/internal"
-    || pathname === "/payments/external-usdc"
-    || pathname === "/fiat/wire-accounts"
-    || pathname === "/fiat/redemptions"
-    || /^\/funding-instructions\/[^/]+\/(assign-route|cancel)$/.test(pathname)
-    || /^\/funding-reservations\/[^/]+\/(activate|release|expire|cancel)$/.test(pathname)
-    || /^\/payments\/[^/]+\/(submit|cancel|retry|refresh-status)$/.test(pathname)
-    || /^\/fiat\/wire-accounts\/[^/]+\/mint$/.test(pathname)
-    || /^\/fiat\/redemptions\/[^/]+\/(submit|retry|refresh-status)$/.test(pathname)
-    || /^\/accounts-of-digital-asset\/[^/]+\/funding-routes$/.test(pathname)
-    || /^\/accounts-of-digital-asset\/[^/]+\/funding-routes\/[^/]+\/verify$/.test(pathname)
-    || pathname === "/webhooks/circle"
-    || /^\/internal\/webhooks\/circle\/[^/]+\/reprocess$/.test(pathname)
-    || /^\/reconciliation\/breaks\/[^/]+\/resolve$/.test(pathname)
-    || /^\/ledger\/journals\/[^/]+\/reverse$/.test(pathname)
-    || /^\/events\/(outbox|inbox)\/[^/]+\/retry$/.test(pathname)
-  );
-};
+const circleDiagnostics = (client: Pick<PostgresClient, "query">, tenantId: string) => createCircleDiagnosticsService({
+  circle: circleGateway,
+  operations: createCircleOperationRepository(client),
+  writeAuditAndOutbox: (input, eventType, payload) => writeAuditAndOutbox(client, tenantId, input, eventType, payload)
+});
 
-export const isSprint1PostgresCommand = isSprint1PostgresRoute;
+const circleTreasury = createCircleTreasuryService(circleGateway);
 
-export const handleSprint1PostgresRoute = async (input: Sprint1PostgresCommandInput): Promise<JsonResponse> => {
+const clientFunding = (client: PostgresQueryClient) => createClientFundingService(
+  createClientFundingRepository(client)
+);
+
+const provisionCircleAccount = (
+  client: PostgresQueryClient,
+  tenantId: string,
+  input: PostgresCommandInput,
+  accountId: string
+): Promise<ProvisionCircleAccountResult> => provisionCircleAccountService(
+  createAdaCircleProvisionRepository(client),
+  circleTreasury,
+  (eventType, payload) => writeAuditAndOutbox(client, tenantId, input, eventType, payload),
+  (resolvedAccountId) => getAccount(client, tenantId, resolvedAccountId),
+  (operationId) => getCircleOperation(client, tenantId, operationId),
+  tenantId,
+  input,
+  accountId,
+  circleEnvironment,
+  circleWalletBlockchainsFromEnv,
+  circleWalletAccountType
+);
+
+const mintFromFiatWireAccount = (
+  client: PostgresQueryClient,
+  tenantId: string,
+  input: PostgresCommandInput,
+  wireAccountId: string
+): Promise<JsonResponse> => mintFromFiatWireAccountService(
+  createFiatWireMintRepository(client),
+  circleTreasury,
+  (accountId) => provisionCircleAccount(client, tenantId, input, accountId),
+  (eventType, payload) => writeAuditAndOutbox(client, tenantId, input, eventType, payload),
+  (accountId) => getAccount(client, tenantId, accountId),
+  (operationId) => getCircleOperation(client, tenantId, operationId),
+  tenantId,
+  input,
+  wireAccountId,
+  circleEnvironment
+);
+
+const activateTenant = (
+  client: PostgresQueryClient,
+  tenantId: string,
+  input: PostgresCommandInput
+): Promise<JsonResponse> => activateTenantService(
+  createTenantActivationRepository(client),
+  circleTreasury,
+  (eventType, payload) => writeAuditAndOutbox(client, tenantId, input, eventType, payload),
+  tenantId,
+  input,
+  circleEnvironment,
+  circleWalletBlockchainsFromEnv,
+  circleWalletAccountType
+);
+
+export type PostgresCommandInput = PostgresRouteInput;
+
+export const isPostgresApiRoute = isPostgresRoute;
+
+export const isPostgresApiCommand = isPostgresApiRoute;
+
+export const handlePostgresRoute = async (input: PostgresCommandInput): Promise<JsonResponse> => {
   const hash = requestHash({ method: input.method, pathname: input.pathname, body: input.body });
-  if (input.method === "GET") return executeSprint1PostgresQuery(input);
+  if (input.method === "GET") return executePostgresQuery(input);
   const resolvedIdempotencyKey = input.idempotencyKey
-    ?? (input.pathname === "/webhooks/circle" ? webhookIdempotencyKey(input, hash) : undefined);
+    ?? (input.pathname === "/webhooks/circle" ? circleWebhookIdempotencyKey(input, hash) : undefined);
   if (!resolvedIdempotencyKey) return { status: 400, body: { error: "idempotency_key_required" } };
   const commandInput = resolvedIdempotencyKey === input.idempotencyKey
     ? input
     : { ...input, idempotencyKey: resolvedIdempotencyKey };
-  return withPostgresTransaction((client) => executeSprint1PostgresCommand(client, commandInput, hash));
+  return withPostgresTransaction((client) => executePostgresCommand(client, commandInput, hash));
 };
 
-export const handleSprint1PostgresCommand = handleSprint1PostgresRoute;
+export const handlePostgresCommand = handlePostgresRoute;
 
-export const executeSprint1PostgresQuery = async (input: Sprint1PostgresCommandInput): Promise<JsonResponse> => {
-  return withPostgresTransaction((client) => executeSprint1PostgresQueryWithClient(client, input));
+export const executePostgresQuery = async (input: PostgresCommandInput): Promise<JsonResponse> => {
+  return withPostgresTransaction((client) => executePostgresQueryWithClient(client, input));
 };
 
-export const executeSprint1PostgresQueryWithClient = async (
+export const executePostgresQueryWithClient = async (
   client: Pick<PostgresClient, "query">,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const tenantId = defaultTenantId();
   await ensureTenant(client, tenantId);
+  const clientFundingMatch = input.pathname.match(/^\/business\/me\/funding-instructions(?:\/([^/]+))?(?:\/(orders))?$/);
+  if (clientFundingMatch) {
+    const user = await authenticateBusinessUser(input.headers ?? {});
+    if (!user) return { status: 401, body: { error: "business_user_auth_required" } };
+    const service = clientFunding(client);
+    const instructionId = clientFundingMatch[1] ? decodeURIComponent(clientFundingMatch[1]) : undefined;
+    if (!instructionId) return service.list(tenantId, user, input.query ?? {});
+    if (clientFundingMatch[2] === "orders") return service.orders(tenantId, user, instructionId);
+    return service.detail(tenantId, user, instructionId);
+  }
   if (input.pathname === "/api-keys") return { status: 200, body: { keys: await listApiKeys(client, tenantId) } };
     const apiKeyMatch = input.pathname.match(/^\/api-keys\/([^/]+)$/);
     if (apiKeyMatch) {
@@ -224,6 +230,31 @@ export const executeSprint1PostgresQueryWithClient = async (
     if (input.pathname === "/fiat/wire-accounts") return { status: 200, body: { wireAccounts: await listFiatWireAccounts(client, tenantId) } };
     if (input.pathname === "/fiat/mints") return { status: 200, body: await listFiatMints(client, tenantId, input.query) };
     if (input.pathname === "/fiat/redemptions") return { status: 200, body: { redemptions: await listFiatRedemptions(client, tenantId) } };
+    if (input.pathname === "/internal/treasury/credit-line") return { status: 200, body: await getSettlementAdvanceCreditLine(client, tenantId) };
+    if (input.pathname === "/internal/treasury/settlement-advance") {
+      return { status: 200, body: { transfers: await listSettlementAdvances(client, tenantId) } };
+    }
+    const settlementAdvanceMatch = input.pathname.match(/^\/internal\/treasury\/settlement-advance\/([^/]+)$/);
+    if (settlementAdvanceMatch) {
+      const transfer = await getSettlementAdvance(client, tenantId, decodeURIComponent(settlementAdvanceMatch[1]!));
+      return transfer ? { status: 200, body: { transfer } } : { status: 404, body: { error: "settlement_advance_not_found" } };
+    }
+    if (input.pathname === "/internal/treasury/tenant-disbursements") {
+      return { status: 200, body: { disbursements: await listTenantDisbursements(client, tenantId) } };
+    }
+    const tenantDisbursementMatch = input.pathname.match(/^\/internal\/treasury\/tenant-disbursements\/([^/]+)$/);
+    if (tenantDisbursementMatch) {
+      const disbursement = await getTenantDisbursement(client, tenantId, decodeURIComponent(tenantDisbursementMatch[1]!));
+      return disbursement ? { status: 200, body: { disbursement } } : { status: 404, body: { error: "tenant_disbursement_not_found" } };
+    }
+    if (input.pathname === "/internal/operations/linked-wire-accounts") {
+      return { status: 200, body: { linkedWireAccounts: await listLinkedWireAccounts(client, tenantId) } };
+    }
+    const linkedWireAccountMatch = input.pathname.match(/^\/internal\/operations\/linked-wire-accounts\/([^/]+)$/);
+    if (linkedWireAccountMatch) {
+      const linkedWireAccount = await getLinkedWireAccount(client, tenantId, decodeURIComponent(linkedWireAccountMatch[1]!));
+      return linkedWireAccount ? { status: 200, body: { linkedWireAccount } } : { status: 404, body: { error: "linked_wire_account_not_found" } };
+    }
     const fiatRedemptionMatch = input.pathname.match(/^\/fiat\/redemptions\/([^/]+)$/);
     if (fiatRedemptionMatch) {
       const redemption = await getFiatRedemption(client, tenantId, decodeURIComponent(fiatRedemptionMatch[1]!));
@@ -252,17 +283,33 @@ export const executeSprint1PostgresQueryWithClient = async (
     if (input.pathname === "/events/inbox") return { status: 200, body: { events: await listInboxEvents(client, tenantId) } };
     if (input.pathname === "/audit-log" || input.pathname === "/audit-events") return { status: 200, body: { auditEvents: await listAuditEvents(client, tenantId) } };
     if (input.pathname === "/tenants/current/activation") return { status: 200, body: await getTenantActivation(client, tenantId) };
-    if (input.pathname === "/integrations/circle/health") return { status: 200, body: await getCircleHealth(client, tenantId) };
+    if (input.pathname === "/integrations/circle/health") {
+      return { status: 200, body: await circleDiagnostics(client, tenantId).getHealth(tenantId) };
+    }
   return { status: 404, body: { error: "postgres_query_not_supported" } };
 };
 
-export const executeSprint1PostgresCommand = async (
+export const executePostgresCommand = async (
   client: Pick<PostgresClient, "query">,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   hash: string
 ): Promise<JsonResponse> => {
   const tenantId = defaultTenantId();
   await ensureTenant(client, tenantId);
+  if (input.pathname === "/business/me/funding-instructions") {
+    const user = await authenticateBusinessUser(input.headers ?? {});
+    if (!user) return { status: 401, body: { error: "business_user_auth_required" } };
+    const scopedInput = {
+      ...input,
+      idempotencyKey: `business-user:${user.authUserId}:${input.idempotencyKey}`
+    };
+    const replay = await findIdempotencyRecord(client, tenantId, scopedInput.idempotencyKey, hash);
+    if (replay) return { status: 200, body: replay };
+    await ensureLegacyIdempotencyKey(client, scopedInput.idempotencyKey, hash);
+    const response = await clientFunding(client).create(tenantId, user, scopedInput);
+    if (response.status < 400) await recordIdempotency(client, tenantId, scopedInput, hash, response.body);
+    return response;
+  }
   const replay = await findIdempotencyRecord(client, tenantId, input.idempotencyKey!, hash);
   if (replay) return { status: 200, body: replay };
   await ensureLegacyIdempotencyKey(client, input.idempotencyKey!, hash);
@@ -286,6 +333,9 @@ export const executeSprint1PostgresCommand = async (
     const fundingRouteCreateMatch = input.pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/funding-routes$/);
     const fundingRouteVerifyMatch = input.pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/funding-routes\/([^/]+)\/verify$/);
     const wireMintMatch = input.pathname.match(/^\/fiat\/wire-accounts\/([^/]+)\/mint$/);
+    const settlementAdvanceActionMatch = input.pathname.match(/^\/internal\/treasury\/settlement-advance\/([^/]+)\/(request|cancel)$/);
+    const tenantDisbursementActionMatch = input.pathname.match(/^\/internal\/treasury\/tenant-disbursements\/([^/]+)\/(approve|submit)$/);
+    const linkedWireRefreshMatch = input.pathname.match(/^\/internal\/operations\/linked-wire-accounts\/([^/]+)\/refresh-instructions$/);
     const webhookReprocessMatch = input.pathname.match(/^\/internal\/webhooks\/circle\/([^/]+)\/reprocess$/);
     const reconciliationBreakResolveMatch = input.pathname.match(/^\/reconciliation\/breaks\/([^/]+)\/resolve$/);
     const journalReverseMatch = input.pathname.match(/^\/ledger\/journals\/([^/]+)\/reverse$/);
@@ -330,6 +380,33 @@ export const executeSprint1PostgresCommand = async (
       response = await createFiatRedemption(client, tenantId, input);
     } else if (wireMintMatch) {
       response = await mintFromFiatWireAccount(client, tenantId, input, decodeURIComponent(wireMintMatch[1]!));
+    } else if (input.pathname === "/internal/treasury/settlement-advance/reserve") {
+      response = await reserveSettlementAdvance(client, tenantId, input);
+    } else if (settlementAdvanceActionMatch) {
+      response = await transitionSettlementAdvance(
+        client,
+        tenantId,
+        input,
+        decodeURIComponent(settlementAdvanceActionMatch[1]!),
+        settlementAdvanceActionMatch[2]!
+      );
+    } else if (input.pathname === "/internal/treasury/tenant-disbursements") {
+      response = await createTenantDisbursement(client, tenantId, input);
+    } else if (tenantDisbursementActionMatch) {
+      response = await transitionTenantDisbursement(
+        client,
+        tenantId,
+        input,
+        decodeURIComponent(tenantDisbursementActionMatch[1]!),
+        tenantDisbursementActionMatch[2]!
+      );
+    } else if (linkedWireRefreshMatch) {
+      response = await refreshLinkedWireAccountInstructions(
+        client,
+        tenantId,
+        input,
+        decodeURIComponent(linkedWireRefreshMatch[1]!)
+      );
     } else if (fundingInstructionActionMatch) {
       response = await transitionFundingInstruction(
         client,
@@ -373,11 +450,16 @@ export const executeSprint1PostgresCommand = async (
         decodeURIComponent(fundingRouteVerifyMatch[2]!)
       );
     } else if (input.pathname === "/webhooks/circle") {
-      response = await ingestCircleWebhook(client, tenantId, input);
+      response = await circleWebhooks(client).ingest(client, tenantId, input);
     } else if (webhookReprocessMatch) {
-      response = await reprocessCircleWebhook(client, tenantId, input, decodeURIComponent(webhookReprocessMatch[1]!));
+      response = await circleWebhooks(client).reprocess(client, tenantId, input, decodeURIComponent(webhookReprocessMatch[1]!));
     } else if (reconciliationBreakResolveMatch) {
-      response = await resolveReconciliationBreak(client, tenantId, input, decodeURIComponent(reconciliationBreakResolveMatch[1]!));
+      response = await circleWebhooks(client).resolveReconciliationBreak(
+        client,
+        tenantId,
+        input,
+        decodeURIComponent(reconciliationBreakResolveMatch[1]!)
+      );
     } else if (accountLifecycleMatch) {
       response = await transitionAccount(client, tenantId, input, decodeURIComponent(accountLifecycleMatch[1]!), accountLifecycleMatch[2]!);
     } else if (accountProvisionMatch) {
@@ -387,7 +469,7 @@ export const executeSprint1PostgresCommand = async (
     } else if (input.pathname === "/tenants/current/activate") {
       response = await activateTenant(client, tenantId, input);
     } else if (input.pathname === "/integrations/circle/sandbox-check") {
-      response = await runCircleSandboxCheck(client, tenantId, input);
+      response = await circleDiagnostics(client, tenantId).runSandboxCheck(tenantId, input);
     } else if (input.pathname === "/business-clients") {
     response = await createBusinessClient(client, tenantId, input);
   } else if (input.pathname === "/accounts-of-digital-asset") {
@@ -412,7 +494,7 @@ export const executeSprint1PostgresCommand = async (
 const createApiKey = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const now = new Date().toISOString();
   const apiClient = {
@@ -455,7 +537,7 @@ const createApiKey = async (
 const revokeApiKey = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   apiKeyId: string
 ): Promise<JsonResponse> => {
   const now = new Date().toISOString();
@@ -475,7 +557,7 @@ const revokeApiKey = async (
 const rotateApiKey = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   oldApiKeyId: string
 ): Promise<JsonResponse> => {
   const oldResult = await client.query(
@@ -588,7 +670,7 @@ const findIdempotencyRecord = async (
 const recordIdempotency = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   hash: string,
   responseBody: unknown
 ): Promise<void> => {
@@ -633,7 +715,7 @@ const ensureLegacyIdempotencyKey = async (
 const createBusinessClient = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const businessClientWalletSetId = optionalStringBody(input.body, "circleWalletSetId") ?? optionalStringBody(input.body, "walletSetId");
   const businessClient = {
@@ -667,7 +749,7 @@ const createBusinessClient = async (
 const createAccountOfDigitalAsset = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const businessClientId = stringBody(input.body, "businessClientId");
   const clientResult = await client.query(
@@ -719,7 +801,7 @@ const createAccountOfDigitalAsset = async (
 const createLinkedInstrument = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   accountId: string
 ): Promise<JsonResponse> => {
   const account = await getAccount(client, tenantId, accountId) as Record<string, unknown> | undefined;
@@ -891,7 +973,7 @@ const createLinkedInstrument = async (
       country: bankAddressCountry
     };
 
-    const wireSetup = await provisionSandboxWireFundingInstructions({
+    const wireSetup = await circleTreasury.provisionSandboxWire({
       tenantId,
       accountOfDigitalAssetId: accountId,
       businessClientId,
@@ -1010,7 +1092,7 @@ const createLinkedInstrument = async (
 const patchLinkedInstrument = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   accountId: string,
   instrumentId: string
 ): Promise<JsonResponse> => {
@@ -1107,7 +1189,7 @@ const patchLinkedInstrument = async (
 const updateLinkedInstrumentAction = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   accountId: string,
   instrumentId: string,
   action: "verify" | "disable"
@@ -1146,7 +1228,7 @@ const updateLinkedInstrumentAction = async (
 const postOpeningJournal = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const accountOfDigitalAssetId = stringBody(input.body, "accountOfDigitalAssetId");
   const amountMinorUnits = stringBody(input.body, "amountMinorUnits", "0");
@@ -1204,7 +1286,7 @@ const postOpeningJournal = async (
 const postManualJournal = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const amountMinorUnits = stringBody(input.body, "amountMinorUnits", "0");
   if (BigInt(amountMinorUnits) <= 0n) return { status: 400, body: { error: "money_amount_must_be_positive" } };
@@ -1225,6 +1307,7 @@ const postManualJournal = async (
 
   const accountOfDigitalAssetId = optionalStringBody(input.body, "accountOfDigitalAssetId") ?? null;
   const accountingEventType = stringBody(input.body, "eventType", "treasury.manual_journal.posted");
+  const sourceEventId = stringBody(input.body, "sourceEventId", input.idempotencyKey);
   const journal = {
     id: randomUUID(),
     tenantId,
@@ -1240,7 +1323,7 @@ const postManualJournal = async (
     `insert into treasury_journal_entries
       (id, platform_tenant_id, source_event_id, accounting_event_type, idempotency_key, description, correlation_id, posted_at)
      values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [journal.id, tenantId, input.idempotencyKey, accountingEventType, input.idempotencyKey, journal.description, input.correlationId, journal.createdAt]
+    [journal.id, tenantId, sourceEventId, accountingEventType, input.idempotencyKey, journal.description, input.correlationId, journal.createdAt]
   );
   await client.query(
     `insert into treasury_journal_lines
@@ -1261,7 +1344,7 @@ const postManualJournal = async (
 const reverseJournal = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   journalId: string
 ): Promise<JsonResponse> => {
   const existingReverse = await client.query(
@@ -1331,7 +1414,7 @@ const reverseJournal = async (
 const createFundingInstruction = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const destinationAccountOfDigitalAssetId = optionalStringBody(input.body, "destinationAccountOfDigitalAssetId")
     ?? optionalStringBody(input.body, "accountOfDigitalAssetId");
@@ -1426,7 +1509,7 @@ const createFundingInstruction = async (
 const createFiatWireAccount = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const wireAccountId = randomUUID();
   const businessClientIdInput = optionalStringBody(input.body, "businessClientId");
@@ -1468,7 +1551,7 @@ const createFiatWireAccount = async (
   let businessWireAccountId: string | undefined;
   const fullAccountNumber = optionalStringBody(input.body, "accountNumber");
   if (circleEnvironment() === "circle-sandbox" && fullAccountNumber) {
-    const circleWireRegistration = await provisionSandboxWireFundingInstructions({
+    const circleWireRegistration = await circleTreasury.provisionSandboxWire({
       tenantId,
       accountOfDigitalAssetId: targetAccountOfDigitalAssetId,
       businessClientId,
@@ -1554,7 +1637,7 @@ const createFiatWireAccount = async (
 const ensureTenantPseudoBusinessClient = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<string> => {
   const pseudoLegalName = "Platform Internal Treasury Client";
   const existing = await client.query(
@@ -1602,436 +1685,10 @@ const ensureTenantPseudoBusinessClient = async (
   return businessClientId;
 };
 
-const mintFromFiatWireAccount = async (
-  client: Pick<PostgresClient, "query">,
-  tenantId: string,
-  input: Sprint1PostgresCommandInput,
-  wireAccountId: string
-): Promise<JsonResponse> => {
-  const wireAccount = await getFiatWireAccount(client, tenantId, wireAccountId) as Record<string, unknown> | undefined;
-  if (!wireAccount) return { status: 404, body: { error: "wire_account_not_found" } };
-  if (wireAccount.status !== "active") return { status: 400, body: { error: "wire_account_not_active" } };
-  const sourceAccountOfDigitalAssetId = typeof wireAccount.accountOfDigitalAssetId === "string"
-    ? wireAccount.accountOfDigitalAssetId
-    : undefined;
-  if (!sourceAccountOfDigitalAssetId) {
-    return { status: 400, body: { error: "source_account_of_digital_asset_missing" } };
-  }
-
-  const targetAccountOfDigitalAssetId = stringBody(input.body, "targetAccountOfDigitalAssetId", "ada_platform_treasury");
-  const amountMinorUnits = asBigInt(stringBody(input.body, "amountMinorUnits", "0"));
-  if (amountMinorUnits <= 0n) return { status: 400, body: { error: "mint_amount_must_be_positive" } };
-
-  const targetAccount = await getAccount(client, tenantId, targetAccountOfDigitalAssetId);
-  if (!targetAccount) return { status: 404, body: { error: "account_not_found" } };
-  const targetAccountRecord = targetAccount as Record<string, unknown>;
-  const fundingInstructionId = optionalStringBody(input.body, "fundingInstructionId");
-  const targetBusinessClientId = typeof targetAccountRecord.businessClientId === "string"
-    ? targetAccountRecord.businessClientId
-    : undefined;
-  if (!targetBusinessClientId) return { status: 400, body: { error: "account_business_client_missing" } };
-
-  let linkedWalletRow = await getLatestVerifiedCircleWalletLinkedInstrument(client, tenantId, targetAccountOfDigitalAssetId);
-  if (!linkedWalletRow) {
-    const targetUsePurpose = String(targetAccountRecord.usePurpose ?? "");
-    const targetStatus = String(targetAccountRecord.status ?? "");
-    const shouldAutoProvision = targetUsePurpose === "tenant_central" || targetStatus === "pending_activation";
-    if (shouldAutoProvision) {
-      const autoProvisionResult = await provisionCircleAccount(client, tenantId, input, targetAccountOfDigitalAssetId);
-      if (autoProvisionResult.status >= 400) {
-        return autoProvisionResult;
-      }
-      linkedWalletRow = await getLatestVerifiedCircleWalletLinkedInstrument(client, tenantId, targetAccountOfDigitalAssetId);
-    }
-  }
-  if (!linkedWalletRow) return { status: 400, body: { error: "account_circle_wallet_not_linked" } };
-
-  const destinationWalletId = walletIdFromLinkedInstrument(linkedWalletRow);
-  if (!destinationWalletId) {
-    return { status: 400, body: { error: "account_circle_wallet_reference_missing" } };
-  }
-  const destinationWalletAddress = walletAddressFromLinkedInstrument(linkedWalletRow);
-  if (!destinationWalletAddress) {
-    return { status: 400, body: { error: "account_circle_wallet_address_missing" } };
-  }
-  const sourceFiatWireLinkedRow = await getDefaultFiatWireLinkedInstrument(client, tenantId, sourceAccountOfDigitalAssetId);
-  if (!sourceFiatWireLinkedRow) {
-    return {
-      status: 400,
-      body: {
-        error: "source_default_fiat_wire_account_not_found",
-        sourceAccountOfDigitalAssetId
-      }
-    };
-  }
-  const sourceFiatWireLinkedInstrumentId = String(sourceFiatWireLinkedRow.id);
-  let resolvedTrackingRef = trackingRefFromLinkedInstrument(sourceFiatWireLinkedRow);
-  let resolvedBeneficiaryBankAccountNumber = beneficiaryBankAccountNumberFromLinkedInstrument(sourceFiatWireLinkedRow);
-  let resolvedWireInstructions = wireInstructionsFromLinkedInstrument(sourceFiatWireLinkedRow);
-  const businessWireAccountId = businessWireAccountIdFromLinkedInstrument(sourceFiatWireLinkedRow);
-
-  // Keep wire instruction fields sourced from linked-wire metadata so sandbox mock mint payload
-  // does not depend on top-level mint request fields.
-  const hydrateWireInstructionsFromMetadata = (): Record<string, unknown> | undefined => {
-    const base = resolvedWireInstructions && typeof resolvedWireInstructions === "object" && !Array.isArray(resolvedWireInstructions)
-      ? { ...resolvedWireInstructions }
-      : {};
-    const currentTrackingRef = typeof base.trackingRef === "string" && base.trackingRef.trim().length > 0
-      ? base.trackingRef
-      : undefined;
-    if (!currentTrackingRef && resolvedTrackingRef) {
-      base.trackingRef = resolvedTrackingRef;
-    }
-
-    const beneficiaryBank = base.beneficiaryBank && typeof base.beneficiaryBank === "object" && !Array.isArray(base.beneficiaryBank)
-      ? { ...(base.beneficiaryBank as Record<string, unknown>) }
-      : {};
-    const currentBeneficiaryAccountNumber = typeof beneficiaryBank.accountNumber === "string" && beneficiaryBank.accountNumber.trim().length > 0
-      ? beneficiaryBank.accountNumber
-      : undefined;
-    if (!currentBeneficiaryAccountNumber && resolvedBeneficiaryBankAccountNumber) {
-      beneficiaryBank.accountNumber = resolvedBeneficiaryBankAccountNumber;
-    }
-    if (Object.keys(beneficiaryBank).length > 0) {
-      base.beneficiaryBank = beneficiaryBank;
-    }
-
-    return Object.keys(base).length > 0 ? base : undefined;
-  };
-
-  const maskedAccountNumber = (value: string | undefined): string | undefined => {
-    if (!value) return undefined;
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    return trimmed.length <= 4 ? `****${trimmed}` : `****${trimmed.slice(-4)}`;
-  };
-
-  const logLinkedWireContext = (stage: string): void => {
-    const instructions = resolvedWireInstructions && typeof resolvedWireInstructions === "object" && !Array.isArray(resolvedWireInstructions)
-      ? resolvedWireInstructions
-      : undefined;
-    const instructionsBeneficiaryBank = instructions?.beneficiaryBank && typeof instructions.beneficiaryBank === "object" && !Array.isArray(instructions.beneficiaryBank)
-      ? instructions.beneficiaryBank as Record<string, unknown>
-      : undefined;
-    const instructionsTrackingRef = typeof instructions?.trackingRef === "string"
-      ? instructions.trackingRef
-      : undefined;
-    const instructionsBeneficiaryAccount = typeof instructionsBeneficiaryBank?.accountNumber === "string"
-      ? instructionsBeneficiaryBank.accountNumber
-      : undefined;
-
-    console.info("[circle] Linked wire account context for mint", {
-      stage,
-      tenantId,
-      sourceAccountOfDigitalAssetId,
-      sourceFiatWireLinkedInstrumentId,
-      targetAccountOfDigitalAssetId,
-      linkedInstrumentId: String(linkedWalletRow.id),
-      businessWireAccountId,
-      metadataTrackingRef: resolvedTrackingRef,
-      metadataBeneficiaryBankAccountNumber: maskedAccountNumber(resolvedBeneficiaryBankAccountNumber),
-      wireInstructionsTrackingRef: instructionsTrackingRef,
-      wireInstructionsBeneficiaryBankAccountNumber: maskedAccountNumber(instructionsBeneficiaryAccount),
-      hasWireInstructions: Boolean(instructions)
-    });
-  };
-
-  resolvedWireInstructions = hydrateWireInstructionsFromMetadata();
-  logLinkedWireContext("pre_runtime_refresh");
-
-  if (fundingInstructionId) {
-    const instructionResult = await client.query(
-      `select id, instruction_role, status
-         from wire_funding_instructions
-        where id = $1 and platform_tenant_id = $2
-        limit 1
-        for update`,
-      [fundingInstructionId, tenantId]
-    );
-    const instruction = instructionResult.rows[0] as Record<string, unknown> | undefined;
-    if (!instruction) return { status: 404, body: { error: "funding_instruction_not_found" } };
-    if (String(instruction.instruction_role ?? "") !== "internal_treasury_mint") {
-      return { status: 400, body: { error: "funding_instruction_mint_role_required" } };
-    }
-
-    await client.query(
-      `update wire_funding_instructions
-          set status = 'pending_provider',
-              updated_at = now()
-        where id = $1 and platform_tenant_id = $2`,
-      [fundingInstructionId, tenantId]
-    );
-    await client.query(
-      `update funding_instruction_orders
-          set status = 'pending_provider',
-              updated_at = now()
-        where platform_tenant_id = $1
-          and funding_instruction_id = $2
-          and order_kind = 'internal_mint_ada_transfer'
-          and status in ('created', 'route_resolved', 'route_assigned', 'failed', 'exception')`,
-      [tenantId, fundingInstructionId]
-    );
-  }
-
-  if (circleEnvironment() === "circle-sandbox" && businessWireAccountId) {
-    const runtimeWireInstructions = await retrieveSandboxWireFundingInstructions({
-      tenantId,
-      wireAccountId: businessWireAccountId,
-      linkedWireAccount: {
-        trackingRef: resolvedTrackingRef,
-        beneficiaryBankAccountNumber: resolvedBeneficiaryBankAccountNumber,
-        wireInstructions: resolvedWireInstructions
-      }
-    });
-    if (runtimeWireInstructions.status === "complete") {
-      const runtimePayload = runtimeWireInstructions.responsePayload as Record<string, unknown>;
-      const runtimeTrackingRef = typeof runtimePayload.trackingRef === "string" ? runtimePayload.trackingRef : undefined;
-      const runtimeBeneficiaryAccountNumber = typeof runtimePayload.beneficiaryBankAccountNumber === "string"
-        ? runtimePayload.beneficiaryBankAccountNumber
-        : undefined;
-      const runtimeWireInstructionsPayload = runtimePayload.wireInstructions && typeof runtimePayload.wireInstructions === "object" && !Array.isArray(runtimePayload.wireInstructions)
-        ? runtimePayload.wireInstructions as Record<string, unknown>
-        : undefined;
-
-      if (runtimeTrackingRef) resolvedTrackingRef = runtimeTrackingRef;
-      if (runtimeBeneficiaryAccountNumber) resolvedBeneficiaryBankAccountNumber = runtimeBeneficiaryAccountNumber;
-      if (runtimeWireInstructionsPayload) resolvedWireInstructions = runtimeWireInstructionsPayload;
-      resolvedWireInstructions = hydrateWireInstructionsFromMetadata();
-      logLinkedWireContext("post_runtime_refresh");
-
-      await client.query(
-        `update linked_instruments
-            set metadata = coalesce(metadata, '{}'::jsonb) || $3::jsonb,
-                updated_at = now()
-          where id = $1 and platform_tenant_id = $2`,
-        [
-          String(linkedWalletRow.id),
-          tenantId,
-          JSON.stringify({
-            businessWireAccountId,
-            ...(runtimeTrackingRef ? { trackingRef: runtimeTrackingRef, wireTrackingRef: runtimeTrackingRef } : {}),
-            ...(runtimeBeneficiaryAccountNumber ? { beneficiaryBankAccountNumber: runtimeBeneficiaryAccountNumber } : {}),
-            ...(runtimeWireInstructionsPayload ? { wireInstructions: runtimeWireInstructionsPayload } : {})
-          })
-        ]
-      );
-    }
-    if (runtimeWireInstructions.status !== "complete") {
-      console.warn("[circle] Runtime wire instruction refresh failed before mint", {
-        tenantId,
-        sourceAccountOfDigitalAssetId,
-        sourceFiatWireLinkedInstrumentId,
-        targetAccountOfDigitalAssetId,
-        linkedInstrumentId: String(linkedWalletRow.id),
-        businessWireAccountId,
-        errorCode: runtimeWireInstructions.errorCode,
-        detail: typeof runtimeWireInstructions.responsePayload?.detail === "string"
-          ? runtimeWireInstructions.responsePayload.detail
-          : undefined
-      });
-    }
-  }
-
-  console.log(`Minting ${amountMinorUnits} USDC from source default wire account ${sourceFiatWireLinkedInstrumentId} to Circle wallet ${destinationWalletId} (${destinationWalletAddress}) for account ${targetAccountOfDigitalAssetId}`);
-  const providerMint = await mintFiatToCircleWallet({
-    tenantId,
-    accountOfDigitalAssetId: targetAccountOfDigitalAssetId,
-    businessClientId: targetBusinessClientId,
-    walletId: destinationWalletId,
-    walletAddress: destinationWalletAddress,
-    amountMinorUnits: amountMinorUnits.toString(),
-    assetCode: "USDC",
-    currency: "USD",
-    idempotencyKey: input.idempotencyKey,
-    correlationId: input.correlationId,
-    payload: {
-      wireAccountId: sourceFiatWireLinkedInstrumentId,
-      ...(businessWireAccountId ? { businessWireAccountId } : {}),
-      linkedInstrumentId: String(linkedWalletRow.id),
-      sourceAccountOfDigitalAssetId,
-      sourceFiatWireLinkedInstrumentId,
-      ...(resolvedWireInstructions ? { wireInstructions: resolvedWireInstructions } : {})
-    }
-  });
-
-  const mintOperationId = randomUUID();
-  const mintOperationResponsePayload = {
-    providerWalletId: providerMint.providerWalletId,
-    providerAddressId: providerMint.providerAddressId,
-    providerRequestId: providerMint.providerRequestId,
-    status: providerMint.status,
-    errorCode: providerMint.errorCode,
-    provider: providerMint.responsePayload
-  };
-
-  await client.query(
-    `insert into circle_api_operations
-      (id, platform_tenant_id, operation_type, idempotency_key, correlation_id, account_of_digital_asset_id, business_client_id, linked_instrument_id, request_payload, response_payload, provider_account_id, provider_wallet_id, provider_address_id, status, error_code, created_at)
-     values ($1, $2, 'fiat_wire_mint', $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, now())`,
-    [
-      mintOperationId,
-      tenantId,
-      input.idempotencyKey,
-      input.correlationId,
-      targetAccountOfDigitalAssetId,
-      asUuidOrNull(targetBusinessClientId),
-      asUuidOrNull(String(linkedWalletRow.id)),
-      JSON.stringify({
-        wireAccountId: sourceFiatWireLinkedInstrumentId,
-        sourceAccountOfDigitalAssetId,
-        sourceFiatWireLinkedInstrumentId,
-        accountOfDigitalAssetId: targetAccountOfDigitalAssetId,
-        linkedInstrumentId: linkedWalletRow.id,
-        destinationWalletId,
-        destinationWalletAddress,
-        amountMinorUnits: amountMinorUnits.toString(),
-        assetCode: "USDC",
-        currency: "USD"
-      }),
-      JSON.stringify(mintOperationResponsePayload),
-      undefined,
-      providerMint.providerWalletId ?? destinationWalletId,
-      providerMint.providerAddressId,
-      providerMint.status === "complete" ? "succeeded" : "failed",
-      providerMint.errorCode
-    ]
-  );
-
-  if (providerMint.status !== "complete") {
-    console.error("[circle] Mint failed with linked wire context", {
-      tenantId,
-      sourceAccountOfDigitalAssetId,
-      sourceFiatWireLinkedInstrumentId,
-      targetAccountOfDigitalAssetId,
-      linkedInstrumentId: String(linkedWalletRow.id),
-      businessWireAccountId,
-      errorCode: providerMint.errorCode,
-      detail: typeof providerMint.responsePayload?.detail === "string"
-        ? providerMint.responsePayload.detail
-        : undefined,
-      metadataTrackingRef: resolvedTrackingRef,
-      metadataBeneficiaryBankAccountNumber: maskedAccountNumber(resolvedBeneficiaryBankAccountNumber),
-      wireInstructionsTrackingRef: typeof resolvedWireInstructions?.trackingRef === "string"
-        ? resolvedWireInstructions.trackingRef
-        : undefined,
-      wireInstructionsBeneficiaryBankAccountNumber: maskedAccountNumber(
-        typeof (resolvedWireInstructions?.beneficiaryBank as Record<string, unknown> | undefined)?.accountNumber === "string"
-          ? (resolvedWireInstructions?.beneficiaryBank as Record<string, unknown>).accountNumber as string
-          : undefined
-      )
-    });
-    if (fundingInstructionId) {
-      await client.query(
-        `update wire_funding_instructions
-            set status = 'failed',
-                updated_at = now()
-          where id = $1 and platform_tenant_id = $2`,
-        [fundingInstructionId, tenantId]
-      );
-      await client.query(
-        `update funding_instruction_orders
-            set status = 'failed',
-                updated_at = now()
-          where platform_tenant_id = $1
-            and funding_instruction_id = $2
-            and order_kind = 'internal_mint_ada_transfer'`,
-        [tenantId, fundingInstructionId]
-      );
-    }
-    await writeAuditAndOutbox(client, tenantId, input, "fiat.mint.failed", {
-      wireAccountId,
-      targetAccountOfDigitalAssetId,
-      amountMinorUnits: amountMinorUnits.toString(),
-      destinationWalletId,
-      circleOperationId: mintOperationId,
-      errorCode: providerMint.errorCode
-    });
-    const status = providerMint.errorCode === "circle_api_key_required"
-      || providerMint.errorCode === "circle_wallet_configuration_required"
-      || providerMint.errorCode === "circle_auth_failed"
-      || providerMint.errorCode === "circle_validation_failed"
-      || providerMint.errorCode === "circle_fiat_mint_endpoint_not_configured"
-      ? 400
-      : 502;
-    const detail = typeof (providerMint.responsePayload as { detail?: unknown } | undefined)?.detail === "string"
-      ? (providerMint.responsePayload as { detail: string }).detail
-      : undefined;
-    return {
-      status,
-      body: {
-        error: providerMint.errorCode ?? "circle_provider_unavailable",
-        detail,
-        destinationWalletId,
-        circleOperation: await getCircleOperation(client, tenantId, mintOperationId)
-      }
-    };
-  }
-
-  if (fundingInstructionId) {
-    await client.query(
-      `update wire_funding_instructions
-          set status = 'pending_confirmation',
-              updated_at = now()
-        where id = $1 and platform_tenant_id = $2`,
-      [fundingInstructionId, tenantId]
-    );
-  }
-
-  const balanceResult = await client.query(
-    `select id, available_minor_units
-       from account_of_digital_asset_balances
-      where platform_tenant_id = $1
-        and account_of_digital_asset_id = $2
-        and asset_code = 'USDC'
-        and currency = 'USD'
-      order by updated_at desc
-      limit 1
-      for update`,
-    [tenantId, targetAccountOfDigitalAssetId]
-  );
-  const balanceRow = balanceResult.rows[0] as Record<string, unknown> | undefined;
-  if (!balanceRow) {
-    await client.query(
-      `insert into account_of_digital_asset_balances
-        (id, platform_tenant_id, account_of_digital_asset_id, asset_code, currency, available_minor_units, pending_minor_units, reserved_minor_units, locked_minor_units, suspense_minor_units, version, projected_at, created_at, updated_at)
-       values ($1, $2, $3, 'USDC', 'USD', $4, 0, 0, 0, 0, 1, now(), now(), now())`,
-      [randomUUID(), tenantId, targetAccountOfDigitalAssetId, amountMinorUnits.toString()]
-    );
-  } else {
-    const availableMinorUnits = asBigInt(balanceRow.available_minor_units);
-    await client.query(
-      `update account_of_digital_asset_balances
-          set available_minor_units = $3,
-              version = version + 1,
-              projected_at = now(),
-              updated_at = now()
-        where id = $1 and platform_tenant_id = $2`,
-      [String(balanceRow.id), tenantId, (availableMinorUnits + amountMinorUnits).toString()]
-    );
-  }
-
-  const mint = {
-    id: randomUUID(),
-    wireAccountId,
-    targetAccountOfDigitalAssetId,
-    amountMinorUnits: amountMinorUnits.toString(),
-    status: "completed",
-    providerMintId: providerMint.providerRequestId ?? providerMint.providerWalletId,
-    providerWalletId: providerMint.providerWalletId ?? destinationWalletId,
-    destinationWalletAddress,
-    destinationWalletId,
-    circleOperationId: mintOperationId,
-    createdAt: new Date().toISOString()
-  };
-
-  await writeAuditAndOutbox(client, tenantId, input, "fiat.mint.completed", mint);
-  return { status: 201, body: { mint } };
-};
-
 const createFundingReservation = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const settlementObligationId = stringBody(input.body, "settlementObligationId");
   const accountOfDigitalAssetId = stringBody(input.body, "accountOfDigitalAssetId");
@@ -2108,7 +1765,7 @@ const createFundingReservation = async (
 const transitionFundingReservation = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   reservationId: string,
   action: string
 ): Promise<JsonResponse> => {
@@ -2217,7 +1874,7 @@ const transitionFundingReservation = async (
 const createInternalPayment = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const sourceAccountOfDigitalAssetId = stringBody(input.body, "sourceAccountOfDigitalAssetId", "ada_buyer");
   const destinationAccountOfDigitalAssetId = stringBody(input.body, "destinationAccountOfDigitalAssetId", sourceAccountOfDigitalAssetId);
@@ -2249,7 +1906,7 @@ const createInternalPayment = async (
 const createExternalPayment = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const sourceAccountOfDigitalAssetId = stringBody(input.body, "sourceAccountOfDigitalAssetId", "ada_buyer");
   const amountMinorUnits = asBigInt(stringBody(input.body, "amountMinorUnits", "0"));
@@ -2297,7 +1954,7 @@ const createExternalPayment = async (
 const transitionPayment = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   paymentId: string,
   action: string
 ): Promise<JsonResponse> => {
@@ -2411,7 +2068,7 @@ const transitionPayment = async (
 const createFiatRedemption = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput
+  input: PostgresCommandInput
 ): Promise<JsonResponse> => {
   const sourceAccountOfDigitalAssetId = stringBody(input.body, "sourceAccountOfDigitalAssetId", "ada_supplier");
   const amountMinorUnits = asBigInt(stringBody(input.body, "amountMinorUnits", "0"));
@@ -2450,7 +2107,7 @@ const createFiatRedemption = async (
 const transitionFiatRedemption = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   redemptionId: string,
   action: string
 ): Promise<JsonResponse> => {
@@ -2502,7 +2159,7 @@ const transitionFiatRedemption = async (
 const transitionFundingInstruction = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   fundingInstructionId: string,
   action: string
 ): Promise<JsonResponse> => {
@@ -2510,6 +2167,7 @@ const transitionFundingInstruction = async (
     `select id,
             coalesce(source_account_of_digital_asset_id, account_of_digital_asset_id) as source_account_of_digital_asset_id,
             coalesce(destination_account_of_digital_asset_id, account_of_digital_asset_id) as destination_account_of_digital_asset_id,
+            amount_minor_units,
             status
        from wire_funding_instructions
       where id = $1 and platform_tenant_id = $2`,
@@ -2517,6 +2175,9 @@ const transitionFundingInstruction = async (
   );
   const current = currentResult.rows[0];
   if (!current) return { status: 404, body: { error: "funding_instruction_not_found" } };
+  if (action === "cancel" && ["pending_usdc_reserved", "posted_available"].includes(String(current.status))) {
+    return { status: 409, body: { error: "funding_instruction_value_movement_already_confirmed" } };
+  }
 
   const nextStatus = action === "assign-route" ? "route_resolved" : "cancelled";
   const routeEvidence = action === "assign-route"
@@ -2524,9 +2185,19 @@ const transitionFundingInstruction = async (
       client,
       tenantId,
       String(current.source_account_of_digital_asset_id ?? ""),
-      String(current.destination_account_of_digital_asset_id ?? "")
+      String(current.destination_account_of_digital_asset_id ?? ""),
+      String(current.amount_minor_units ?? "0")
     )
     : undefined;
+  if (action === "assign-route" && routeEvidence?.routeResolved !== true) {
+    return {
+      status: 409,
+      body: {
+        error: "funding_route_requirements_not_met",
+        missingRouteLegs: routeEvidence?.missingRouteLegs ?? []
+      }
+    };
+  }
   await client.query(
     `update wire_funding_instructions
         set status = $3,
@@ -2543,7 +2214,15 @@ const transitionFundingInstruction = async (
   if (action === "assign-route") {
     await client.query(
       `update funding_instruction_orders
-          set status = case
+          set source_account_of_digital_asset_id = case
+                when order_kind = 'ada_usdc_transfer' then $3::uuid
+                else source_account_of_digital_asset_id
+              end,
+              destination_account_of_digital_asset_id = case
+                when order_kind = 'ada_wire_transfer' then $4::uuid
+                else destination_account_of_digital_asset_id
+              end,
+              status = case
                 when order_kind in ('internal_mint_ada_transfer', 'ada_wire_transfer') then 'route_resolved'
                 else status
               end,
@@ -2551,7 +2230,12 @@ const transitionFundingInstruction = async (
         where platform_tenant_id = $1
           and funding_instruction_id = $2
           and status in ('created', 'route_assigned', 'route_resolved')`,
-      [tenantId, fundingInstructionId]
+      [
+        tenantId,
+        fundingInstructionId,
+        routeEvidence?.platformUsdcSourceAccountOfDigitalAssetId ?? null,
+        routeEvidence?.platformFiatDestinationAccountOfDigitalAssetId ?? null
+      ]
     );
   }
   await writeAuditAndOutbox(client, tenantId, input, `funding_instruction.${action}`, {
@@ -2573,7 +2257,7 @@ const transitionFundingInstruction = async (
 const createFundingRoute = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   accountId: string
 ): Promise<JsonResponse> => {
   const routeId = randomUUID();
@@ -2613,7 +2297,7 @@ const createFundingRoute = async (
 const verifyFundingRoute = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   accountId: string,
   routeId: string
 ): Promise<JsonResponse> => {
@@ -2634,224 +2318,6 @@ const verifyFundingRoute = async (
   return { status: 200, body: { route: await getFundingRoute(client, tenantId, routeId) } };
 };
 
-const ingestCircleWebhook = async (
-  client: Pick<PostgresClient, "query">,
-  tenantId: string,
-  input: Sprint1PostgresCommandInput
-): Promise<JsonResponse> => {
-  const rawBody = input.rawBody ?? JSON.stringify(input.body);
-  const signature = input.headers?.["circle-signature"] ?? input.headers?.["x-circle-signature"];
-  const keyId = input.headers?.["circle-key-id"] ?? input.headers?.["x-circle-key-id"];
-  const verification = await verifyCircleWebhook(rawBody, signature, undefined, keyId);
-  const providerEventId = stringBody(input.body, "providerEventId")
-    || stringBody(input.body, "eventId")
-    || stringBody(input.body, "id")
-    || verification.providerEventId;
-  const eventType = stringBody(input.body, "eventType")
-    || stringBody(input.body, "type")
-    || verification.eventType;
-  if (!providerEventId || !eventType) return { status: 400, body: { error: "provider_event_id_and_event_type_required" } };
-
-  const existing = await client.query(
-    `select id, status
-       from provider_webhook_events
-      where platform_tenant_id = $1 and provider = 'circle' and provider_event_id = $2
-      limit 1`,
-    [tenantId, providerEventId]
-  );
-  if (existing.rows[0]) {
-    return { status: 200, body: { webhookEventId: existing.rows[0].id, duplicate: true, status: existing.rows[0].status } };
-  }
-
-  const signatureValid = input.body.signatureValid === false ? false : verification.valid;
-  const normalized = normalizeCircleWebhookPayload(input.body, providerEventId, eventType);
-
-  if (!signatureValid) {
-    const webhookEventId = randomUUID();
-    const deadLetterId = randomUUID();
-    await client.query(
-      `insert into provider_webhook_events
-        (id, platform_tenant_id, provider, provider_event_id, event_type, signature_valid, status, payload_json, normalized_json, error_code, error_message)
-       values ($1, $2, 'circle', $3, $4, false, 'failed', $5::jsonb, $6::jsonb, 'invalid_signature', 'Circle webhook signature verification failed')`,
-      [webhookEventId, tenantId, providerEventId, eventType, JSON.stringify(input.body), JSON.stringify(normalized)]
-    );
-    await client.query(
-      `insert into provider_webhook_dead_letters
-        (id, platform_tenant_id, provider, provider_event_id, event_type, payload_json, error_code, error_message, retry_count)
-       values ($1, $2, 'circle', $3, $4, $5::jsonb, 'invalid_signature', 'Circle webhook signature verification failed', 0)`,
-      [deadLetterId, tenantId, providerEventId, eventType, JSON.stringify(input.body)]
-    );
-    await writeAuditAndOutbox(client, tenantId, input, "circle.webhook.dead_lettered", {
-      webhookEventId,
-      providerEventId,
-      eventType,
-      deadLetterId,
-      reason: "invalid_signature"
-    });
-    return { status: 400, body: { error: "invalid_signature", webhookEventId, deadLetterId } };
-  }
-
-  const webhookEventId = randomUUID();
-  await client.query(
-    `insert into provider_webhook_events
-      (id, platform_tenant_id, provider, provider_event_id, event_type, signature_valid, status, payload_json, normalized_json)
-     values ($1, $2, 'circle', $3, $4, true, 'received', $5::jsonb, $6::jsonb)`,
-    [webhookEventId, tenantId, providerEventId, eventType, JSON.stringify(input.body), JSON.stringify(normalized)]
-  );
-
-  let processingStatus: "processed" | "failed" = "processed";
-  let errorCode: string | undefined;
-  let errorMessage: string | undefined;
-  let deadLetterId: string | undefined;
-
-  try {
-    await processFundingInstructionWebhookEvent(client, tenantId, input, webhookEventId, normalized);
-  } catch (error) {
-    processingStatus = "failed";
-    errorCode = "webhook_processing_failed";
-    errorMessage = error instanceof Error ? error.message : "circle_webhook_processing_failed";
-    deadLetterId = randomUUID();
-    await client.query(
-      `insert into provider_webhook_dead_letters
-        (id, platform_tenant_id, provider, provider_event_id, event_type, payload_json, error_code, error_message, retry_count)
-       values ($1, $2, 'circle', $3, $4, $5::jsonb, $6, $7, 1)`,
-      [deadLetterId, tenantId, providerEventId, eventType, JSON.stringify(input.body), errorCode, errorMessage]
-    );
-  }
-
-  await client.query(
-    `update provider_webhook_events
-        set status = $3,
-            processed_at = now(),
-            error_code = $4,
-            error_message = $5,
-            normalized_json = $6::jsonb
-      where id = $1 and platform_tenant_id = $2`,
-    [
-      webhookEventId,
-      tenantId,
-      processingStatus,
-      errorCode ?? null,
-      errorMessage ?? null,
-      JSON.stringify(normalized)
-    ]
-  );
-
-  if (processingStatus === "failed") {
-    await writeAuditAndOutbox(client, tenantId, input, "circle.webhook.processing_failed", {
-      webhookEventId,
-      providerEventId,
-      eventType,
-      errorCode,
-      errorMessage,
-      deadLetterId
-    });
-    return {
-      status: 500,
-      body: {
-        error: errorCode,
-        message: errorMessage,
-        webhookEventId,
-        deadLetterId
-      }
-    };
-  }
-
-  await writeAuditAndOutbox(client, tenantId, input, "circle.webhook.processed", {
-    webhookEventId,
-    providerEventId,
-    eventType
-  });
-  return { status: 202, body: { webhookEventId, providerEventId, eventType, status: "processed" } };
-};
-
-const webhookIdempotencyKey = (input: Sprint1PostgresCommandInput, hash: string): string => {
-  const providerEventId = stringBody(input.body, "providerEventId")
-    || stringBody(input.body, "eventId")
-    || stringBody(input.body, "id");
-  return providerEventId ? `circle_webhook_${providerEventId}` : `circle_webhook_${hash}`;
-};
-
-const reprocessCircleWebhook = async (
-  client: Pick<PostgresClient, "query">,
-  tenantId: string,
-  input: Sprint1PostgresCommandInput,
-  webhookEventId: string
-): Promise<JsonResponse> => {
-  const result = await client.query(
-    `update provider_webhook_events
-        set status = 'processed',
-            retry_count = coalesce(retry_count, 0) + 1,
-            processed_at = now(),
-            error_code = null,
-            error_message = null
-      where id = $1 and platform_tenant_id = $2
-      returning id, provider_event_id, event_type, status, retry_count, processed_at`,
-    [webhookEventId, tenantId]
-  );
-  const event = result.rows[0];
-  if (!event) return { status: 404, body: { error: "webhook_event_not_found" } };
-  await writeAuditAndOutbox(client, tenantId, input, "circle.webhook.reprocessed", {
-    webhookEventId,
-    providerEventId: event.provider_event_id,
-    eventType: event.event_type,
-    retryCount: event.retry_count
-  });
-  return {
-    status: 200,
-    body: {
-      webhookEvent: {
-        id: event.id,
-        providerEventId: event.provider_event_id,
-        eventType: event.event_type,
-        status: event.status,
-        retryCount: event.retry_count,
-        processedAt: toIsoString(event.processed_at)
-      }
-    }
-  };
-};
-
-const resolveReconciliationBreak = async (
-  client: Pick<PostgresClient, "query">,
-  tenantId: string,
-  input: Sprint1PostgresCommandInput,
-  breakId: string
-): Promise<JsonResponse> => {
-  const resolutionNote = stringBody(input.body, "resolutionNote", "Resolved by operator");
-  const result = await client.query(
-    `update reconciliation_breaks
-        set status = 'resolved',
-            resolution_note = $3,
-            resolved_by = $4,
-            resolved_at = now(),
-            updated_at = now()
-      where id = $1 and platform_tenant_id = $2
-      returning id, status, reason, webhook_event_id, suspense_case_id, resolution_note, resolved_at`,
-    [breakId, tenantId, resolutionNote, asUuidOrNull(input.actorUserId)]
-  );
-  const row = result.rows[0];
-  if (!row) return { status: 404, body: { error: "reconciliation_break_not_found" } };
-  await writeAuditAndOutbox(client, tenantId, input, "reconciliation.break.resolved", {
-    reconciliationBreakId: breakId,
-    resolutionNote
-  });
-  return {
-    status: 200,
-    body: {
-      break: {
-        id: row.id,
-        status: row.status,
-        reason: row.reason,
-        webhookEventId: row.webhook_event_id ?? undefined,
-        suspenseCaseId: row.suspense_case_id ?? undefined,
-        resolutionNote: row.resolution_note ?? undefined,
-        resolvedAt: toIsoString(row.resolved_at)
-      }
-    }
-  };
-};
-
 interface FundingInstructionOrderSeed {
   fundingInstructionId: string;
   sourceAccountOfDigitalAssetId?: string;
@@ -2859,18 +2325,6 @@ interface FundingInstructionOrderSeed {
   amountMinorUnits: string;
   currency: string;
   instructionRole: "internal_treasury_mint" | "client_exchange";
-}
-
-interface NormalizedCircleWebhookEvent {
-  providerEventId: string;
-  eventType: string;
-  fundingInstructionId?: string;
-  providerReferenceId?: string;
-  accountOfDigitalAssetId?: string;
-  sourceAccountOfDigitalAssetId?: string;
-  destinationAccountOfDigitalAssetId?: string;
-  amountMinorUnits: string;
-  payload: Record<string, unknown>;
 }
 
 const normalizeFundingInstructionRole = (
@@ -2969,17 +2423,126 @@ const deriveInstructionRouteEvidence = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
   sourceAccountOfDigitalAssetId: string,
-  destinationAccountOfDigitalAssetId: string
+  destinationAccountOfDigitalAssetId: string,
+  amountMinorUnits: string
 ): Promise<Record<string, unknown>> => {
-  const sourceRoutes = await deriveLinkedInstrumentSnapshot(client, tenantId, sourceAccountOfDigitalAssetId);
-  const destinationRoutes = await deriveLinkedInstrumentSnapshot(client, tenantId, destinationAccountOfDigitalAssetId);
+  const [sourceRoute, destinationRoute, platformFiatRoute, platformUsdcRoute] = await Promise.all([
+    deriveEligibleLinkedInstrument(client, tenantId, sourceAccountOfDigitalAssetId, "fiat"),
+    deriveEligibleLinkedInstrument(client, tenantId, destinationAccountOfDigitalAssetId, "usdc"),
+    derivePlatformTreasuryRoute(client, tenantId, "fiat", amountMinorUnits),
+    derivePlatformTreasuryRoute(client, tenantId, "usdc", amountMinorUnits)
+  ]);
+  const missingRouteLegs = [
+    !sourceRoute ? "client_source_fiat" : undefined,
+    !platformFiatRoute ? "platform_treasury_fiat_destination" : undefined,
+    !platformUsdcRoute ? "platform_treasury_usdc_source" : undefined,
+    !destinationRoute ? "client_destination_usdc" : undefined
+  ].filter((value): value is string => Boolean(value));
   return {
     sourceAccountOfDigitalAssetId,
     destinationAccountOfDigitalAssetId,
-    sourceLinkedInstruments: sourceRoutes,
-    destinationLinkedInstruments: destinationRoutes,
+    clientSourceFiatRoute: sourceRoute,
+    platformFiatDestinationRoute: platformFiatRoute,
+    platformUsdcSourceRoute: platformUsdcRoute,
+    clientDestinationUsdcRoute: destinationRoute,
+    platformFiatDestinationAccountOfDigitalAssetId: platformFiatRoute?.accountOfDigitalAssetId,
+    platformUsdcSourceAccountOfDigitalAssetId: platformUsdcRoute?.accountOfDigitalAssetId,
+    routeResolved: missingRouteLegs.length === 0,
+    missingRouteLegs,
     capturedAt: new Date().toISOString()
   };
+};
+
+const deriveEligibleLinkedInstrument = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  accountOfDigitalAssetId: string,
+  capability: "fiat" | "usdc"
+): Promise<Record<string, unknown> | undefined> => {
+  if (!isUuid(accountOfDigitalAssetId)) return undefined;
+  const result = await client.query(
+    `select id, instrument_type, rail_type, purpose, provider, network_code, metadata
+       from linked_instruments
+      where platform_tenant_id = $1
+        and account_of_digital_asset_id = $2
+        and status = 'active'
+        and verification_status = 'verified'
+        and (
+          ($3 = 'fiat' and rail_type = 'fiat' and purpose in ('minting', 'bidirectional'))
+          or ($3 = 'usdc' and instrument_type = 'circle_wallet')
+        )
+      order by is_default desc, created_at asc, id asc
+      limit 1`,
+    [tenantId, accountOfDigitalAssetId, capability]
+  );
+  const row = result.rows[0];
+  return row ? {
+    accountOfDigitalAssetId,
+    linkedInstrumentId: row.id,
+    instrumentType: row.instrument_type,
+    railType: row.rail_type,
+    purpose: row.purpose,
+    provider: row.provider,
+    networkCode: row.network_code,
+    metadata: row.metadata ?? {}
+  } : undefined;
+};
+
+const derivePlatformTreasuryRoute = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  capability: "fiat" | "usdc",
+  amountMinorUnits: string
+): Promise<Record<string, unknown> | undefined> => {
+  const result = await client.query(
+    `select account.id as account_of_digital_asset_id,
+            linked.id as linked_instrument_id,
+            linked.instrument_type,
+            linked.rail_type,
+            linked.purpose,
+            linked.provider,
+            linked.network_code,
+              linked.metadata,
+              coalesce(balance.available_minor_units, 0::numeric) as available_minor_units
+       from accounts_of_digital_asset account
+       join linked_instruments linked
+         on linked.platform_tenant_id = account.platform_tenant_id
+        and linked.account_of_digital_asset_id = account.id
+       left join lateral (
+         select projection.available_minor_units
+           from account_of_digital_asset_balances projection
+          where projection.platform_tenant_id = account.platform_tenant_id
+            and projection.account_of_digital_asset_id = account.id
+          order by projection.updated_at desc
+          limit 1
+       ) balance on true
+      where account.platform_tenant_id = $1
+        and account.use_purpose = 'tenant_central'
+        and account.status = 'active'
+        and linked.status = 'active'
+        and linked.verification_status = 'verified'
+        and (
+          ($2 = 'fiat' and linked.rail_type = 'fiat' and linked.purpose in ('minting', 'bidirectional'))
+          or ($2 = 'usdc' and linked.instrument_type = 'circle_wallet')
+        )
+        and ($2 <> 'usdc' or coalesce(balance.available_minor_units, 0::numeric) >= $3::numeric)
+      order by linked.is_default desc, account.created_at asc, linked.created_at asc, linked.id asc
+      limit 1`,
+    [tenantId, capability, amountMinorUnits]
+  );
+  const row = result.rows[0];
+  return row ? {
+    accountOfDigitalAssetId: row.account_of_digital_asset_id,
+    linkedInstrumentId: row.linked_instrument_id,
+    instrumentType: row.instrument_type,
+    railType: row.rail_type,
+    purpose: row.purpose,
+    provider: row.provider,
+    networkCode: row.network_code,
+    availableMinorUnits: String(row.available_minor_units ?? 0),
+    requiredMinorUnits: amountMinorUnits,
+    metadata: row.metadata ?? {}
+  } : undefined;
 };
 
 const deriveLinkedInstrumentSnapshot = async (
@@ -3019,46 +2582,10 @@ const deriveLinkedInstrumentSnapshot = async (
   }));
 };
 
-const normalizeCircleWebhookPayload = (
-  payload: Record<string, unknown>,
-  providerEventId: string,
-  eventType: string
-): NormalizedCircleWebhookEvent => {
-  const payloadRecord = payload.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload)
-    ? payload.payload as Record<string, unknown>
-    : undefined;
-
-  const accountOfDigitalAssetId = optionalStringBody(payload, "accountOfDigitalAssetId")
-    ?? optionalStringBody(payloadRecord ?? {}, "accountOfDigitalAssetId")
-    ?? optionalStringBody(payload, "destinationAccountOfDigitalAssetId")
-    ?? optionalStringBody(payloadRecord ?? {}, "destinationAccountOfDigitalAssetId");
-  const sourceAccountOfDigitalAssetId = optionalStringBody(payload, "sourceAccountOfDigitalAssetId")
-    ?? optionalStringBody(payloadRecord ?? {}, "sourceAccountOfDigitalAssetId");
-  const destinationAccountOfDigitalAssetId = optionalStringBody(payload, "destinationAccountOfDigitalAssetId")
-    ?? optionalStringBody(payloadRecord ?? {}, "destinationAccountOfDigitalAssetId")
-    ?? accountOfDigitalAssetId;
-
-  return {
-    providerEventId,
-    eventType,
-    fundingInstructionId: optionalStringBody(payload, "fundingInstructionId")
-      ?? optionalStringBody(payloadRecord ?? {}, "fundingInstructionId"),
-    providerReferenceId: optionalStringBody(payload, "providerReferenceId")
-      ?? optionalStringBody(payloadRecord ?? {}, "providerReferenceId")
-      ?? optionalStringBody(payload, "transactionId")
-      ?? optionalStringBody(payloadRecord ?? {}, "transactionId"),
-    accountOfDigitalAssetId,
-    sourceAccountOfDigitalAssetId,
-    destinationAccountOfDigitalAssetId,
-    amountMinorUnits: stringBody(payload, "amountMinorUnits", stringBody(payloadRecord ?? {}, "amountMinorUnits", "0")),
-    payload
-  };
-};
-
-const processFundingInstructionWebhookEvent = async (
+export const processFundingInstructionWebhookEvent = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   webhookEventId: string,
   event: NormalizedCircleWebhookEvent
 ): Promise<void> => {
@@ -3068,14 +2595,83 @@ const processFundingInstructionWebhookEvent = async (
     return;
   }
 
-  const amountMinorUnits = asBigInt(event.amountMinorUnits) > 0n
-    ? asBigInt(event.amountMinorUnits)
-    : asBigInt(instruction.amount_minor_units);
+  const eventAmountMinorUnits = asBigInt(event.amountMinorUnits);
+  const instructionAmountMinorUnits = asBigInt(instruction.amount_minor_units);
+  const amountMinorUnits = eventAmountMinorUnits > 0n
+    ? eventAmountMinorUnits
+    : instructionAmountMinorUnits;
   const amountMinorUnitsString = amountMinorUnits.toString();
   const providerReference = event.providerReferenceId ?? event.providerEventId;
   const instructionRole = String(instruction.instruction_role ?? "client_exchange");
 
+  if (
+    (isWireConfirmationEvent(event.eventType) || isUsdcConfirmationEvent(event.eventType))
+    && eventAmountMinorUnits > 0n
+    && eventAmountMinorUnits !== instructionAmountMinorUnits
+  ) {
+    await client.query(
+      `update wire_funding_instructions
+          set status = 'exception_suspense', updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [String(instruction.id), tenantId]
+    );
+    await registerFundingMismatchBreak(
+      client,
+      tenantId,
+      webhookEventId,
+      event,
+      String(instruction.id),
+      instructionAmountMinorUnits,
+      eventAmountMinorUnits
+    );
+    return;
+  }
+
+  if (isProviderFailureEvent(event.eventType) && instructionRole === "client_exchange") {
+    await client.query(
+      `update funding_instruction_orders
+          set status = 'failed',
+              provider_reference_id = coalesce(provider_reference_id, $3),
+              provider_payload_json = coalesce(provider_payload_json, '{}'::jsonb) || $4::jsonb,
+              updated_at = now()
+        where platform_tenant_id = $1
+          and funding_instruction_id = $2
+          and order_kind = 'ada_usdc_transfer'
+          and exists (
+            select 1 from funding_instruction_orders wire_order
+             where wire_order.platform_tenant_id = $1
+               and wire_order.funding_instruction_id = $2
+               and wire_order.order_kind = 'ada_wire_transfer'
+               and wire_order.status = 'completed'
+          )`,
+      [tenantId, String(instruction.id), providerReference, JSON.stringify(event.payload)]
+    );
+    await client.query(
+      `update wire_funding_instructions
+          set status = 'exception_suspense', updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [String(instruction.id), tenantId]
+    );
+    await registerOrphanWebhookBreak(client, tenantId, webhookEventId, event, String(instruction.id));
+    return;
+  }
+
   if (isWireConfirmationEvent(event.eventType) && instructionRole !== "internal_treasury_mint") {
+    if (instruction.wire_confirmed_webhook_event_id) return;
+    const wireRouteResult = await client.query(
+      `select destination_account_of_digital_asset_id
+         from funding_instruction_orders
+        where platform_tenant_id = $1
+          and funding_instruction_id = $2
+          and order_kind = 'ada_wire_transfer'
+        limit 1`,
+      [tenantId, String(instruction.id)]
+    );
+    const tenantFiatAccountId = wireRouteResult.rows[0]?.destination_account_of_digital_asset_id;
+    const clientDestinationAccountId = instruction.destination_account_of_digital_asset_id;
+    if (typeof tenantFiatAccountId !== "string" || typeof clientDestinationAccountId !== "string") {
+      throw new Error("funding_settlement_route_missing");
+    }
     await markFundingInstructionOrderStatus(
       client,
       tenantId,
@@ -3083,7 +2679,8 @@ const processFundingInstructionWebhookEvent = async (
       "ada_wire_transfer",
       "completed",
       providerReference,
-      event.payload
+      event.payload,
+      webhookEventId
     );
 
     await client.query(
@@ -3108,15 +2705,65 @@ const processFundingInstructionWebhookEvent = async (
           set pending_usdc_minor_units = coalesce(pending_usdc_minor_units, 0::numeric) + $3::numeric,
               status = 'pending_usdc_reserved',
               provider_reference_id = coalesce(provider_reference_id, $4),
+              wire_confirmed_webhook_event_id = $5,
               updated_at = now()
-        where id = $1 and platform_tenant_id = $2`,
-      [String(instruction.id), tenantId, amountMinorUnitsString, providerReference]
+        where id = $1 and platform_tenant_id = $2
+          and wire_confirmed_webhook_event_id is null`,
+      [String(instruction.id), tenantId, amountMinorUnitsString, providerReference, webhookEventId]
+    );
+    await client.query(
+      `insert into account_of_digital_asset_balances
+        (id, platform_tenant_id, account_of_digital_asset_id, asset_code, currency, available_minor_units, pending_minor_units, reserved_minor_units, locked_minor_units, suspense_minor_units)
+       values ($1, $2, $3, 'USDC', 'USD', 0, $4::numeric, 0, 0, 0)
+       on conflict (account_of_digital_asset_id, asset_code, currency) do update
+       set pending_minor_units = account_of_digital_asset_balances.pending_minor_units + excluded.pending_minor_units,
+           version = account_of_digital_asset_balances.version + 1,
+           projected_at = now(),
+           updated_at = now()`,
+      [randomUUID(), tenantId, clientDestinationAccountId, amountMinorUnitsString]
+    );
+
+    const settlementPostingKey = `${input.idempotencyKey ?? "webhook"}:${event.providerEventId}:fiat-settled-posting`;
+    await ensureLegacyIdempotencyKey(client, settlementPostingKey, requestHash({
+      method: "POST",
+      pathname: "/ledger/journals",
+      body: {
+        fundingInstructionId: String(instruction.id),
+        providerEventId: event.providerEventId,
+        stage: "fiat_settled",
+        amountMinorUnits: amountMinorUnitsString
+      }
+    }));
+    const settlementJournalId = await postFundingJournal(client, tenantId, {
+      ...input,
+      idempotencyKey: settlementPostingKey
+    }, {
+      accountingEventType: "funding.client_exchange.fiat_settled",
+      sourceEventId: webhookEventId,
+      description: `Fiat settlement confirmed from webhook ${event.providerEventId}`,
+      lines: [
+        fundingJournalLine("10010", tenantFiatAccountId, "USD", amountMinorUnitsString, "0"),
+        fundingJournalLine("20500", clientDestinationAccountId, "USD", "0", amountMinorUnitsString)
+      ]
+    });
+    await client.query(
+      `update funding_instruction_orders
+          set journal_entry_id = $3, updated_at = now()
+        where platform_tenant_id = $1
+          and funding_instruction_id = $2
+          and order_kind = 'ada_wire_transfer'
+          and journal_entry_id is null`,
+      [tenantId, String(instruction.id), settlementJournalId]
     );
     return;
   }
 
   const shouldFinalize = isUsdcConfirmationEvent(event.eventType) || instructionRole === "internal_treasury_mint";
   if (!shouldFinalize) return;
+
+  if (instructionRole === "internal_treasury_mint" && String(instruction.status ?? "") !== "pending_confirmation") {
+    throw new Error(`funding_instruction_not_pending_confirmation:${String(instruction.status ?? "unknown")}`);
+  }
 
   if (instructionRole === "internal_treasury_mint") {
     await markFundingInstructionOrderStatus(
@@ -3126,7 +2773,8 @@ const processFundingInstructionWebhookEvent = async (
       "internal_mint_ada_transfer",
       "completed",
       providerReference,
-      event.payload
+      event.payload,
+      webhookEventId
     );
 
     await client.query(
@@ -3139,14 +2787,25 @@ const processFundingInstructionWebhookEvent = async (
       [String(instruction.id), tenantId, amountMinorUnitsString, providerReference]
     );
   } else {
+    if (instruction.usdc_confirmed_webhook_event_id || instruction.posting_journal_entry_id) return;
     const wireOrderResult = await client.query(
-      `select status
-         from funding_instruction_orders
-        where platform_tenant_id = $1 and funding_instruction_id = $2 and order_kind = 'ada_wire_transfer'
+      `select wire_order.status,
+              wire_order.destination_account_of_digital_asset_id as tenant_fiat_account_id,
+              wire_order.journal_entry_id as settlement_journal_entry_id,
+              usdc_order.source_account_of_digital_asset_id as tenant_usdc_account_id
+         from funding_instruction_orders wire_order
+         left join funding_instruction_orders usdc_order
+           on usdc_order.platform_tenant_id = wire_order.platform_tenant_id
+          and usdc_order.funding_instruction_id = wire_order.funding_instruction_id
+          and usdc_order.order_kind = 'ada_usdc_transfer'
+        where wire_order.platform_tenant_id = $1
+          and wire_order.funding_instruction_id = $2
+          and wire_order.order_kind = 'ada_wire_transfer'
         limit 1`,
       [tenantId, String(instruction.id)]
     );
-    const wireOrderStatus = String(wireOrderResult.rows[0]?.status ?? "");
+    const wireOrder = wireOrderResult.rows[0];
+    const wireOrderStatus = String(wireOrder?.status ?? "");
     if (wireOrderStatus !== "completed") {
       await client.query(
         `update wire_funding_instructions
@@ -3158,6 +2817,13 @@ const processFundingInstructionWebhookEvent = async (
       await registerOrphanWebhookBreak(client, tenantId, webhookEventId, event, String(instruction.id));
       return;
     }
+    if (
+      typeof wireOrder?.tenant_fiat_account_id !== "string"
+      || typeof wireOrder?.tenant_usdc_account_id !== "string"
+      || typeof wireOrder?.settlement_journal_entry_id !== "string"
+    ) {
+      throw new Error("funding_settlement_accounting_incomplete");
+    }
 
     await markFundingInstructionOrderStatus(
       client,
@@ -3166,7 +2832,8 @@ const processFundingInstructionWebhookEvent = async (
       "ada_usdc_transfer",
       "completed",
       providerReference,
-      event.payload
+      event.payload,
+      webhookEventId
     );
 
     await client.query(
@@ -3175,9 +2842,12 @@ const processFundingInstructionWebhookEvent = async (
               available_usdc_minor_units = coalesce(available_usdc_minor_units, 0::numeric) + $3::numeric,
               status = 'posted_available',
               provider_reference_id = coalesce(provider_reference_id, $4),
+              usdc_confirmed_webhook_event_id = $5,
               updated_at = now()
-        where id = $1 and platform_tenant_id = $2`,
-      [String(instruction.id), tenantId, amountMinorUnitsString, providerReference]
+        where id = $1 and platform_tenant_id = $2
+          and usdc_confirmed_webhook_event_id is null
+          and posting_journal_entry_id is null`,
+      [String(instruction.id), tenantId, amountMinorUnitsString, providerReference, webhookEventId]
     );
   }
 
@@ -3185,21 +2855,204 @@ const processFundingInstructionWebhookEvent = async (
     ? instruction.destination_account_of_digital_asset_id
     : (typeof instruction.account_of_digital_asset_id === "string" ? instruction.account_of_digital_asset_id : undefined);
   if (destinationAccountOfDigitalAssetId && amountMinorUnits > 0n) {
-    const postingResult = await postManualJournal(client, tenantId, {
-      ...input,
-      idempotencyKey: `${input.idempotencyKey ?? "webhook"}:${event.providerEventId}:posting`,
+    const postingIdempotencyKey = `${input.idempotencyKey ?? "webhook"}:${event.providerEventId}:posting`;
+    await ensureLegacyIdempotencyKey(client, postingIdempotencyKey, requestHash({
+      method: "POST",
+      pathname: "/ledger/journals",
       body: {
-        accountOfDigitalAssetId: destinationAccountOfDigitalAssetId,
-        amountMinorUnits: amountMinorUnitsString,
-        debitLedgerAccountCode: "10020",
-        creditLedgerAccountCode: "20430",
-        description: `Funding confirmed from webhook ${event.providerEventId}`
+        fundingInstructionId: String(instruction.id),
+        providerEventId: event.providerEventId,
+        amountMinorUnits: amountMinorUnitsString
       }
-    });
-    if (postingResult.status >= 400) {
-      throw new Error(`funding_posting_failed:${String((postingResult.body as { error?: unknown }).error ?? postingResult.status)}`);
+    }));
+    let journalEntryId: string;
+    if (instructionRole === "client_exchange") {
+      const routeResult = await client.query(
+        `select wire_order.destination_account_of_digital_asset_id as tenant_fiat_account_id,
+                usdc_order.source_account_of_digital_asset_id as tenant_usdc_account_id
+           from funding_instruction_orders wire_order
+           join funding_instruction_orders usdc_order
+             on usdc_order.platform_tenant_id = wire_order.platform_tenant_id
+            and usdc_order.funding_instruction_id = wire_order.funding_instruction_id
+            and usdc_order.order_kind = 'ada_usdc_transfer'
+          where wire_order.platform_tenant_id = $1
+            and wire_order.funding_instruction_id = $2
+            and wire_order.order_kind = 'ada_wire_transfer'
+          limit 1`,
+        [tenantId, String(instruction.id)]
+      );
+      const tenantFiatAccountId = routeResult.rows[0]?.tenant_fiat_account_id;
+      const tenantUsdcAccountId = routeResult.rows[0]?.tenant_usdc_account_id;
+      if (typeof tenantFiatAccountId !== "string" || typeof tenantUsdcAccountId !== "string") {
+        throw new Error("funding_mint_route_missing");
+      }
+      journalEntryId = await postFundingJournal(client, tenantId, {
+        ...input,
+        idempotencyKey: postingIdempotencyKey
+      }, {
+        accountingEventType: "funding.client_exchange.posted",
+        sourceEventId: webhookEventId,
+        description: `Mint confirmed from webhook ${event.providerEventId}`,
+        lines: [
+          fundingJournalLine("10020", tenantUsdcAccountId, "USDC", amountMinorUnitsString, "0"),
+          fundingJournalLine("10010", tenantFiatAccountId, "USD", "0", amountMinorUnitsString),
+          fundingJournalLine("20500", destinationAccountOfDigitalAssetId, "USD", amountMinorUnitsString, "0"),
+          fundingJournalLine("20430", destinationAccountOfDigitalAssetId, "USDC", "0", amountMinorUnitsString)
+        ]
+      });
+      const projectionResult = await client.query(
+        `update account_of_digital_asset_balances
+            set pending_minor_units = greatest(pending_minor_units - $3::numeric, 0::numeric),
+                available_minor_units = available_minor_units + $3::numeric,
+                version = version + 1,
+                projected_at = now(),
+                updated_at = now()
+          where platform_tenant_id = $1
+            and account_of_digital_asset_id = $2
+            and asset_code = 'USDC'
+            and currency = 'USD'
+          returning id`,
+        [tenantId, destinationAccountOfDigitalAssetId, amountMinorUnitsString]
+      );
+      if (!projectionResult.rows[0]) throw new Error("funding_pending_balance_projection_missing");
+    } else {
+      const postingResult = await postManualJournal(client, tenantId, {
+        ...input,
+        idempotencyKey: postingIdempotencyKey,
+        body: {
+          accountOfDigitalAssetId: destinationAccountOfDigitalAssetId,
+          amountMinorUnits: amountMinorUnitsString,
+          debitLedgerAccountCode: "10020",
+          creditLedgerAccountCode: "20430",
+          eventType: "funding.internal_treasury_mint.posted",
+          sourceEventId: webhookEventId,
+          description: `Funding confirmed from webhook ${event.providerEventId}`
+        }
+      });
+      if (postingResult.status >= 400) {
+        throw new Error(`funding_posting_failed:${String((postingResult.body as { error?: unknown }).error ?? postingResult.status)}`);
+      }
+      const postedJournalEntryId = (postingResult.body as { journal?: { id?: unknown } }).journal?.id;
+      if (typeof postedJournalEntryId !== "string") throw new Error("funding_posting_journal_id_missing");
+      journalEntryId = postedJournalEntryId;
+      await client.query(
+        `insert into account_of_digital_asset_balances
+          (id, platform_tenant_id, account_of_digital_asset_id, asset_code, currency, available_minor_units, pending_minor_units, reserved_minor_units, locked_minor_units, suspense_minor_units)
+         values ($1, $2, $3, 'USDC', 'USD', $4::numeric, 0, 0, 0, 0)
+         on conflict (account_of_digital_asset_id, asset_code, currency) do update
+         set available_minor_units = account_of_digital_asset_balances.available_minor_units + excluded.available_minor_units,
+             version = account_of_digital_asset_balances.version + 1,
+             projected_at = now(),
+             updated_at = now()`,
+        [randomUUID(), tenantId, destinationAccountOfDigitalAssetId, amountMinorUnitsString]
+      );
     }
+    await client.query(
+      `update wire_funding_instructions
+          set posting_journal_entry_id = $3, updated_at = now()
+        where id = $1 and platform_tenant_id = $2
+          and posting_journal_entry_id is null`,
+      [String(instruction.id), tenantId, journalEntryId]
+    );
+    await client.query(
+      `update funding_instruction_orders
+          set journal_entry_id = $3, updated_at = now()
+        where platform_tenant_id = $1 and funding_instruction_id = $2
+          and order_kind = $4`,
+      [
+        tenantId,
+        String(instruction.id),
+        journalEntryId,
+        instructionRole === "client_exchange" ? "ada_usdc_transfer" : "internal_mint_ada_transfer"
+      ]
+    );
   }
+};
+
+interface FundingJournalLine {
+  ledgerAccountCode: string;
+  accountOfDigitalAssetId: string;
+  assetCode: "USD" | "USDC";
+  debitMinorUnits: string;
+  creditMinorUnits: string;
+}
+
+const fundingJournalLine = (
+  ledgerAccountCode: string,
+  accountOfDigitalAssetId: string,
+  assetCode: "USD" | "USDC",
+  debitMinorUnits: string,
+  creditMinorUnits: string
+): FundingJournalLine => ({
+  ledgerAccountCode,
+  accountOfDigitalAssetId,
+  assetCode,
+  debitMinorUnits,
+  creditMinorUnits
+});
+
+const postFundingJournal = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  journalInput: {
+    accountingEventType: string;
+    sourceEventId: string;
+    description: string;
+    lines: FundingJournalLine[];
+  }
+): Promise<string> => {
+  const totalDebits = journalInput.lines.reduce((total, line) => total + BigInt(line.debitMinorUnits), 0n);
+  const totalCredits = journalInput.lines.reduce((total, line) => total + BigInt(line.creditMinorUnits), 0n);
+  if (totalDebits <= 0n || totalDebits !== totalCredits) throw new Error("funding_journal_unbalanced");
+
+  const accountCodes = [...new Set(journalInput.lines.map((line) => line.ledgerAccountCode))];
+  const ledgerResult = await client.query(
+    `select id, account_code from ledger_accounts where account_code = any($1::text[])`,
+    [accountCodes]
+  );
+  const ledgerIds = new Map(ledgerResult.rows.map((row) => [String(row.account_code), String(row.id)]));
+  if (accountCodes.some((accountCode) => !ledgerIds.has(accountCode))) {
+    throw new Error("funding_posting_ledger_account_missing");
+  }
+
+  const journalEntryId = randomUUID();
+  await client.query(
+    `insert into treasury_journal_entries
+      (id, platform_tenant_id, source_event_id, accounting_event_type, idempotency_key, description, correlation_id, posted_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      journalEntryId,
+      tenantId,
+      journalInput.sourceEventId,
+      journalInput.accountingEventType,
+      input.idempotencyKey,
+      journalInput.description,
+      input.correlationId,
+      new Date().toISOString()
+    ]
+  );
+  for (const line of journalInput.lines) {
+    await client.query(
+      `insert into treasury_journal_lines
+        (id, journal_entry_id, ledger_account_id, account_of_digital_asset_id, asset_code, currency, debit_minor_units, credit_minor_units)
+       values ($1, $2, $3, $4, $5, 'USD', $6, $7)`,
+      [
+        randomUUID(),
+        journalEntryId,
+        ledgerIds.get(line.ledgerAccountCode),
+        line.accountOfDigitalAssetId,
+        line.assetCode,
+        line.debitMinorUnits,
+        line.creditMinorUnits
+      ]
+    );
+  }
+  await writeAuditAndOutbox(client, tenantId, input, "treasury.journal_entry.posted", {
+    journalEntryId,
+    eventType: journalInput.accountingEventType
+  });
+  return journalEntryId;
 };
 
 const resolveFundingInstructionForWebhook = async (
@@ -3216,14 +3069,18 @@ const resolveFundingInstructionForWebhook = async (
                             pending_usdc_minor_units,
                             available_usdc_minor_units,
                             instruction_role,
-                            status
+                               status,
+                               wire_confirmed_webhook_event_id,
+                               usdc_confirmed_webhook_event_id,
+                               posting_journal_entry_id
                        from wire_funding_instructions`;
 
   if (event.fundingInstructionId && isUuid(event.fundingInstructionId)) {
     const result = await client.query(
       `${selectSql}
        where id = $1 and platform_tenant_id = $2
-       limit 1`,
+      limit 1
+      for update`,
       [event.fundingInstructionId, tenantId]
     );
     if (result.rows[0]) return result.rows[0] as Record<string, unknown>;
@@ -3232,12 +3089,23 @@ const resolveFundingInstructionForWebhook = async (
   if (event.providerReferenceId) {
     const result = await client.query(
       `${selectSql}
-       where platform_tenant_id = $1 and provider_reference_id = $2
+       where platform_tenant_id = $1
+         and (
+           provider_reference_id = $2
+           or exists (
+             select 1 from funding_instruction_orders orders
+              where orders.platform_tenant_id = wire_funding_instructions.platform_tenant_id
+                and orders.funding_instruction_id = wire_funding_instructions.id
+                and orders.provider_reference_id = $2
+           )
+         )
        order by created_at desc
-       limit 1`,
+       limit 2
+       for update`,
       [tenantId, event.providerReferenceId]
     );
-    if (result.rows[0]) return result.rows[0] as Record<string, unknown>;
+    if (result.rows.length === 1) return result.rows[0] as Record<string, unknown>;
+    if (result.rows.length > 1) return undefined;
   }
 
   const destinationAccountOfDigitalAssetId = event.destinationAccountOfDigitalAssetId ?? event.accountOfDigitalAssetId;
@@ -3247,11 +3115,12 @@ const resolveFundingInstructionForWebhook = async (
        where platform_tenant_id = $1
          and coalesce(destination_account_of_digital_asset_id, account_of_digital_asset_id) = $2
          and status not in ('cancelled', 'failed')
-       order by created_at desc
-       limit 1`,
+      order by created_at desc
+      limit 2
+      for update`,
       [tenantId, destinationAccountOfDigitalAssetId]
     );
-    if (result.rows[0]) return result.rows[0] as Record<string, unknown>;
+    if (result.rows.length === 1) return result.rows[0] as Record<string, unknown>;
   }
 
   return undefined;
@@ -3273,6 +3142,11 @@ const isUsdcConfirmationEvent = (eventType: string): boolean => {
   return false;
 };
 
+const isProviderFailureEvent = (eventType: string): boolean => {
+  const normalized = eventType.trim().toLowerCase();
+  return normalized.includes("fail") || normalized.includes("reject") || normalized.includes("return");
+};
+
 const markFundingInstructionOrderStatus = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
@@ -3280,16 +3154,70 @@ const markFundingInstructionOrderStatus = async (
   orderKind: string,
   status: string,
   providerReferenceId: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  webhookEventId: string
 ): Promise<void> => {
   await client.query(
     `update funding_instruction_orders
         set status = $4,
             provider_reference_id = coalesce(provider_reference_id, $5),
             provider_payload_json = coalesce(provider_payload_json, '{}'::jsonb) || $6::jsonb,
+            completed_webhook_event_id = coalesce(completed_webhook_event_id, $7),
             updated_at = now()
-      where platform_tenant_id = $1 and funding_instruction_id = $2 and order_kind = $3`,
-    [tenantId, fundingInstructionId, orderKind, status, providerReferenceId, JSON.stringify(payload)]
+      where platform_tenant_id = $1 and funding_instruction_id = $2 and order_kind = $3
+        and completed_webhook_event_id is null`,
+    [tenantId, fundingInstructionId, orderKind, status, providerReferenceId, JSON.stringify(payload), webhookEventId]
+  );
+};
+
+const registerFundingMismatchBreak = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  webhookEventId: string,
+  event: NormalizedCircleWebhookEvent,
+  fundingInstructionId: string,
+  expectedAmount: bigint,
+  receivedAmount: bigint
+): Promise<void> => {
+  const now = new Date().toISOString();
+  const reconciliationRunId = randomUUID();
+  const suspenseCaseId = randomUUID();
+  const reconciliationBreakId = randomUUID();
+  await client.query(
+    `insert into reconciliation_runs (id, platform_tenant_id, run_type, status, started_at, completed_at)
+     values ($1, $2, 'webhook_amount_mismatch', 'completed', $3, $3)`,
+    [reconciliationRunId, tenantId, now]
+  );
+  await client.query(
+    `insert into suspense_cases
+      (id, platform_tenant_id, reason, webhook_event_id, status, note, created_at, updated_at)
+     values ($1, $2, 'funding_amount_mismatch', $3, 'open', $4, $5, $5)`,
+    [suspenseCaseId, tenantId, webhookEventId, `Amount mismatch for funding instruction ${fundingInstructionId}`, now]
+  );
+  await client.query(
+    `insert into reconciliation_breaks
+      (id, platform_tenant_id, reconciliation_run_id, account_of_digital_asset_id, break_type, severity,
+       platform_amount_minor_units, circle_amount_minor_units, delta_minor_units, status, reason,
+       webhook_event_id, suspense_case_id, created_at, updated_at)
+     values ($1, $2, $3, $4, 'funding_amount_mismatch', 'high', $5::numeric, $6::numeric,
+             $7::numeric, 'open', 'funding_amount_mismatch', $8, $9, $10, $10)`,
+    [
+      reconciliationBreakId,
+      tenantId,
+      reconciliationRunId,
+      asUuidOrNull(event.destinationAccountOfDigitalAssetId ?? event.accountOfDigitalAssetId),
+      expectedAmount.toString(),
+      receivedAmount.toString(),
+      (receivedAmount - expectedAmount).toString(),
+      webhookEventId,
+      suspenseCaseId,
+      now
+    ]
+  );
+  await client.query(
+    `update suspense_cases set reconciliation_break_id = $3, updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [suspenseCaseId, tenantId, reconciliationBreakId]
   );
 };
 
@@ -3354,7 +3282,7 @@ const registerOrphanWebhookBreak = async (
 const writeAuditAndOutbox = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   eventType: string,
   payload: Record<string, unknown>
 ): Promise<void> => {
@@ -3450,7 +3378,7 @@ const getBusinessClient = async (client: Pick<PostgresClient, "query">, tenantId
 const transitionBusinessClient = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   businessClientId: string,
   action: string
 ): Promise<JsonResponse> => {
@@ -3553,7 +3481,7 @@ const getAccount = async (client: Pick<PostgresClient, "query">, tenantId: strin
 const transitionAccount = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   accountId: string,
   action: string
 ): Promise<JsonResponse> => {
@@ -3612,412 +3540,6 @@ const transitionAccount = async (
   return { status: 200, body: { account: await getAccount(client, tenantId, accountId) } };
 };
 
-const provisionCircleAccount = async (
-  client: Pick<PostgresClient, "query">,
-  tenantId: string,
-  input: Sprint1PostgresCommandInput,
-  accountId: string
-): Promise<JsonResponse> => {
-  const result = await client.query(
-    `select account.id, account.status, account.business_client_id, account.use_purpose, client.onboarding_status, client.circle_wallet_set_id, client.legal_name
-       from accounts_of_digital_asset account
-       join business_clients client on client.id = account.business_client_id and client.platform_tenant_id = account.platform_tenant_id
-      where account.id = $1 and account.platform_tenant_id = $2
-      for update`,
-    [accountId, tenantId]
-  );
-  const account = result.rows[0] as {
-    id: string;
-    status: string;
-    business_client_id: string;
-    use_purpose: string;
-    onboarding_status: string;
-    circle_wallet_set_id?: string;
-    legal_name?: string;
-  } | undefined;
-  if (!account) return { status: 404, body: { error: "account_not_found" } };
-  if (account.onboarding_status !== "approved") return { status: 400, body: { error: "business_client_not_approved" } };
-  if (["restricted", "frozen", "closed"].includes(account.status)) return { status: 400, body: { error: "account_status_blocks_circle_provisioning" } };
-
-  const requestWalletSetId = optionalStringBody(input.body, "walletSetId");
-  const businessClientWalletSetId = typeof account.circle_wallet_set_id === "string" ? account.circle_wallet_set_id : undefined;
-  const requestedWalletBlockchains = stringArrayBody(input.body, "walletBlockchains", circleWalletBlockchainsFromEnv());
-  const requestedWalletBlockchain = requestedWalletBlockchains[0];
-  const expectedExistingWalletSetId = requestWalletSetId ?? businessClientWalletSetId;
-
-  const existingInstrument = await client.query(
-    `select id, account_of_digital_asset_id, instrument_type, status, asset_code, rail_type, purpose, provider, verification_status, network_code, is_default, metadata, created_at
-       from linked_instruments
-      where platform_tenant_id = $1
-        and account_of_digital_asset_id = $2
-        and instrument_type = 'circle_wallet'
-        and provider = 'circle'
-        and status in ('active', 'verified')
-        and verification_status = 'verified'
-      order by created_at desc
-      limit 1`,
-    [tenantId, accountId]
-  );
-  const existingRow = existingInstrument.rows[0] as Record<string, unknown> | undefined;
-  const existingInstrumentWalletSetId = existingRow ? walletSetIdFromLinkedInstrument(existingRow) : undefined;
-  const existingInstrumentMatchesWalletSet = expectedExistingWalletSetId
-    ? existingInstrumentWalletSetId === expectedExistingWalletSetId
-    : false;
-  if (existingRow && existingInstrumentMatchesWalletSet) {
-    const operation = await client.query(
-      `select id, operation_type, idempotency_key, correlation_id, request_payload, response_payload, provider_account_id, provider_wallet_id, provider_address_id, status, error_code, created_at
-         from circle_api_operations
-        where linked_instrument_id = $1
-        order by created_at desc
-        limit 1`,
-      [existingRow.id]
-    );
-    return {
-      status: 200,
-      body: {
-        account: await getAccount(client, tenantId, accountId),
-        linkedInstrument: mapLinkedInstrumentRow(existingRow),
-        circleOperation: operation.rows[0] ? mapCircleOperationRow(operation.rows[0]) : undefined,
-        reusedExistingMapping: true
-      }
-    };
-  }
-
-  const existingSuccessful = await client.query(
-    `select id, operation_type, idempotency_key, correlation_id, request_payload, response_payload, provider_account_id, provider_wallet_id, provider_address_id, status, error_code, created_at
-       from circle_api_operations
-      where platform_tenant_id = $1
-        and account_of_digital_asset_id = $2
-        and operation_type = 'ada_circle_mapping'
-        and status = 'succeeded'
-      order by created_at desc
-      limit 1`,
-    [tenantId, accountId]
-  );
-  const successfulRow = existingSuccessful.rows[0] as Record<string, unknown> | undefined;
-  const successfulWalletSetId = typeof successfulRow?.provider_account_id === "string" ? successfulRow.provider_account_id : undefined;
-  const successfulRowMatchesWalletSet = expectedExistingWalletSetId
-    ? successfulWalletSetId === expectedExistingWalletSetId
-    : false;
-  if (successfulRow && successfulRowMatchesWalletSet) {
-    const providerWalletId = typeof successfulRow.provider_wallet_id === "string" && successfulRow.provider_wallet_id.trim()
-      ? successfulRow.provider_wallet_id
-      : undefined;
-    const providerAddressId = typeof successfulRow.provider_address_id === "string" && successfulRow.provider_address_id.trim()
-      ? successfulRow.provider_address_id
-      : undefined;
-
-    if (providerWalletId) {
-      const recoveredWalletSetId = businessClientWalletSetId
-        ?? (typeof successfulRow.provider_account_id === "string" ? successfulRow.provider_account_id : undefined);
-      const linkedInstrumentId = randomUUID();
-      const recoveredInstrumentResult = await client.query(
-        `insert into linked_instruments
-          (id, account_of_digital_asset_id, platform_tenant_id, instrument_type, status, asset_code, rail_type, purpose, provider, verification_status, metadata, network_code, is_default, created_at, updated_at)
-         values ($1, $2, $3, 'circle_wallet', 'active', $4, 'on-chain', $5, 'circle', 'verified', $6::jsonb, $7, true, now(), now())
-         returning id, account_of_digital_asset_id, instrument_type, status, asset_code, rail_type, purpose, provider, verification_status, network_code, is_default, metadata, created_at`,
-        [
-          linkedInstrumentId,
-          accountId,
-          tenantId,
-          providerWalletId,
-          account.use_purpose,
-          JSON.stringify({
-            walletSetId: recoveredWalletSetId,
-            walletId: providerWalletId,
-            address: providerAddressId,
-            blockchain: requestedWalletBlockchain,
-            recoveredExistingWallet: true,
-            recoveredFromCircleOperationId: successfulRow.id
-          }),
-          requestedWalletBlockchain
-        ]
-      );
-      await client.query(
-        `update circle_api_operations set linked_instrument_id = $2 where id = $1 and linked_instrument_id is null`,
-        [successfulRow.id, linkedInstrumentId]
-      );
-      await writeAuditAndOutbox(client, tenantId, input, "account_of_digital_asset.circle_mapping.recovered", {
-        accountOfDigitalAssetId: accountId,
-        businessClientId: account.business_client_id,
-        circleOperationId: successfulRow.id,
-        providerWalletId,
-        providerAddressId,
-        linkedInstrumentId
-      });
-      return {
-        status: 200,
-        body: {
-          account: await getAccount(client, tenantId, accountId),
-          linkedInstrument: mapLinkedInstrumentRow(recoveredInstrumentResult.rows[0] as Record<string, unknown>),
-          circleOperation: mapCircleOperationRow(successfulRow),
-          reusedExistingMapping: true
-        }
-      };
-    }
-
-    return {
-      status: 200,
-      body: {
-        account: await getAccount(client, tenantId, accountId),
-        circleOperation: mapCircleOperationRow(successfulRow),
-        reusedExistingMapping: true
-      }
-    };
-  }
-
-  const existing = await client.query(
-    `select id, operation_type, provider_account_id, provider_wallet_id, provider_address_id, status, request_payload, response_payload, created_at
-       from circle_api_operations
-      where platform_tenant_id = $1
-        and account_of_digital_asset_id = $2
-        and operation_type = 'ada_circle_mapping'
-        and idempotency_key = $3
-      order by created_at desc
-      limit 1`,
-    [tenantId, accountId, input.idempotencyKey]
-  );
-  const replayed = existing.rows[0];
-  if (replayed) return { status: 200, body: { account: await getAccount(client, tenantId, accountId), circleOperation: mapCircleOperationRow(replayed) } };
-
-  let effectiveWalletSetId = requestWalletSetId ?? businessClientWalletSetId;
-  if (!effectiveWalletSetId) {
-    const walletSetName = `${account.legal_name ?? "Business Client"} Wallet Set`;
-    const walletSet = await initializeCircleWalletSet({
-      idempotencyKey: input.idempotencyKey,
-      walletSetName,
-      walletBlockchains: requestedWalletBlockchains
-    });
-    if (walletSet.status !== "complete" || !walletSet.walletSetId) {
-      const operationId = randomUUID();
-      const responsePayload = {
-        walletSet,
-        authDebug: walletSet.responsePayload.authDebug,
-        provider: walletSet.responsePayload
-      };
-      await client.query(
-        `insert into circle_api_operations
-          (id, platform_tenant_id, operation_type, idempotency_key, correlation_id, account_of_digital_asset_id, business_client_id, request_payload, response_payload, provider_account_id, provider_wallet_id, provider_address_id, status, error_code, created_at)
-         values ($1, $2, 'ada_circle_mapping', $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, 'failed', $12, now())`,
-        [
-          operationId,
-          tenantId,
-          input.idempotencyKey,
-          input.correlationId,
-          accountId,
-          account.business_client_id,
-          JSON.stringify({ accountOfDigitalAssetId: accountId, provider: "circle", walletSetName, walletBlockchains: requestedWalletBlockchains }),
-          JSON.stringify(responsePayload),
-          undefined,
-          undefined,
-          undefined,
-          walletSet.errorCode
-        ]
-      );
-      await writeAuditAndOutbox(client, tenantId, input, "account_of_digital_asset.circle_mapping.failed", {
-        accountOfDigitalAssetId: accountId,
-        businessClientId: account.business_client_id,
-        circleOperationId: operationId,
-        errorCode: walletSet.errorCode
-      });
-      const status = walletSet.errorCode === "circle_api_key_required"
-        || walletSet.errorCode === "circle_wallet_configuration_required"
-        || walletSet.errorCode === "circle_fiat_mint_endpoint_not_configured"
-        ? 400
-        : 502;
-      return {
-        status,
-        body: {
-          error: walletSet.errorCode ?? "circle_provider_unavailable",
-          detail: tenantActivationFailureDetail(walletSet.responsePayload),
-          authDebug: walletSet.responsePayload.authDebug,
-          walletSet,
-          circleOperation: await getCircleOperation(client, tenantId, operationId)
-        }
-      };
-    }
-    effectiveWalletSetId = walletSet.walletSetId;
-    await client.query(
-      `update business_clients
-          set circle_wallet_set_id = $3,
-              updated_at = now()
-        where id = $1 and platform_tenant_id = $2`,
-      [account.business_client_id, tenantId, effectiveWalletSetId]
-    );
-    await writeAuditAndOutbox(client, tenantId, input, "business_client.circle_wallet_set.provisioned", {
-      businessClientId: account.business_client_id,
-      walletSetId: effectiveWalletSetId,
-      walletSetName,
-      walletBlockchains: requestedWalletBlockchains
-    });
-  }
-
-  if (!effectiveWalletSetId) {
-    return { status: 502, body: { error: "circle_wallet_configuration_required", detail: "walletSetId missing after business client wallet set provisioning" } };
-  }
-
-  const mappingPayload = { ...input.body };
-  delete mappingPayload.wireAccount;
-  delete mappingPayload.wireFunding;
-
-  const provider = await provisionAdaCircleMapping({
-    tenantId,
-    accountOfDigitalAssetId: accountId,
-    businessClientId: account.business_client_id,
-    idempotencyKey: input.idempotencyKey,
-    correlationId: input.correlationId,
-    walletSetId: effectiveWalletSetId,
-    walletBlockchains: requestedWalletBlockchains,
-    payload: mappingPayload
-  });
-
-  const needsSandboxWireSetup = circleEnvironment() === "circle-sandbox";
-  const sandboxWireSetup = provider.status === "complete" && needsSandboxWireSetup
-    ? await provisionSandboxWireFundingInstructions({
-        tenantId,
-        accountOfDigitalAssetId: accountId,
-        businessClientId: account.business_client_id,
-        idempotencyKey: input.idempotencyKey,
-        payload: input.body
-      })
-    : undefined;
-
-  const provisioningStatus = provider.status === "complete" && (sandboxWireSetup?.status ?? "complete") === "complete"
-    ? "complete"
-    : "failed";
-  const provisioningErrorCode = provider.status === "complete"
-    ? sandboxWireSetup?.errorCode
-    : provider.errorCode;
-  const failedProviderPayload = provider.status === "complete"
-    ? sandboxWireSetup?.responsePayload
-    : provider.responsePayload;
-
-  const providerAccountId = provider.providerAccountId ?? provider.providerWalletId ?? provider.providerRequestId;
-  const providerWalletId = provider.providerWalletId ?? provider.providerAccountId ?? provider.providerRequestId;
-  const providerAddressId = provider.providerAddressId;
-  const operationId = randomUUID();
-  const failedAuthDebug = failedProviderPayload && typeof failedProviderPayload === "object"
-    ? (failedProviderPayload as Record<string, unknown>).authDebug
-    : undefined;
-  const responsePayload = {
-    providerAccountId,
-    providerWalletId,
-    providerAddressId,
-    providerRequestId: provider.providerRequestId,
-    status: provisioningStatus,
-    errorCode: provisioningErrorCode,
-    authDebug: failedAuthDebug,
-    provider: provider.responsePayload,
-    wireSetup: sandboxWireSetup?.responsePayload
-  };
-  await client.query(
-    `insert into circle_api_operations
-      (id, platform_tenant_id, operation_type, idempotency_key, correlation_id, account_of_digital_asset_id, business_client_id, request_payload, response_payload, provider_account_id, provider_wallet_id, provider_address_id, status, error_code, created_at)
-     values ($1, $2, 'ada_circle_mapping', $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, now())`,
-    [
-      operationId,
-      tenantId,
-      input.idempotencyKey,
-      input.correlationId,
-      accountId,
-      account.business_client_id,
-      JSON.stringify({ accountOfDigitalAssetId: accountId, provider: "circle", walletSetId: effectiveWalletSetId, walletBlockchains: requestedWalletBlockchains }),
-      JSON.stringify(responsePayload),
-      providerAccountId,
-      providerWalletId,
-      providerAddressId,
-      provisioningStatus === "complete" ? "succeeded" : "failed",
-      provisioningErrorCode
-    ]
-  );
-  if (provisioningStatus !== "complete") {
-    await writeAuditAndOutbox(client, tenantId, input, "account_of_digital_asset.circle_mapping.failed", {
-      accountOfDigitalAssetId: accountId,
-      businessClientId: account.business_client_id,
-      circleOperationId: operationId,
-      errorCode: provisioningErrorCode
-    });
-    const status = provisioningErrorCode === "circle_api_key_required"
-      || provisioningErrorCode === "circle_wallet_configuration_required"
-      || provisioningErrorCode === "circle_auth_failed"
-      || provisioningErrorCode === "circle_validation_failed"
-      || provisioningErrorCode === "circle_fiat_mint_endpoint_not_configured"
-      ? 400
-      : 502;
-    return {
-      status,
-      body: {
-        error: provisioningErrorCode ?? "circle_provider_unavailable",
-        detail: failedProviderPayload ? tenantActivationFailureDetail(failedProviderPayload as Record<string, unknown>) : undefined,
-        authDebug: failedAuthDebug,
-        circleOperation: await getCircleOperation(client, tenantId, operationId)
-      }
-    };
-  }
-
-  const wireSetupPayload = sandboxWireSetup?.responsePayload && typeof sandboxWireSetup.responsePayload === "object"
-    ? sandboxWireSetup.responsePayload as Record<string, unknown>
-    : undefined;
-  const wireTrackingRef = typeof wireSetupPayload?.trackingRef === "string"
-    ? wireSetupPayload.trackingRef
-    : undefined;
-  const wireBeneficiaryBankAccountNumber = typeof wireSetupPayload?.beneficiaryBankAccountNumber === "string"
-    ? wireSetupPayload.beneficiaryBankAccountNumber
-    : undefined;
-  const providerWireAccountId = typeof wireSetupPayload?.wireAccountId === "string"
-    ? wireSetupPayload.wireAccountId
-    : undefined;
-  const businessWireAccountId = typeof wireSetupPayload?.businessWireAccountId === "string"
-    ? wireSetupPayload.businessWireAccountId
-    : providerWireAccountId;
-  const wireInstructions = wireSetupPayload?.wireInstructions && typeof wireSetupPayload.wireInstructions === "object"
-    ? wireSetupPayload.wireInstructions
-    : undefined;
-  const linkedInstrumentMetadata = {
-    walletSetId: effectiveWalletSetId,
-    walletId: providerWalletId,
-    address: providerAddressId,
-    blockchain: requestedWalletBlockchain,
-    providerRequestId: provider.providerRequestId,
-    circleOperationId: operationId,
-    ...(businessWireAccountId ? { businessWireAccountId } : {}),
-    ...(wireTrackingRef ? { trackingRef: wireTrackingRef, wireTrackingRef } : {}),
-    ...(wireBeneficiaryBankAccountNumber ? { beneficiaryBankAccountNumber: wireBeneficiaryBankAccountNumber } : {}),
-    ...(wireInstructions ? { wireInstructions } : {})
-  };
-  const instrumentResult = await client.query(
-    `insert into linked_instruments
-      (id, account_of_digital_asset_id, platform_tenant_id, instrument_type, status, asset_code, rail_type, purpose, provider, verification_status, metadata, network_code, is_default, created_at, updated_at)
-     values ($1, $2, $3, 'circle_wallet', 'active', $4, 'on-chain', $5, 'circle', 'verified', $6::jsonb, $7, true, now(), now())
-     returning id, account_of_digital_asset_id, instrument_type, status, asset_code, rail_type, purpose, provider, verification_status, network_code, is_default, metadata, created_at`,
-    [
-      randomUUID(),
-      accountId,
-      tenantId,
-      providerWalletId,
-      account.use_purpose,
-      JSON.stringify(linkedInstrumentMetadata),
-      requestedWalletBlockchain
-    ]
-  );
-  const linkedInstrument = instrumentResult.rows[0] as Record<string, unknown>;
-  await client.query(
-    `update circle_api_operations set linked_instrument_id = $2 where id = $1`,
-    [operationId, linkedInstrument.id]
-  );
-  await writeAuditAndOutbox(client, tenantId, input, "account_of_digital_asset.circle_mapping.provisioned", {
-    accountOfDigitalAssetId: accountId,
-    businessClientId: account.business_client_id,
-    circleOperationId: operationId,
-    providerAccountId,
-    providerWalletId,
-    providerAddressId,
-    linkedInstrumentId: linkedInstrument.id
-  });
-  const circleOperation = await getCircleOperation(client, tenantId, operationId);
-  return { status: 200, body: { account: await getAccount(client, tenantId, accountId), linkedInstrument: mapLinkedInstrumentRow(linkedInstrument), circleOperation } };
-};
-
 const getTenantActivation = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string
@@ -4035,309 +3557,6 @@ const getTenantActivation = async (
       walletStrategy: "omnibus_custodial_set",
       status: "draft"
     }
-  };
-};
-
-const activateTenant = async (
-  client: Pick<PostgresClient, "query">,
-  tenantId: string,
-  input: Sprint1PostgresCommandInput
-): Promise<JsonResponse> => {
-  const tenant = await getTenantRow(client, tenantId);
-  const existingIntegration = await getTenantCircleIntegrationRow(client, tenantId);
-  const existingWalletSetId = typeof existingIntegration?.wallet_set_id === "string" && existingIntegration.wallet_set_id.trim()
-    ? existingIntegration.wallet_set_id
-    : undefined;
-  const existingWalletSetName = typeof existingIntegration?.wallet_set_name === "string" && existingIntegration.wallet_set_name.trim()
-    ? existingIntegration.wallet_set_name
-    : undefined;
-  const existingWalletBlockchains = existingIntegration ? walletBlockchainsFromRow(existingIntegration) : [];
-
-  const walletSetName = stringBody(
-    input.body,
-    "walletSetName",
-    existingWalletSetName ?? `${tenant?.tenant_name ?? "Demo Tenant"} Wallet Set`
-  );
-  const walletBlockchains = stringArrayBody(
-    input.body,
-    "walletBlockchains",
-    existingWalletBlockchains.length ? existingWalletBlockchains : circleWalletBlockchainsFromEnv()
-  );
-  const walletBlockchainForStorage = walletBlockchains[0] ?? defaultCircleBlockchainByEnvironment();
-  const walletStrategy = stringBody(input.body, "walletStrategy", "omnibus_custodial_set");
-  const requestedWalletSetId = optionalStringBody(input.body, "walletSetId");
-  const attachedWalletSetId = requestedWalletSetId ?? existingWalletSetId;
-  const environment = circleEnvironment();
-  const existingMetadata = existingIntegration?.metadata && typeof existingIntegration.metadata === "object"
-    ? existingIntegration.metadata as Record<string, unknown>
-    : {};
-  const existingResponsePayload = existingMetadata.responsePayload && typeof existingMetadata.responsePayload === "object"
-    ? existingMetadata.responsePayload as Record<string, unknown>
-    : {};
-  const existingTenantWallet = existingResponsePayload.tenantWallet && typeof existingResponsePayload.tenantWallet === "object"
-    ? existingResponsePayload.tenantWallet as Record<string, unknown>
-    : undefined;
-  const existingTenantWalletId = typeof existingTenantWallet?.walletId === "string" ? existingTenantWallet.walletId : undefined;
-  const existingTenantWalletAddress = typeof existingTenantWallet?.address === "string" ? existingTenantWallet.address : undefined;
-  const existingTenantWalletRequestId = typeof existingTenantWallet?.providerRequestId === "string" ? existingTenantWallet.providerRequestId : undefined;
-
-  const walletSet = attachedWalletSetId
-    ? {
-        environment,
-        walletSetId: attachedWalletSetId,
-        walletSetName,
-        walletBlockchains,
-        status: "complete" as const,
-        responsePayload: {
-          accepted: true,
-          attachedExistingWalletSet: true,
-          reusedStoredWalletSet: !requestedWalletSetId && Boolean(existingWalletSetId)
-        }
-      }
-    : await initializeCircleWalletSet({
-        idempotencyKey: input.idempotencyKey,
-        walletSetName,
-        walletBlockchains
-      });
-
-  const shouldReuseTenantWallet =
-    walletSet.status === "complete"
-    && walletSet.walletSetId
-    && existingWalletSetId
-    && existingWalletSetId === walletSet.walletSetId
-    && Boolean(existingTenantWalletId);
-
-  const tenantWallet = walletSet.status !== "complete" || !walletSet.walletSetId
-    ? undefined
-    : shouldReuseTenantWallet
-      ? {
-          providerAccountId: walletSet.walletSetId,
-          providerWalletId: existingTenantWalletId,
-          providerAddressId: existingTenantWalletAddress,
-          providerRequestId: existingTenantWalletRequestId,
-          status: "complete" as const,
-          errorCode: undefined,
-          responsePayload: {
-            accepted: true,
-            attachedExistingTenantWallet: true,
-            reusedStoredTenantWallet: true
-          }
-        }
-      : await initializeTenantCircleWallet({
-          tenantId,
-          walletSetId: walletSet.walletSetId,
-          walletSetName,
-          walletBlockchains,
-          idempotencyKey: input.idempotencyKey
-        });
-
-  const integrationId = randomUUID();
-  const activationErrorCode = walletSet.status !== "complete"
-    ? walletSet.errorCode
-    : tenantWallet && tenantWallet.status !== "complete"
-      ? tenantWallet.errorCode
-      : undefined;
-  const status = activationErrorCode ? "failed" : "active";
-  await client.query(
-    `insert into platform_tenant_circle_integrations
-      (id, platform_tenant_id, provider, environment, wallet_set_id, wallet_set_name, wallet_blockchain, wallet_strategy, status, activated_at, metadata, created_at, updated_at)
-     values ($1, $2, 'circle', $3, $4, $5, $6, $7, $8, case when $8 = 'active' then now() else null end, $9::jsonb, now(), now())
-     on conflict (platform_tenant_id, provider)
-     do update set environment = excluded.environment,
-                   wallet_set_id = excluded.wallet_set_id,
-                   wallet_set_name = excluded.wallet_set_name,
-                   wallet_blockchain = excluded.wallet_blockchain,
-                   wallet_strategy = excluded.wallet_strategy,
-                   status = excluded.status,
-                   activated_at = case when excluded.status = 'active' then coalesce(platform_tenant_circle_integrations.activated_at, now()) else platform_tenant_circle_integrations.activated_at end,
-                   metadata = excluded.metadata,
-                   updated_at = now()`,
-    [
-      integrationId,
-      tenantId,
-      walletSet.environment,
-      walletSet.walletSetId,
-      walletSetName,
-      walletBlockchainForStorage,
-      walletStrategy,
-      status,
-      JSON.stringify({
-        providerRequestId: walletSet.providerRequestId,
-        responsePayload: {
-          ...walletSet.responsePayload,
-          walletBlockchains,
-          tenantWallet: tenantWallet
-            ? {
-                walletSetId: walletSet.walletSetId,
-              walletId: tenantWallet.providerWalletId ?? tenantWallet.providerAccountId ?? tenantWallet.providerRequestId,
-                address: tenantWallet.providerAddressId,
-                providerRequestId: tenantWallet.providerRequestId,
-                status: tenantWallet.status,
-                errorCode: tenantWallet.errorCode,
-                provider: tenantWallet.responsePayload
-              }
-            : undefined
-        },
-        errorCode: activationErrorCode
-      })
-    ]
-  );
-
-  await writeAuditAndOutbox(client, tenantId, input, status === "active" ? "platform_tenant.circle_wallet_set.activated" : "platform_tenant.circle_wallet_set.activation_failed", {
-    walletSetId: walletSet.walletSetId,
-    walletSetName,
-    walletBlockchains,
-    walletStrategy,
-    environment: walletSet.environment,
-    tenantWalletId: tenantWallet?.providerWalletId ?? tenantWallet?.providerAccountId ?? tenantWallet?.providerRequestId,
-    tenantWalletAddress: tenantWallet?.providerAddressId,
-    errorCode: activationErrorCode
-  });
-
-  if (status === "active") {
-    const tenantInternalBusinessClientId = await ensureTenantPseudoBusinessClient(client, tenantId, input);
-    await ensureTenantCentralAdaAccount(client, tenantId, input, tenantInternalBusinessClientId);
-  }
-
-  const body = await getTenantActivation(client, tenantId);
-  return {
-    status: 200,
-    body: {
-      ...body as Record<string, unknown>,
-      activationAccepted: status === "active",
-      error: status === "active" ? undefined : activationErrorCode,
-      detail: status === "active"
-        ? undefined
-        : tenantActivationFailureDetail(
-            tenantWallet && tenantWallet.status !== "complete"
-              ? tenantWallet.responsePayload
-              : walletSet.responsePayload
-          ),
-      walletSet,
-      tenantWallet
-    }
-  };
-};
-
-const ensureTenantCentralAdaAccount = async (
-  client: Pick<PostgresClient, "query">,
-  tenantId: string,
-  input: Sprint1PostgresCommandInput,
-  businessClientId: string
-): Promise<string> => {
-  const usePurpose = "tenant_central";
-  const existing = await client.query(
-    `select id, business_client_id, status, account_name
-       from accounts_of_digital_asset
-      where platform_tenant_id = $1
-        and use_purpose = $2
-      order by created_at asc
-      limit 1`,
-    [tenantId, usePurpose]
-  );
-  const existingRow = existing.rows[0] as Record<string, unknown> | undefined;
-  if (existingRow && typeof existingRow.id === "string") {
-    const existingId = existingRow.id;
-    const linkedBusinessClientId = typeof existingRow.business_client_id === "string" ? existingRow.business_client_id : undefined;
-    const currentStatus = typeof existingRow.status === "string" ? existingRow.status : undefined;
-    const currentName = typeof existingRow.account_name === "string" ? existingRow.account_name : undefined;
-    const needsRelink = linkedBusinessClientId !== businessClientId;
-    const needsNameReset = currentName !== "Tenant ADA (central)";
-    const needsStatusReset = currentStatus !== "active";
-    if (needsRelink || needsNameReset || needsStatusReset) {
-      await client.query(
-        `update accounts_of_digital_asset
-            set business_client_id = $3,
-                account_name = 'Tenant ADA (central)',
-                status = 'active',
-                updated_at = now()
-          where id = $1 and platform_tenant_id = $2`,
-        [existingId, tenantId, businessClientId]
-      );
-      await writeAuditAndOutbox(client, tenantId, input, "account_of_digital_asset.tenant_central.linked", {
-        accountOfDigitalAssetId: existingId,
-        businessClientId,
-        usePurpose,
-        status: "active"
-      });
-    }
-    return existingId;
-  }
-
-  const accountId = randomUUID();
-  const createdAt = new Date().toISOString();
-  await client.query(
-    `insert into accounts_of_digital_asset
-      (id, platform_tenant_id, business_client_id, account_name, use_purpose, status, asset_code, asset_rail, correlation_id, created_at, updated_at)
-     values ($1, $2, $3, 'Tenant ADA (central)', $4, 'active', 'USDC', 'circle_internal', $5, $6, $6)`,
-    [accountId, tenantId, businessClientId, usePurpose, input.correlationId, createdAt]
-  );
-  await writeAuditAndOutbox(client, tenantId, input, "account_of_digital_asset.tenant_central.created", {
-    accountOfDigitalAssetId: accountId,
-    businessClientId,
-    usePurpose,
-    status: "active"
-  });
-  return accountId;
-};
-
-const getCircleHealth = async (client: Pick<PostgresClient, "query">, tenantId: string): Promise<unknown> => {
-  const health = await checkCircleHealth({ probe: false });
-  const last = await client.query(
-    `select id,
-            operation_type,
-            idempotency_key,
-            correlation_id,
-            request_payload,
-            response_payload,
-            provider_account_id,
-            provider_wallet_id,
-            provider_address_id,
-            status,
-            error_code,
-            created_at
-       from circle_api_operations
-      where platform_tenant_id = $1
-        and operation_type in ('circle.health_check', 'circle.sandbox_check')
-      order by created_at desc
-      limit 1`,
-    [tenantId]
-  );
-  return { circle: health, lastDiagnostic: last.rows[0] ? mapCircleOperationRow(last.rows[0]) : undefined };
-};
-
-const runCircleSandboxCheck = async (
-  client: Pick<PostgresClient, "query">,
-  tenantId: string,
-  input: Sprint1PostgresCommandInput
-): Promise<JsonResponse> => {
-  const health = await checkCircleHealth({ probe: true });
-  const operationId = randomUUID();
-  await client.query(
-    `insert into circle_api_operations
-      (id, platform_tenant_id, operation_type, idempotency_key, correlation_id, request_payload, response_payload, provider_account_id, status, error_code, created_at)
-     values ($1, $2, 'circle.sandbox_check', $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, now())`,
-    [
-      operationId,
-      tenantId,
-      input.idempotencyKey,
-      input.correlationId,
-      JSON.stringify({ environment: health.environment, baseUrl: health.baseUrl, probe: true }),
-      JSON.stringify(health.responsePayload),
-      health.providerRequestId ?? `circle_diagnostic_${health.environment}`,
-      health.status === "ready" ? "succeeded" : "failed",
-      health.errorCode
-    ]
-  );
-  await writeAuditAndOutbox(client, tenantId, input, health.status === "ready" ? "circle.sandbox_check.succeeded" : "circle.sandbox_check.failed", {
-    circleOperationId: operationId,
-    environment: health.environment,
-    status: health.status,
-    errorCode: health.errorCode
-  });
-  return {
-    status: health.status === "ready" ? 200 : health.errorCode === "circle_api_key_required" ? 400 : 502,
-    body: { circle: health, diagnostic: await getCircleOperation(client, tenantId, operationId) }
   };
 };
 
@@ -4359,7 +3578,37 @@ const getAccountStatement = async (client: Pick<PostgresClient, "query">, tenant
      from treasury_journal_lines line
      join treasury_journal_entries entry on entry.id = line.journal_entry_id
      join ledger_accounts ledger on ledger.id = line.ledger_account_id
-     where entry.platform_tenant_id = $1 and line.account_of_digital_asset_id = $2
+     where entry.platform_tenant_id = $1
+       and (
+         line.account_of_digital_asset_id = $2
+         or exists (
+           select 1
+             from wire_funding_instructions instruction
+            where instruction.platform_tenant_id = entry.platform_tenant_id
+              and instruction.posting_journal_entry_id = entry.id
+              and $2 in (
+                instruction.account_of_digital_asset_id,
+                instruction.source_account_of_digital_asset_id,
+                instruction.destination_account_of_digital_asset_id
+              )
+         )
+         or exists (
+           select 1
+             from funding_instruction_orders funding_order
+             join wire_funding_instructions instruction
+               on instruction.id = funding_order.funding_instruction_id
+              and instruction.platform_tenant_id = funding_order.platform_tenant_id
+            where funding_order.platform_tenant_id = entry.platform_tenant_id
+              and funding_order.journal_entry_id = entry.id
+              and $2 in (
+                instruction.account_of_digital_asset_id,
+                instruction.source_account_of_digital_asset_id,
+                instruction.destination_account_of_digital_asset_id,
+                funding_order.source_account_of_digital_asset_id,
+                funding_order.destination_account_of_digital_asset_id
+              )
+         )
+       )
      order by entry.posted_at desc, line.created_at asc`,
     [tenantId, accountId]
   );
@@ -4602,6 +3851,7 @@ const listFundingInstructions = async (client: Pick<PostgresClient, "query">, te
             status,
             coalesce(provider, bank_name, 'circle') as provider,
             provider_reference_id,
+            posting_journal_entry_id,
             idempotency_key,
             correlation_id,
             route_evidence_json,
@@ -4638,6 +3888,7 @@ const getFundingInstruction = async (
             status,
             coalesce(provider, bank_name, 'circle') as provider,
             provider_reference_id,
+            posting_journal_entry_id,
             idempotency_key,
             correlation_id,
             route_evidence_json,
@@ -4668,6 +3919,8 @@ const listFundingInstructionOrders = async (
             status,
             provider_reference_id,
             provider_payload_json,
+            completed_webhook_event_id,
+            journal_entry_id,
             created_at,
             updated_at
        from funding_instruction_orders
@@ -5043,6 +4296,443 @@ const getFundingRoute = async (
   return row ? mapFundingRouteRow(row) : undefined;
 };
 
+const getSettlementAdvanceCreditLine = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string
+): Promise<Record<string, unknown>> => {
+  const result = await client.query(
+    `select coalesce(sum(reserve_amount_minor_units), 0) as reserved_minor_units,
+            coalesce(sum(outstanding_minor_units), 0) as outstanding_minor_units,
+            count(*) filter (where status in ('funds_reserved', 'requested', 'disbursed')) as active_transfer_count
+       from settlement_advance_transfers
+      where platform_tenant_id = $1`,
+    [tenantId]
+  );
+  const configuredLimit = asBigInt(process.env.SETTLEMENT_ADVANCE_CREDIT_LIMIT_MINOR_UNITS ?? "0");
+  const reservedMinorUnits = asBigInt(result.rows[0]?.reserved_minor_units);
+  const outstandingMinorUnits = asBigInt(result.rows[0]?.outstanding_minor_units);
+  const availableMinorUnits = configuredLimit > reservedMinorUnits ? configuredLimit - reservedMinorUnits : 0n;
+  return {
+    product: "settlementAdvance",
+    provider: "circle",
+    status: configuredLimit > 0n ? "ready" : "configuration_required",
+    currency: process.env.SETTLEMENT_ADVANCE_CURRENCY ?? "USD",
+    creditLineId: process.env.CIRCLE_SETTLEMENT_ADVANCE_CREDIT_LINE_ID ?? undefined,
+    limitMinorUnits: String(configuredLimit),
+    reservedMinorUnits: String(reservedMinorUnits),
+    outstandingMinorUnits: String(outstandingMinorUnits),
+    availableMinorUnits: String(availableMinorUnits),
+    activeTransferCount: Number(result.rows[0]?.active_transfer_count ?? 0),
+    validationErrors: configuredLimit > 0n ? [] : ["SETTLEMENT_ADVANCE_CREDIT_LIMIT_MINOR_UNITS is not configured"]
+  };
+};
+
+const listSettlementAdvances = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string
+): Promise<unknown[]> => {
+  const result = await client.query(
+    `select transfer.*,
+            count(proof.id) as wire_proof_count
+       from settlement_advance_transfers transfer
+       left join settlement_advance_wire_proofs proof
+         on proof.settlement_advance_transfer_id = transfer.id
+      where transfer.platform_tenant_id = $1
+      group by transfer.id
+      order by transfer.created_at desc
+      limit 200`,
+    [tenantId]
+  );
+  return result.rows.map(mapSettlementAdvanceRow);
+};
+
+const getSettlementAdvance = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  transferId: string
+): Promise<unknown | undefined> => {
+  const result = await client.query(
+    `select transfer.*,
+            count(proof.id) as wire_proof_count
+       from settlement_advance_transfers transfer
+       left join settlement_advance_wire_proofs proof
+         on proof.settlement_advance_transfer_id = transfer.id
+      where transfer.id = $1 and transfer.platform_tenant_id = $2
+      group by transfer.id`,
+    [transferId, tenantId]
+  );
+  const row = result.rows[0];
+  if (!row) return undefined;
+  const proofs = await client.query(
+    `select id, file_name, mime_type, storage_path, checksum, uploaded_at
+       from settlement_advance_wire_proofs
+      where settlement_advance_transfer_id = $1
+      order by uploaded_at desc`,
+    [transferId]
+  );
+  return {
+    ...mapSettlementAdvanceRow(row),
+    wireProofs: proofs.rows.map(mapSettlementAdvanceWireProofRow)
+  };
+};
+
+const reserveSettlementAdvance = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput
+): Promise<JsonResponse> => {
+  const amountMinorUnits = asBigInt(stringBody(input.body, "amountMinorUnits", stringBody(input.body, "reserveAmountMinorUnits", "0")));
+  if (amountMinorUnits <= 0n) return { status: 400, body: { error: "amount_must_be_positive" } };
+  const creditLine = await getSettlementAdvanceCreditLine(client, tenantId);
+  const availableMinorUnits = asBigInt(creditLine.availableMinorUnits);
+  if (availableMinorUnits > 0n && amountMinorUnits > availableMinorUnits) {
+    return { status: 409, body: { error: "settlement_advance_credit_line_insufficient", creditLine } };
+  }
+  const transferId = randomUUID();
+  const now = new Date();
+  const expiresAt = optionalStringBody(input.body, "expiresAt")
+    ?? new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+  await client.query(
+    `insert into settlement_advance_transfers
+       (id, platform_tenant_id, circle_credit_line_id, fiat_account_id, reserve_amount_minor_units,
+        currency, status, expires_at, outstanding_minor_units, provider_payload_json, created_by, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, 'funds_reserved', $7, $5, $8::jsonb, $9, now(), now())`,
+    [
+      transferId,
+      tenantId,
+      optionalStringBody(input.body, "circleCreditLineId") ?? process.env.CIRCLE_SETTLEMENT_ADVANCE_CREDIT_LINE_ID ?? null,
+      asUuidOrNull(optionalStringBody(input.body, "fiatAccountId")),
+      amountMinorUnits.toString(),
+      stringBody(input.body, "currency", "USD").toUpperCase(),
+      expiresAt,
+      JSON.stringify({ reservedByApi: true, requestBody: input.body }),
+      asUuidOrNull(input.actorUserId)
+    ]
+  );
+  await writeAuditAndOutbox(client, tenantId, input, "settlement_advance.reserved", { transferId, amountMinorUnits: amountMinorUnits.toString() });
+  return { status: 201, body: { transfer: await getSettlementAdvance(client, tenantId, transferId) } };
+};
+
+const transitionSettlementAdvance = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  transferId: string,
+  action: string
+): Promise<JsonResponse> => {
+  const currentResult = await client.query(
+    `select * from settlement_advance_transfers where id = $1 and platform_tenant_id = $2 for update`,
+    [transferId, tenantId]
+  );
+  const current = currentResult.rows[0];
+  if (!current) return { status: 404, body: { error: "settlement_advance_not_found" } };
+  const currentStatus = String(current.status);
+  if (action === "request") {
+    if (!["funds_reserved", "requested"].includes(currentStatus)) {
+      return { status: 409, body: { error: "settlement_advance_invalid_transition", from: currentStatus, action } };
+    }
+    const providerTransferId = optionalStringBody(input.body, "providerTransferId") ?? optionalStringBody(input.body, "circleTransferId");
+    await client.query(
+      `update settlement_advance_transfers
+          set status = 'requested',
+              requested_at = coalesce(requested_at, now()),
+              circle_transfer_id = coalesce($3, circle_transfer_id),
+              provider_payload_json = coalesce(provider_payload_json, '{}'::jsonb) || $4::jsonb,
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [transferId, tenantId, providerTransferId ?? null, JSON.stringify({ requestSubmittedByApi: true, requestBody: input.body })]
+    );
+    await maybeInsertSettlementAdvanceWireProof(client, transferId, input);
+    await writeAuditAndOutbox(client, tenantId, input, "settlement_advance.requested", { transferId, providerTransferId });
+    return { status: 200, body: { transfer: await getSettlementAdvance(client, tenantId, transferId) } };
+  }
+  if (action === "cancel") {
+    if (!["funds_reserved", "requested"].includes(currentStatus)) {
+      return { status: 409, body: { error: "settlement_advance_invalid_transition", from: currentStatus, action } };
+    }
+    await client.query(
+      `update settlement_advance_transfers
+          set status = 'cancelled',
+              provider_payload_json = coalesce(provider_payload_json, '{}'::jsonb) || $3::jsonb,
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [transferId, tenantId, JSON.stringify({ cancelledByApi: true, note: optionalStringBody(input.body, "note") })]
+    );
+    await writeAuditAndOutbox(client, tenantId, input, "settlement_advance.cancelled", { transferId });
+    return { status: 200, body: { transfer: await getSettlementAdvance(client, tenantId, transferId) } };
+  }
+  return { status: 400, body: { error: "settlement_advance_action_unsupported" } };
+};
+
+const maybeInsertSettlementAdvanceWireProof = async (
+  client: Pick<PostgresClient, "query">,
+  transferId: string,
+  input: PostgresCommandInput
+): Promise<void> => {
+  const fileName = optionalStringBody(input.body, "fileName") ?? optionalStringBody(input.body, "wireProofFileName");
+  if (!fileName) return;
+  await client.query(
+    `insert into settlement_advance_wire_proofs
+       (id, settlement_advance_transfer_id, file_name, mime_type, storage_path, checksum, uploaded_by, uploaded_at)
+     values ($1, $2, $3, $4, $5, $6, $7, now())`,
+    [
+      randomUUID(),
+      transferId,
+      fileName,
+      optionalStringBody(input.body, "mimeType") ?? null,
+      optionalStringBody(input.body, "storagePath") ?? null,
+      optionalStringBody(input.body, "checksum") ?? null,
+      asUuidOrNull(input.actorUserId)
+    ]
+  );
+};
+
+const listTenantDisbursements = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string
+): Promise<unknown[]> => {
+  const result = await client.query(
+    `select disbursement.*,
+            business.legal_name as business_client_name,
+            ada.account_name as destination_ada_name
+       from tenant_disbursements disbursement
+       join business_clients business on business.id = disbursement.business_client_id
+       left join accounts_of_digital_asset ada on ada.id = disbursement.destination_ada_id
+      where disbursement.platform_tenant_id = $1
+      order by disbursement.created_at desc
+      limit 200`,
+    [tenantId]
+  );
+  return result.rows.map(mapTenantDisbursementRow);
+};
+
+const getTenantDisbursement = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  disbursementId: string
+): Promise<unknown | undefined> => {
+  const result = await client.query(
+    `select disbursement.*,
+            business.legal_name as business_client_name,
+            ada.account_name as destination_ada_name
+       from tenant_disbursements disbursement
+       join business_clients business on business.id = disbursement.business_client_id
+       left join accounts_of_digital_asset ada on ada.id = disbursement.destination_ada_id
+      where disbursement.id = $1 and disbursement.platform_tenant_id = $2`,
+    [disbursementId, tenantId]
+  );
+  const row = result.rows[0];
+  return row ? mapTenantDisbursementRow(row) : undefined;
+};
+
+const createTenantDisbursement = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput
+): Promise<JsonResponse> => {
+  const businessClientId = stringBody(input.body, "businessClientId");
+  const destinationAdaId = stringBody(input.body, "destinationAdaId", stringBody(input.body, "destinationAccountOfDigitalAssetId"));
+  const amountMinorUnits = asBigInt(stringBody(input.body, "amountMinorUnits", "0"));
+  if (!businessClientId) return { status: 400, body: { error: "business_client_id_required" } };
+  if (!destinationAdaId) return { status: 400, body: { error: "destination_ada_id_required" } };
+  if (amountMinorUnits <= 0n) return { status: 400, body: { error: "amount_must_be_positive" } };
+  const account = await getAccount(client, tenantId, destinationAdaId) as Record<string, unknown> | undefined;
+  if (!account || account.businessClientId !== businessClientId) {
+    return { status: 404, body: { error: "destination_ada_not_found_for_business_client" } };
+  }
+  const settlementAdvanceTransferId = asUuidOrNull(optionalStringBody(input.body, "settlementAdvanceTransferId"));
+  if (settlementAdvanceTransferId) {
+    const transfer = await getSettlementAdvance(client, tenantId, settlementAdvanceTransferId);
+    if (!transfer) return { status: 404, body: { error: "settlement_advance_not_found" } };
+  }
+  const disbursementId = randomUUID();
+  await client.query(
+    `insert into tenant_disbursements
+       (id, platform_tenant_id, business_client_id, source_platform_wallet_id, destination_ada_wallet_id,
+        destination_ada_id, amount_minor_units, currency, status, settlement_advance_transfer_id,
+        reason_code, idempotency_key, provider_payload_json, created_by, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10, $11, $12::jsonb, $13, now(), now())`,
+    [
+      disbursementId,
+      tenantId,
+      businessClientId,
+      optionalStringBody(input.body, "sourcePlatformWalletId") ?? null,
+      optionalStringBody(input.body, "destinationAdaWalletId") ?? null,
+      destinationAdaId,
+      amountMinorUnits.toString(),
+      stringBody(input.body, "currency", "USDC").toUpperCase(),
+      settlementAdvanceTransferId,
+      optionalStringBody(input.body, "reasonCode") ?? null,
+      input.idempotencyKey ?? null,
+      JSON.stringify({ createdByApi: true, requestBody: input.body }),
+      asUuidOrNull(input.actorUserId)
+    ]
+  );
+  await writeAuditAndOutbox(client, tenantId, input, "tenant_disbursement.created", { disbursementId, amountMinorUnits: amountMinorUnits.toString() });
+  return { status: 201, body: { disbursement: await getTenantDisbursement(client, tenantId, disbursementId) } };
+};
+
+const transitionTenantDisbursement = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  disbursementId: string,
+  action: string
+): Promise<JsonResponse> => {
+  const currentResult = await client.query(
+    `select * from tenant_disbursements where id = $1 and platform_tenant_id = $2 for update`,
+    [disbursementId, tenantId]
+  );
+  const current = currentResult.rows[0];
+  if (!current) return { status: 404, body: { error: "tenant_disbursement_not_found" } };
+  const currentStatus = String(current.status);
+  if (action === "approve") {
+    if (!["draft", "approved"].includes(currentStatus)) {
+      return { status: 409, body: { error: "tenant_disbursement_invalid_transition", from: currentStatus, action } };
+    }
+    await client.query(
+      `update tenant_disbursements
+          set status = 'approved',
+              approved_at = coalesce(approved_at, now()),
+              provider_payload_json = coalesce(provider_payload_json, '{}'::jsonb) || $3::jsonb,
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [disbursementId, tenantId, JSON.stringify({ approvedByApi: true, note: optionalStringBody(input.body, "note") })]
+    );
+    await writeAuditAndOutbox(client, tenantId, input, "tenant_disbursement.approved", { disbursementId });
+    return { status: 200, body: { disbursement: await getTenantDisbursement(client, tenantId, disbursementId) } };
+  }
+  if (action === "submit") {
+    if (!["approved", "submitted", "pending_provider"].includes(currentStatus)) {
+      return { status: 409, body: { error: "tenant_disbursement_invalid_transition", from: currentStatus, action } };
+    }
+    const providerTransferId = optionalStringBody(input.body, "providerTransferId")
+      ?? optionalStringBody(input.body, "circleTransferId")
+      ?? `simulated_transfer_${disbursementId}`;
+    await client.query(
+      `update tenant_disbursements
+          set status = 'submitted',
+              submitted_at = coalesce(submitted_at, now()),
+              provider_transfer_id = coalesce($3, provider_transfer_id),
+              provider_payload_json = coalesce(provider_payload_json, '{}'::jsonb) || $4::jsonb,
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [disbursementId, tenantId, providerTransferId, JSON.stringify({ submittedByApi: true, requestBody: input.body })]
+    );
+    await writeAuditAndOutbox(client, tenantId, input, "tenant_disbursement.submitted", { disbursementId, providerTransferId });
+    return { status: 200, body: { disbursement: await getTenantDisbursement(client, tenantId, disbursementId) } };
+  }
+  return { status: 400, body: { error: "tenant_disbursement_action_unsupported" } };
+};
+
+const listLinkedWireAccounts = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string
+): Promise<unknown[]> => {
+  const result = await client.query(
+    `select linked.*,
+            ada.account_name,
+            ada.business_client_id,
+            ada.metadata as ada_metadata,
+            business.legal_name as business_client_name
+       from linked_instruments linked
+       join accounts_of_digital_asset ada on ada.id = linked.account_of_digital_asset_id
+       left join business_clients business on business.id = ada.business_client_id
+      where linked.platform_tenant_id = $1
+        and linked.instrument_type = 'fiat_wire_bank_account'
+      order by linked.created_at desc
+      limit 200`,
+    [tenantId]
+  );
+  return result.rows.map(mapLinkedWireAccountRow);
+};
+
+const getLinkedWireAccount = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  linkedInstrumentId: string
+): Promise<unknown | undefined> => {
+  const result = await client.query(
+    `select linked.*,
+            ada.account_name,
+            ada.business_client_id,
+            ada.metadata as ada_metadata,
+            business.legal_name as business_client_name
+       from linked_instruments linked
+       join accounts_of_digital_asset ada on ada.id = linked.account_of_digital_asset_id
+       left join business_clients business on business.id = ada.business_client_id
+      where linked.id = $1
+        and linked.platform_tenant_id = $2
+        and linked.instrument_type = 'fiat_wire_bank_account'`,
+    [linkedInstrumentId, tenantId]
+  );
+  const row = result.rows[0];
+  return row ? mapLinkedWireAccountRow(row) : undefined;
+};
+
+const refreshLinkedWireAccountInstructions = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  linkedInstrumentId: string
+): Promise<JsonResponse> => {
+  const result = await client.query(
+    `select linked.id, linked.account_of_digital_asset_id, linked.metadata, ada.metadata as ada_metadata
+       from linked_instruments linked
+       join accounts_of_digital_asset ada on ada.id = linked.account_of_digital_asset_id
+      where linked.id = $1
+        and linked.platform_tenant_id = $2
+        and linked.instrument_type = 'fiat_wire_bank_account'
+      for update`,
+    [linkedInstrumentId, tenantId]
+  );
+  const row = result.rows[0];
+  if (!row) return { status: 404, body: { error: "linked_wire_account_not_found" } };
+  const existingMetadata = objectValue(row.metadata);
+  const existingAdaMetadata = objectValue(row.ada_metadata);
+  const refreshedAt = new Date().toISOString();
+  const instructions = objectValue(input.body.instructions).wireInstructions
+    ? objectValue(input.body.instructions)
+    : objectValue(input.body.wireInstructions);
+  const refreshedMetadata = {
+    ...existingMetadata,
+    wireProfile: {
+      ...objectValue(existingMetadata.wireProfile),
+      ...(Object.keys(instructions).length ? { instructions } : {}),
+      refreshedAt
+    },
+    providerTrace: {
+      ...objectValue(existingMetadata.providerTrace),
+      lastInstructionsRefreshedAt: refreshedAt,
+      source: "api"
+    }
+  };
+  const refreshedAdaMetadata = {
+    ...existingAdaMetadata,
+    wireFunding: {
+      ...objectValue(existingAdaMetadata.wireFunding),
+      linkedInstrumentId,
+      lastInstructionsRefreshedAt: refreshedAt
+    }
+  };
+  await client.query(
+    `update linked_instruments
+        set metadata = $3::jsonb,
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [linkedInstrumentId, tenantId, JSON.stringify(refreshedMetadata)]
+  );
+  await client.query(
+    `update accounts_of_digital_asset
+        set metadata = $3::jsonb,
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [row.account_of_digital_asset_id, tenantId, JSON.stringify(refreshedAdaMetadata)]
+  );
+  await writeAuditAndOutbox(client, tenantId, input, "linked_wire_account.instructions_refreshed", { linkedInstrumentId });
+  return { status: 200, body: { linkedWireAccount: await getLinkedWireAccount(client, tenantId, linkedInstrumentId) } };
+};
+
 const listReconciliationBreaks = async (client: Pick<PostgresClient, "query">, tenantId: string): Promise<unknown[]> => {
   const result = await client.query(
     `select id, status, reason, webhook_event_id, suspense_case_id, resolution_note, resolved_at, created_at, updated_at
@@ -5291,7 +4981,7 @@ const validateAccountActivationGates = async (
 const writeAccountTransition = async (
   client: Pick<PostgresClient, "query">,
   tenantId: string,
-  input: Sprint1PostgresCommandInput,
+  input: PostgresCommandInput,
   accountId: string,
   fromStatus: string,
   toStatus: string,
@@ -5554,6 +5244,7 @@ const mapFundingInstructionRow = (row: Record<string, unknown>): unknown => ({
   status: row.status,
   provider: row.provider,
   providerReferenceId: row.provider_reference_id ?? undefined,
+  postingJournalEntryId: row.posting_journal_entry_id ?? undefined,
   idempotencyKey: row.idempotency_key ?? undefined,
   correlationId: row.correlation_id ?? undefined,
   routeEvidence: row.route_evidence_json ?? undefined,
@@ -5573,6 +5264,8 @@ const mapFundingInstructionOrderRow = (row: Record<string, unknown>): Record<str
   status: row.status,
   providerReferenceId: row.provider_reference_id ?? undefined,
   providerPayload: row.provider_payload_json ?? {},
+  completedWebhookEventId: row.completed_webhook_event_id ?? undefined,
+  journalEntryId: row.journal_entry_id ?? undefined,
   createdAt: toIsoString(row.created_at),
   updatedAt: toIsoString(row.updated_at)
 });
@@ -5657,6 +5350,96 @@ const mapFundingRouteRow = (row: Record<string, unknown>): unknown => ({
   createdAt: toIsoString(row.created_at),
   updatedAt: toIsoString(row.updated_at)
 });
+
+const mapSettlementAdvanceRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  tenantId: row.platform_tenant_id,
+  circleTransferId: row.circle_transfer_id ?? undefined,
+  circleCreditLineId: row.circle_credit_line_id ?? undefined,
+  fiatAccountId: row.fiat_account_id ?? undefined,
+  reserveAmountMinorUnits: String(row.reserve_amount_minor_units ?? 0),
+  amountMinorUnits: String(row.reserve_amount_minor_units ?? 0),
+  currency: row.currency,
+  status: row.status,
+  expiresAt: toIsoString(row.expires_at),
+  requestedAt: toIsoString(row.requested_at),
+  disbursedAt: toIsoString(row.disbursed_at),
+  dueDate: row.due_date ? String(row.due_date) : undefined,
+  outstandingMinorUnits: String(row.outstanding_minor_units ?? 0),
+  feesTotalMinorUnits: String(row.fees_total_minor_units ?? 0),
+  feesUnpaidMinorUnits: String(row.fees_unpaid_minor_units ?? 0),
+  repaymentStatus: row.repayment_status,
+  providerPayload: row.provider_payload_json ?? {},
+  wireProofCount: Number(row.wire_proof_count ?? 0),
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at)
+});
+
+const mapSettlementAdvanceWireProofRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  fileName: row.file_name,
+  mimeType: row.mime_type ?? undefined,
+  storagePath: row.storage_path ?? undefined,
+  checksum: row.checksum ?? undefined,
+  uploadedAt: toIsoString(row.uploaded_at)
+});
+
+const mapTenantDisbursementRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  tenantId: row.platform_tenant_id,
+  businessClientId: row.business_client_id,
+  businessClientName: row.business_client_name ?? undefined,
+  sourcePlatformWalletId: row.source_platform_wallet_id ?? undefined,
+  destinationAdaWalletId: row.destination_ada_wallet_id ?? undefined,
+  destinationAdaId: row.destination_ada_id ?? undefined,
+  destinationAdaName: row.destination_ada_name ?? undefined,
+  amountMinorUnits: String(row.amount_minor_units ?? 0),
+  currency: row.currency,
+  status: row.status,
+  settlementAdvanceTransferId: row.settlement_advance_transfer_id ?? undefined,
+  reasonCode: row.reason_code ?? undefined,
+  idempotencyKey: row.idempotency_key ?? undefined,
+  providerTransferId: row.provider_transfer_id ?? undefined,
+  providerPayload: row.provider_payload_json ?? {},
+  approvedAt: toIsoString(row.approved_at),
+  submittedAt: toIsoString(row.submitted_at),
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at)
+});
+
+const mapLinkedWireAccountRow = (row: Record<string, unknown>): Record<string, unknown> => {
+  const metadata = objectValue(row.metadata);
+  const adaMetadata = objectValue(row.ada_metadata);
+  const wireProfile = objectValue(metadata.wireProfile);
+  const wireFunding = objectValue(adaMetadata.wireFunding);
+  return {
+    id: row.id,
+    linkedInstrumentId: row.id,
+    accountOfDigitalAssetId: row.account_of_digital_asset_id,
+    accountName: row.account_name ?? undefined,
+    businessClientId: row.business_client_id ?? undefined,
+    businessClientName: row.business_client_name ?? undefined,
+    instrumentType: row.instrument_type,
+    status: row.status,
+    assetCode: row.asset_code ?? undefined,
+    currency: row.currency ?? undefined,
+    railType: row.rail_type ?? undefined,
+    purpose: row.purpose ?? undefined,
+    provider: row.provider ?? undefined,
+    verificationStatus: row.verification_status ?? undefined,
+    networkCode: row.network_code ?? undefined,
+    isDefault: row.is_default === true,
+    bankName: metadata.bankName ?? wireProfile.bankName ?? undefined,
+    accountNumberLast4: metadata.accountNumberLast4 ?? wireProfile.accountNumberLast4 ?? undefined,
+    routingNumber: metadata.routingNumber ?? wireProfile.routingNumber ?? undefined,
+    businessWireAccountId: metadata.businessWireAccountId ?? wireProfile.businessWireAccountId ?? undefined,
+    wireProfile,
+    wireFunding,
+    metadata,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at)
+  };
+};
 
 const mapReconciliationBreakRow = (row: Record<string, unknown>): unknown => ({
   id: row.id,
@@ -5787,6 +5570,10 @@ const scopesBody = (body: Record<string, unknown>): ApiScope[] => {
 const optionalStringBody = (body: Record<string, unknown>, key: string): string | undefined => {
   const value = body[key];
   return typeof value === "string" && value.trim() ? value : undefined;
+};
+
+const objectValue = (value: unknown): Record<string, unknown> => {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 };
 
 const isApiScope = (value: string): value is ApiScope => allApiScopes.includes(value as ApiScope);

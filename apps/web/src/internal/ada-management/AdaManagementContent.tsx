@@ -58,6 +58,21 @@ interface AdaAccount {
   createdAt?: string;
 }
 
+interface AdaJournalLine {
+  journalEntryId: string;
+  description?: string;
+  accountingEventType?: string;
+  correlationId?: string;
+  idempotencyKey?: string;
+  postedAt?: string;
+  accountCode?: string;
+  accountName?: string;
+  assetCode?: string;
+  currency?: string;
+  debitMinorUnits?: string;
+  creditMinorUnits?: string;
+}
+
 interface BusinessClient {
   id: string;
   legalName: string;
@@ -726,10 +741,13 @@ const AdaDetailView = ({
 }) => {
   const [currentAccount, setCurrentAccount] = useState(account);
   const [providerMappings, setProviderMappings] = useState<ProviderMapping[]>([]);
+  const [journalLines, setJournalLines] = useState<AdaJournalLine[]>([]);
+  const [journalStatus, setJournalStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [journalError, setJournalError] = useState("");
   const [actionStatus, setActionStatus] = useState("");
   const [actionError, setActionError] = useState("");
   const accountCode = displayAdaCode(account);
-  const ledgerRows = ledgerRowsForAccount(currentAccount);
+  const ledgerRows = useMemo(() => journalRowsFromLines(journalLines), [journalLines]);
   const normalizedStatus = normalizeStatus(currentAccount.status);
   const latestMapping = providerMappings[0];
 
@@ -747,6 +765,28 @@ const AdaDetailView = ({
       .catch(() => {
         if (!active) return;
         setProviderMappings([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [account.id]);
+
+  useEffect(() => {
+    let active = true;
+    setJournalStatus("loading");
+    setJournalError("");
+    setJournalLines([]);
+    apiFetch<{ journals?: AdaJournalLine[] }>(`/accounts-of-digital-asset/${encodeURIComponent(account.id)}/statements`)
+      .then((payload) => {
+        if (!active) return;
+        setJournalLines(payload.journals ?? []);
+        setJournalStatus("ready");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setJournalLines([]);
+        setJournalError(error instanceof Error ? error.message : "ada_journal_lines_load_failed");
+        setJournalStatus("error");
       });
     return () => {
       active = false;
@@ -838,6 +878,7 @@ const AdaDetailView = ({
               <button title="Download journal" type="button"><Download size={15} /></button>
             </div>
           </header>
+          {journalStatus === "error" ? <div className="ada-management-notice">Unable to load journal lines from database: {journalError}</div> : null}
           <div className="ada-journal-table-wrap">
             <table className="ada-journal-table">
               <thead>
@@ -851,8 +892,18 @@ const AdaDetailView = ({
                 </tr>
               </thead>
               <tbody>
-                {ledgerRows.map((row) => (
-                  <tr key={row.correlationId}>
+                {journalStatus === "loading" ? (
+                  <tr>
+                    <td colSpan={6}><span className="ada-journal-loading"><RefreshCw className="spin" size={13} /> Loading journal lines from database...</span></td>
+                  </tr>
+                ) : null}
+                {journalStatus !== "loading" && ledgerRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={6}>No journal lines found for this ADA.</td>
+                  </tr>
+                ) : null}
+                {journalStatus !== "loading" && ledgerRows.map((row) => (
+                  <tr key={row.id}>
                     <td><code>{row.date}</code></td>
                     <td>{row.description}</td>
                     <td className="numeric">{row.debit}</td>
@@ -2868,42 +2919,36 @@ const linkedFiatPurposeOptionsForAccount = (account: AdaAccount): Array<{ value:
   }));
 };
 
-const ledgerRowsForAccount = (account: AdaAccount) => {
-  const asset = account.assetCode ?? "USDC";
-  return [
-    {
-      balance: "14,250,000.00",
-      correlationId: `TXN_${displayAdaCode(account).replace(/[^A-Z0-9]/g, "").slice(-9)}1`,
-      credit: "1,250,000.00",
-      date: "2023-10-24 14:22",
-      debit: "--",
-      description: `Treasury Settlement - ${asset} Netting #922`
-    },
-    {
-      balance: "13,000,000.00",
-      correlationId: "TXN_988273112",
-      credit: "--",
-      date: "2023-10-24 09:15",
-      debit: "45,000.00",
-      description: "Operational Yield Disbursement"
-    },
-    {
-      balance: "13,045,000.00",
-      correlationId: "TXN_988272901",
-      credit: "500,000.00",
-      date: "2023-10-23 18:45",
-      debit: "--",
-      description: `Client Inbound Transfer - ${asset}`
-    },
-    {
-      balance: "12,545,000.00",
-      correlationId: "FEE_2291882",
-      credit: "--",
-      date: "2023-10-23 11:30",
-      debit: "250.00",
-      description: "Service Fee Auto-Debit"
-    }
-  ];
+const journalRowsFromLines = (lines: AdaJournalLine[]) => {
+  let runningMinorUnits = 0n;
+  return lines.map((line, index) => {
+    const debit = toBigInt(line.debitMinorUnits);
+    const credit = toBigInt(line.creditMinorUnits);
+    runningMinorUnits = runningMinorUnits + debit - credit;
+    return {
+      id: `${line.journalEntryId}-${line.accountCode ?? "ledger"}-${index}`,
+      balance: formatMinorUnitsFromBigInt(runningMinorUnits),
+      correlationId: line.correlationId ?? line.idempotencyKey ?? line.journalEntryId,
+      credit: credit > 0n ? formatMinorUnitsFromBigInt(credit) : "--",
+      date: formatDateTime(line.postedAt),
+      debit: debit > 0n ? formatMinorUnitsFromBigInt(debit) : "--",
+      description: line.description ?? line.accountingEventType ?? line.accountName ?? "Journal line"
+    };
+  });
+};
+
+const toBigInt = (value?: string): bigint => {
+  try {
+    return BigInt(value ?? "0");
+  } catch {
+    return 0n;
+  }
+};
+
+const formatMinorUnitsFromBigInt = (value: bigint): string => {
+  const sign = value < 0n ? "-" : "";
+  const absolute = value < 0n ? -value : value;
+  return `${sign}${formatMinorAmount(absolute.toString())}`;
 };
 
 const formatDate = (value?: string): string => {

@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from "react";
 import { BusinessFundingModule } from "../business-funding/BusinessFundingModule.js";
 import { routeForApplication } from "../onboarding/onboardingRouting.js";
+import { BusinessAvatarMenu } from "../shared/BusinessAvatarMenu.js";
 import { type MyOnboardingResponse, type OnboardingApplication } from "../onboarding/types.js";
 import { apiRequest } from "../shared/apiClient.js";
 import { SovereignAccountsModule } from "./SovereignAccountsModule.js";
@@ -96,18 +97,24 @@ function writeSovereignViewToLocation(view: SovereignView, mode: "push" | "repla
 }
 
 export function SovereignTreasuryScreen({
+  initialFundingInstructionId,
   initialView = "dashboard",
   navigate,
+  onLogout,
   session
 }: {
+  initialFundingInstructionId?: string;
   initialView?: SovereignView;
   navigate: Navigate;
+  onLogout: () => Promise<void> | void;
   session: Session | null;
 }) {
   const [application, setApplication] = useState<OnboardingApplication | undefined>();
   const [adaAccounts, setAdaAccounts] = useState<OnboardingAdaAccount[]>([]);
   const [adaAccountsLoading, setAdaAccountsLoading] = useState(true);
   const [view, setView] = useState<SovereignView>(() => readSovereignViewFromLocation() ?? initialView);
+  const [selectedAdaAccountId, setSelectedAdaAccountId] = useState("");
+  const [detailReturnView, setDetailReturnView] = useState<SovereignView>("dashboard");
   const [moveMoneyOpen, setMoveMoneyOpen] = useState(false);
   const treasuryActive = view === "dashboard" || view === "detail" || view === "funding";
 
@@ -172,6 +179,14 @@ export function SovereignTreasuryScreen({
     writeSovereignViewToLocation(nextView, "push");
   }
 
+  function openAdaDetail(accountId: string, returnView: SovereignView) {
+    setSelectedAdaAccountId(accountId);
+    setDetailReturnView(returnView);
+    setViewWithUrl("detail");
+  }
+
+  const selectedAdaAccount = adaAccounts.find((account) => account.id === selectedAdaAccountId) ?? adaAccounts[0];
+
   return (
     <div className="gtt-sovereign-shell">
       <aside className="gtt-sovereign-sidebar">
@@ -206,7 +221,7 @@ export function SovereignTreasuryScreen({
           <div className="gtt-sovereign-topbar-tools">
             <Bell size={19} />
             <Settings size={19} />
-            <span title={email}>{email.slice(0, 2).toUpperCase()}</span>
+            <BusinessAvatarMenu email={email} onLogout={() => void onLogout()} />
           </div>
         </header>
 
@@ -215,7 +230,7 @@ export function SovereignTreasuryScreen({
             <SovereignAccountsModule
               adaAccounts={adaAccounts}
               adaAccountsLoading={adaAccountsLoading}
-              onOpenDetail={() => setViewWithUrl("detail")}
+              onOpenDetail={(accountId) => openAdaDetail(accountId, "accounts")}
             />
           ) : view === "trade-ledgers" ? (
             <SovereignSectionPlaceholderModule
@@ -228,16 +243,26 @@ export function SovereignTreasuryScreen({
               title="Netting"
             />
           ) : view === "funding" ? (
-            <BusinessFundingModule embedded />
+            <BusinessFundingModule
+              authorizedAccounts={adaAccounts}
+              embedded
+              initialInstructionId={initialFundingInstructionId}
+              navigate={navigate}
+              token={session?.access_token ?? ""}
+            />
           ) : view === "analytics" ? (
             <SovereignSectionPlaceholderModule
               description="Analytics surfaces are rendered as in-page content under the same shell."
               title="Analytics"
             />
           ) : view === "dashboard" ? (
-            <SovereignDashboardModule adaAccounts={adaAccounts} onOpenDetail={() => setViewWithUrl("detail")} />
+            <SovereignDashboardModule
+              adaAccounts={adaAccounts}
+              adaAccountsLoading={adaAccountsLoading}
+              onOpenDetail={(accountId) => openAdaDetail(accountId, "dashboard")}
+            />
           ) : (
-            <SovereignDetailModule onBack={() => setViewWithUrl("dashboard")} />
+            <SovereignDetailModule account={selectedAdaAccount} onBack={() => setViewWithUrl(detailReturnView)} token={session?.access_token ?? ""} />
           )}
         </section>
 

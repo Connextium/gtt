@@ -148,6 +148,8 @@ test("chart of accounts includes customer ADA liability accounts", async () => {
 
   assert.equal(codes.includes("20430"), true);
   assert.equal(codes.includes("20440"), true);
+  assert.equal(codes.includes("10010"), true);
+  assert.equal(codes.includes("20500"), true);
 });
 
 test("Circle integration health reports simulator readiness without API key", async () => {

@@ -9,6 +9,7 @@
     "dev": "tsx src/server.ts",
     "bootstrap:super-admin": "tsx src/cli/provision-super-admin.ts",
     "circle:sandbox-check": "tsx src/cli/circle-sandbox-check.ts",
+    "circle:simulate-confirmation": "tsx src/cli/simulate-circle-confirmation.ts",
     "smoke": "tsx src/smoke-test.ts",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "worker": "tsx src/workers/index.ts",

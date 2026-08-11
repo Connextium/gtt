@@ -955,6 +955,13 @@
   text-align: right;
 }
 
+.ada-scope .ada-journal-loading {
+  align-items: center;
+  color: var(--ada-secondary);
+  display: inline-flex;
+  gap: 8px;
+}
+
 .ada-scope .ada-journal-panel footer {
   background: var(--ada-canvas-soft);
   display: flex;

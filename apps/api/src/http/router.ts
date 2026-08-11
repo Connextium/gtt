@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { publicApiKey, type ApiScope } from "../auth/index.js";
 import { checkCircleHealth, circleEnvironment, circleWalletAccountType, initializeCircleWalletSet, initializeTenantCircleWallet, invokeCircle, provisionAdaCircleMapping, verifyCircleWebhook } from "../modules/circle/index.js";
 import {
+  handleGetMyAdaBalance,
+  handleGetMyAdaStatement,
   handleGetOrCreateMyOnboarding,
   handleRespondToMyOnboardingRfi,
   handleSaveMyOnboardingStep,
@@ -55,11 +57,17 @@ export const routeMetadata = (method: string, pathname: string): { public?: bool
   if (method === "POST" && pathname === "/admin/bootstrap/super-admin") return { public: true };
   if (method === "POST" && ["/internal-access/initialize", "/internal-access/login"].includes(pathname)) return { public: true };
   if (pathname === "/onboarding/me" || pathname.startsWith("/onboarding/me/")) return { public: true };
+  if (pathname.startsWith("/business/me/accounts-of-digital-asset/")) return { public: true };
+  if (pathname === "/business/me/funding-instructions" || pathname.startsWith("/business/me/funding-instructions/")) return { public: true };
   if (pathname.startsWith("/api-keys")) return { requiredScopes: ["admin:api-keys"] };
   if (pathname.startsWith("/integrations/circle")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["admin:api-keys"] };
   if (pathname.startsWith("/tenants")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["admin:users"] };
   if (pathname.startsWith("/admin/business-onboarding")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:clients"] };
   if (pathname.startsWith("/admin/users") || pathname === "/admin/roles") return { requiredScopes: ["admin:users"] };
+  if (pathname.startsWith("/internal/treasury/settlement-advance")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:obligations"] };
+  if (pathname.startsWith("/internal/treasury/tenant-disbursements")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:payments"] };
+  if (pathname.startsWith("/internal/operations/linked-wire-accounts")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:accounts"] };
+  if (/^\/funding-instructions\/[^/]+\/(assign-route|cancel)$/.test(pathname)) return { requiredScopes: ["write:payments"] };
   if (method === "GET") return { requiredScopes: ["read:operations"] };
   if (pathname.includes("reconciliation")) return { requiredScopes: ["write:reconciliation"] };
   if (pathname.includes("liquidity-rebalancing")) return { requiredScopes: ["write:rebalancing"] };
@@ -297,6 +305,14 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   }
   if (method === "GET" && pathname === "/onboarding/me") {
     return handleGetOrCreateMyOnboarding(state, input.headers ?? {});
+  }
+  const businessAdaBalanceMatch = pathname.match(/^\/business\/me\/accounts-of-digital-asset\/([^/]+)\/balances$/);
+  if (method === "GET" && businessAdaBalanceMatch) {
+    return handleGetMyAdaBalance(state, input.headers ?? {}, decodeURIComponent(businessAdaBalanceMatch[1]!));
+  }
+  const businessAdaStatementMatch = pathname.match(/^\/business\/me\/accounts-of-digital-asset\/([^/]+)\/statements$/);
+  if (method === "GET" && businessAdaStatementMatch) {
+    return handleGetMyAdaStatement(state, input.headers ?? {}, decodeURIComponent(businessAdaStatementMatch[1]!));
   }
   const onboardingStepMatch = pathname.match(/^\/onboarding\/me\/steps\/([^/]+)$/);
   if ((method === "POST" || method === "PATCH") && onboardingStepMatch) {
@@ -1648,11 +1664,13 @@ const validateInternalPassword = (password: string): string | undefined => {
 };
 
 const chartOfAccounts = [
+  { accountCode: "10010", accountName: "Circle Business Account USD Cash", accountClass: "Asset", normalBalance: "debit" },
   { accountCode: "10020", accountName: "Circle Business Account USDC", accountClass: "Asset", normalBalance: "debit" },
   { accountCode: "10150", accountName: "Circle Settlement Suspense", accountClass: "Asset", normalBalance: "debit" },
   { accountCode: "20400", accountName: "Escrow Liability - Investor Funds", accountClass: "Liability", normalBalance: "credit" },
   { accountCode: "20430", accountName: "Customer ADA Liability - Available", accountClass: "Liability", normalBalance: "credit" },
-  { accountCode: "20440", accountName: "Customer ADA Liability - Reserved", accountClass: "Liability", normalBalance: "credit" }
+  { accountCode: "20440", accountName: "Customer ADA Liability - Reserved", accountClass: "Liability", normalBalance: "credit" },
+  { accountCode: "20500", accountName: "Customer ADA Liability - Pending Fiat-to-USDC Conversion", accountClass: "Liability", normalBalance: "credit" }
 ];
 
 const postingRules = [

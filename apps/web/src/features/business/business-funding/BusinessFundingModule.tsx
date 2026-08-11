@@ -25,7 +25,9 @@ type View = "dashboard" | "create" | "review" | "audit";
 type FundingInstruction = {
   id: string;
   sourceAccountId: string;
+  sourceAdaCode: string;
   destinationAccountId: string;
+  destinationAdaCode: string;
   type: string;
   amount: string;
   status: string;
@@ -37,32 +39,69 @@ type FundingInstructionApi = {
   id: string;
   accountOfDigitalAssetId?: string;
   sourceAccountOfDigitalAssetId?: string;
+  sourceAdaCode?: string;
+  sourceAccountCode?: string;
   destinationAccountOfDigitalAssetId?: string;
+  destinationAdaCode?: string;
+  destinationAccountCode?: string;
   fundingType?: string;
   amountMinorUnits?: string;
+  pendingUsdcMinorUnits?: string;
+  availableUsdcMinorUnits?: string;
   status?: string;
-  provider?: string;
+  supportReference?: string;
+  postingJournalEntryId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type FundingOrderApi = {
+  id: string;
+  orderKind?: string;
+  stage?: string;
+  dependencyOrderId?: string;
+  amountMinorUnits?: string;
+  currency?: string;
+  status?: string;
+  completedAt?: string;
+  createdAt?: string;
   updatedAt?: string;
 };
 
 type AccountApi = {
   id: string;
+  accountCode?: string;
   accountName?: string;
+  usePurpose?: string;
   assetCode?: string;
+  balances?: {
+    availableMinorUnits?: string;
+  };
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
-const gttApiKey = import.meta.env.VITE_GTT_API_KEY ?? "gtt_live_api_key_dev.dev_secret";
 
 const profileImage =
   "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=150&auto=format&fit=crop";
 
-export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean }) => {
+export const BusinessFundingModule = ({
+  authorizedAccounts,
+  embedded = false,
+  initialInstructionId = "",
+  navigate,
+  token
+}: {
+  authorizedAccounts: AccountApi[];
+  embedded?: boolean;
+  initialInstructionId?: string;
+  navigate?: (path: string) => void;
+  token: string;
+}) => {
   const [view, setView] = useState<View>("dashboard");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
-  const [accounts, setAccounts] = useState<AccountApi[]>([]);
+  const [accounts, setAccounts] = useState<AccountApi[]>(authorizedAccounts);
   const [instructions, setInstructions] = useState<FundingInstruction[]>([]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -73,10 +112,10 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
   const [fundingType, setFundingType] = useState("usdc_payin");
   const [routePreference, setRoutePreference] = useState("system-default");
   const [amount, setAmount] = useState("");
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(initialInstructionId);
   const [selectedDetail, setSelectedDetail] = useState<FundingInstructionApi | null>(null);
+  const [selectedOrders, setSelectedOrders] = useState<FundingOrderApi[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [actionPending, setActionPending] = useState<"assign-route" | "cancel" | "">("");
   const [successMessage, setSuccessMessage] = useState("");
 
   const minorUnits = useMemo(() => {
@@ -95,14 +134,27 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
     });
   }, [dateFilter, destinationFilter, instructions, sourceFilter, statusFilter]);
 
-  const accountLabelById = useMemo(
-    () => new Map(accounts.map((account) => [account.id, formatAdaLabel(account)])),
+  const accountCodeByAccountId = useMemo(
+    () => new Map(accounts.map((account) => [account.id, accountDisplayCode(account)])),
     [accounts]
   );
+  const destinationAccount = accounts.find((account) => account.id === destinationAccountId);
 
   useEffect(() => {
-    void loadInitialData();
-  }, []);
+    if (token) void loadInitialData();
+  }, [token]);
+
+  useEffect(() => {
+    setAccounts(authorizedAccounts);
+    if (authorizedAccounts[0]?.id) {
+      setSourceAccountId((current) => current || authorizedAccounts[0]!.id);
+      setDestinationAccountId((current) => current || authorizedAccounts[0]!.id);
+    }
+  }, [authorizedAccounts]);
+
+  useEffect(() => {
+    setSelectedId(initialInstructionId);
+  }, [initialInstructionId]);
 
   useEffect(() => {
     if (!selectedId || view !== "dashboard") {
@@ -116,13 +168,12 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
     setLoading(true);
     setError("");
     try {
-      const [accountsResponse, fundingResponse] = await Promise.all([
-        apiFetch<{ accounts?: AccountApi[] }>("/accounts-of-digital-asset"),
-        apiFetch<{ fundingInstructions?: FundingInstructionApi[] }>("/funding-instructions")
-      ]);
-      const loadedAccounts = accountsResponse.accounts ?? [];
+      const fundingResponse = await apiFetch<{ fundingInstructions?: FundingInstructionApi[] }>(
+        "/business/me/funding-instructions",
+        token
+      );
+      const loadedAccounts = authorizedAccounts;
       const loadedInstructions = (fundingResponse.fundingInstructions ?? []).map(mapInstruction);
-      setAccounts(loadedAccounts);
       setInstructions(loadedInstructions);
       if (loadedAccounts[0]?.id) {
         setSourceAccountId((current) => current || loadedAccounts[0]!.id);
@@ -138,11 +189,16 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
   const loadFundingDetail = async (id: string) => {
     setDetailLoading(true);
     try {
-      const response = await apiFetch<{ fundingInstruction?: FundingInstructionApi }>(`/funding-instructions/${encodeURIComponent(id)}`);
+      const response = await apiFetch<{ fundingInstruction?: FundingInstructionApi; orders?: FundingOrderApi[] }>(
+        `/business/me/funding-instructions/${encodeURIComponent(id)}`,
+        token
+      );
       setSelectedDetail(response.fundingInstruction ?? null);
+      setSelectedOrders(response.orders ?? []);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "funding_detail_load_failed");
       setSelectedDetail(null);
+      setSelectedOrders([]);
     } finally {
       setDetailLoading(false);
     }
@@ -157,7 +213,7 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
     setCreating(true);
     setError("");
     try {
-      const response = await apiFetch<{ fundingInstruction?: FundingInstructionApi }>("/funding-instructions", {
+      const response = await apiFetch<{ fundingInstruction?: FundingInstructionApi }>("/business/me/funding-instructions", token, {
         method: "POST",
         body: {
           accountOfDigitalAssetId: destinationAccountId,
@@ -183,40 +239,6 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
       setError(caught instanceof Error ? caught.message : "funding_instruction_create_failed");
     } finally {
       setCreating(false);
-    }
-  };
-
-  const runFundingInstructionAction = async (action: "assign-route" | "cancel") => {
-    if (!selectedId) return;
-    setActionPending(action);
-    setError("");
-    setSuccessMessage("");
-    try {
-      const response = await apiFetch<{ fundingInstruction?: FundingInstructionApi }>(
-        `/funding-instructions/${encodeURIComponent(selectedId)}/${action}`,
-        { method: "POST", body: {} }
-      );
-      const updated = response.fundingInstruction;
-      if (updated) {
-        setSelectedDetail(updated);
-        setInstructions((current) => {
-          const mapped = mapInstruction(updated);
-          let replaced = false;
-          const next = current.map((item) => {
-            if (item.id !== mapped.id) return item;
-            replaced = true;
-            return mapped;
-          });
-          if (!replaced) next.unshift(mapped);
-          return next;
-        });
-      }
-      await loadFundingDetail(selectedId);
-      setSuccessMessage(action === "assign-route" ? "Route assigned successfully." : "Instruction cancelled successfully.");
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "funding_instruction_action_failed");
-    } finally {
-      setActionPending("");
     }
   };
 
@@ -252,11 +274,11 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                 <dl className="bcf-review-grid">
                   <div>
                     <dt>Source ADA</dt>
-                    <dd className="mono">{accountLabelById.get(sourceAccountId) ?? sourceAccountId ?? "-"}</dd>
+                    <dd className="mono">{accountCodeByAccountId.get(sourceAccountId) ?? "-"}</dd>
                   </div>
                   <div>
                     <dt>Target ADA</dt>
-                    <dd className="mono">{accountLabelById.get(destinationAccountId) ?? destinationAccountId ?? "-"}</dd>
+                    <dd className="mono">{accountCodeByAccountId.get(destinationAccountId) ?? "-"}</dd>
                   </div>
                   <div>
                     <dt>Funding Type</dt>
@@ -321,8 +343,8 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                   <dd>USDC Omnibus</dd>
                 </div>
                 <div className="bcf-balance-row">
-                  <dt>Current Ledger Balance</dt>
-                  <dd>$45,291,000.50</dd>
+                  <dt>Available ADA Balance</dt>
+                  <dd>{formatAdaBalance(destinationAccount)}</dd>
                 </div>
               </dl>
               <div className="bcf-guidance">
@@ -366,7 +388,7 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                         {accounts.length === 0 ? <option value="">No accounts</option> : null}
                         {accounts.map((account) => (
                           <option key={account.id} value={account.id}>
-                            {formatAdaLabel(account)}
+                            {formatAdaLabelWithBalance(account)}
                           </option>
                         ))}
                       </select>
@@ -382,7 +404,7 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                         {accounts.length === 0 ? <option value="">No accounts</option> : null}
                         {accounts.map((account) => (
                           <option key={account.id} value={account.id}>
-                            {formatAdaLabel(account)}
+                            {formatAdaLabelWithBalance(account)}
                           </option>
                         ))}
                       </select>
@@ -487,8 +509,8 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                   <dd>USDC Omnibus</dd>
                 </div>
                 <div className="bcf-balance-row">
-                  <dt>Current Ledger Balance</dt>
-                  <dd>$45,291,000.50</dd>
+                  <dt>Available ADA Balance</dt>
+                  <dd>{formatAdaBalance(destinationAccount)}</dd>
                 </div>
               </dl>
 
@@ -539,13 +561,13 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                       <dt>STATUS</dt>
                       <dd>{formatStatus(instruction.status ?? "pending_provider")}</dd>
                     </div>
-                    <div>
-                      <dt>SOURCE ADA</dt>
-                      <dd className="mono">{instruction.sourceAccountOfDigitalAssetId ?? "-"}</dd>
+                      <div>
+                        <dt>SOURCE ADA</dt>
+                      <dd className="mono">{apiSourceAdaCode(instruction)}</dd>
                     </div>
                     <div>
                       <dt>TARGET ADA</dt>
-                      <dd className="mono">{instruction.destinationAccountOfDigitalAssetId ?? instruction.accountOfDigitalAssetId ?? "-"}</dd>
+                      <dd className="mono">{apiDestinationAdaCode(instruction)}</dd>
                     </div>
                     <div>
                       <dt>AMOUNT</dt>
@@ -691,7 +713,7 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                     <option value="all">All Source ADA</option>
                     {accounts.map((account) => (
                       <option key={account.id} value={account.id}>
-                        {account.id}
+                        {accountDisplayCode(account)}
                       </option>
                     ))}
                   </select>
@@ -706,7 +728,7 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                     <option value="all">All Destination ADA</option>
                     {accounts.map((account) => (
                       <option key={account.id} value={account.id}>
-                        {account.id}
+                        {accountDisplayCode(account)}
                       </option>
                     ))}
                   </select>
@@ -729,44 +751,45 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
               <table>
                 <thead>
                   <tr>
-                    <th>Instruction ID</th>
+                    <th>Date</th>
                     <th>Source ADA</th>
                     <th>Destination ADA</th>
                     <th>Type</th>
                     <th className="right">Amount (USDC)</th>
                     <th>Status</th>
-                    <th>Provider</th>
-                    <th>Updated At</th>
+                    <th>Funds</th>
                     <th aria-label="actions" />
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan={9}>Loading funding instructions...</td>
+                      <td colSpan={8}>Loading funding instructions...</td>
                     </tr>
                   ) : null}
                   {!loading && filteredInstructions.length === 0 ? (
                     <tr>
-                      <td colSpan={9}>No funding instructions found.</td>
+                      <td colSpan={8}>No funding instructions found.</td>
                     </tr>
                   ) : null}
                   {filteredInstructions.map((row) => (
                     <tr key={row.id}>
-                      <td className="mono">{row.id}</td>
-                      <td className="mono">{row.sourceAccountId}</td>
-                      <td className="mono">{row.destinationAccountId}</td>
+                      <td className="mono">{row.updatedAt}</td>
+                      <td className="mono" title={row.sourceAccountId}>{row.sourceAdaCode}</td>
+                      <td className="mono" title={row.destinationAccountId}>{row.destinationAdaCode}</td>
                       <td>{row.type}</td>
                       <td className="right mono strong">{row.amount}</td>
                       <td>
                         <span className={`bcf-status ${statusTone(row.status)}`}>{formatStatus(row.status)}</span>
                       </td>
-                      <td>{row.provider}</td>
-                      <td className="mono">{row.updatedAt}</td>
+                      <td>{fundsAvailabilityLabel(row.status)}</td>
                       <td className="right">
                         <button
                           className="bcf-row-action"
-                          onClick={() => setSelectedId(row.id)}
+                          onClick={() => {
+                            setSelectedId(row.id);
+                            navigate?.(`/business/treasury/funding/${encodeURIComponent(row.id)}`);
+                          }}
                           type="button"
                           aria-label={`Open ${row.id}`}
                         >
@@ -782,7 +805,12 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
             {selectedId ? (
               <section className="bcf-detail-card">
                 <h3>Funding Instruction Detail</h3>
-                {detailLoading ? <p>Loading detail...</p> : null}
+                {detailLoading ? (
+                  <div aria-live="polite" className="bcf-detail-loading" role="status">
+                    <span aria-hidden="true" className="bcf-spinner" />
+                    <span>Loading funding instruction detail...</span>
+                  </div>
+                ) : null}
                 {!detailLoading && selectedDetail ? (
                   <>
                     <dl>
@@ -791,8 +819,12 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                         <dd className="mono">{selectedDetail.id}</dd>
                       </div>
                       <div>
+                        <dt>Source ADA</dt>
+                        <dd className="mono">{apiSourceAdaCode(selectedDetail)}</dd>
+                      </div>
+                      <div>
                         <dt>Destination ADA</dt>
-                        <dd className="mono">{selectedDetail.accountOfDigitalAssetId ?? "-"}</dd>
+                        <dd className="mono">{apiDestinationAdaCode(selectedDetail)}</dd>
                       </div>
                       <div>
                         <dt>Funding Type</dt>
@@ -803,34 +835,35 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
                         <dd>{formatStatus(selectedDetail.status ?? "pending")}</dd>
                       </div>
                       <div>
-                        <dt>Provider</dt>
-                        <dd>{selectedDetail.provider ?? "-"}</dd>
-                      </div>
-                      <div>
                         <dt>Amount</dt>
                         <dd>{formatAmountFromMinorUnits(selectedDetail.amountMinorUnits ?? "0")}</dd>
                       </div>
+                      <div>
+                        <dt>Pending / Reserved</dt>
+                        <dd>{formatAmountFromMinorUnits(selectedDetail.pendingUsdcMinorUnits ?? "0")} USDC</dd>
+                      </div>
+                      <div>
+                        <dt>Available</dt>
+                        <dd>{formatAmountFromMinorUnits(selectedDetail.availableUsdcMinorUnits ?? "0")} USDC</dd>
+                      </div>
+                      {selectedDetail.supportReference ? (
+                        <div>
+                          <dt>Support Reference</dt>
+                          <dd className="mono">{selectedDetail.supportReference}</dd>
+                        </div>
+                      ) : null}
                     </dl>
-                    <div className="bcf-detail-actions">
-                      <button
-                        className="bcf-btn-secondary"
-                        disabled={actionPending !== "" || !canAssignRoute(selectedDetail.status)}
-                        onClick={() => void runFundingInstructionAction("assign-route")}
-                        type="button"
-                      >
-                        {actionPending === "assign-route" ? "Assigning..." : "Assign Route"}
-                      </button>
-                      <button
-                        className="bcf-btn-secondary"
-                        disabled={actionPending !== "" || !canCancelInstruction(selectedDetail.status)}
-                        onClick={() => void runFundingInstructionAction("cancel")}
-                        type="button"
-                      >
-                        {actionPending === "cancel" ? "Cancelling..." : "Cancel Instruction"}
-                      </button>
-                      <button className="bcf-btn-secondary" onClick={() => setView("audit")} type="button">
-                        Open Audit Trail
-                      </button>
+                    <div className="bcf-stage-list" aria-label="Funding progress">
+                      {selectedOrders.map((order, index) => (
+                        <article className={`bcf-stage ${statusTone(order.status ?? "created")}`} key={order.id}>
+                          <span>{index + 1}</span>
+                          <div>
+                            <strong>{order.orderKind === "ada_wire_transfer" ? "Fiat received" : "USDC delivered"}</strong>
+                            <p>{stageDescription(order)}</p>
+                          </div>
+                          <em>{formatStatus(order.status ?? "created")}</em>
+                        </article>
+                      ))}
                     </div>
                   </>
                 ) : null}
@@ -863,6 +896,7 @@ export const BusinessFundingModule = ({ embedded = false }: { embedded?: boolean
 
 const apiFetch = async <T,>(
   path: string,
+  token: string,
   options: {
     method?: "GET" | "POST";
     body?: Record<string, unknown>;
@@ -874,8 +908,7 @@ const apiFetch = async <T,>(
     method: options.method ?? "GET",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${gttApiKey}`,
-      "x-gtt-api-key": gttApiKey,
+      authorization: `Bearer ${token}`,
       "x-correlation-id": correlationId,
       "idempotency-key": idempotencyKey
     },
@@ -901,16 +934,44 @@ const formatAdaLabel = (account: AccountApi): string => {
   return `${name} (${code})`;
 };
 
-const mapInstruction = (input: FundingInstructionApi): FundingInstruction => ({
-  id: input.id,
-  sourceAccountId: input.sourceAccountOfDigitalAssetId ?? "-",
-  destinationAccountId: input.destinationAccountOfDigitalAssetId ?? input.accountOfDigitalAssetId ?? "-",
-  type: formatStatus(input.fundingType ?? "usdc_payin"),
-  amount: formatAmountFromMinorUnits(input.amountMinorUnits ?? "0"),
-  status: input.status ?? "created",
-  provider: input.provider ?? "circle",
-  updatedAt: formatDateTime(input.updatedAt)
-});
+const accountDisplayCode = (account: AccountApi): string => {
+  if (account.accountCode?.trim()) return account.accountCode;
+  const nameSeed = (account.accountName ?? "ADA").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 4).padEnd(4, "X");
+  const purposeSeed = (account.usePurpose ?? "general").replace(/[^a-zA-Z]/g, "").toUpperCase().slice(0, 3) || "GEN";
+  const assetSeed = (account.assetCode ?? "USDC").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 4);
+  return `DAA-${assetSeed}-${purposeSeed}-${nameSeed}`;
+};
+
+const formatAdaBalance = (account: AccountApi | undefined): string => {
+  if (!account) return "-";
+  return `${formatAmountFromMinorUnits(account.balances?.availableMinorUnits ?? "0")} ${account.assetCode?.trim() || "USDC"}`;
+};
+
+const formatAdaLabelWithBalance = (account: AccountApi): string =>
+  `${formatAdaLabel(account)} - ${formatAdaBalance(account)} available`;
+
+const mapInstruction = (input: FundingInstructionApi): FundingInstruction => {
+  const sourceAccountId = input.sourceAccountOfDigitalAssetId ?? "-";
+  const destinationAccountId = input.destinationAccountOfDigitalAssetId ?? input.accountOfDigitalAssetId ?? "-";
+  return {
+    id: input.id,
+    sourceAccountId,
+    sourceAdaCode: input.sourceAdaCode ?? input.sourceAccountCode ?? "-",
+    destinationAccountId,
+    destinationAdaCode: input.destinationAdaCode ?? input.destinationAccountCode ?? "-",
+    type: formatStatus(input.fundingType ?? "usdc_payin"),
+    amount: formatAmountFromMinorUnits(input.amountMinorUnits ?? "0"),
+    status: input.status ?? "created",
+    provider: "Funding network",
+    updatedAt: formatDateTime(input.updatedAt)
+  };
+};
+
+const apiDestinationAdaCode = (detail: FundingInstructionApi): string =>
+  detail.destinationAdaCode?.trim() || detail.destinationAccountCode?.trim() || "-";
+
+const apiSourceAdaCode = (detail: FundingInstructionApi): string =>
+  detail.sourceAdaCode?.trim() || detail.sourceAccountCode?.trim() || "-";
 
 const formatStatus = (status: string): string =>
   status.replaceAll("_", " ").replace(/\b\w/g, (match) => match.toUpperCase());
@@ -922,14 +983,17 @@ const statusTone = (status: string): "completed" | "pending" | "failed" => {
   return "pending";
 };
 
-const canAssignRoute = (status?: string): boolean => {
-  const normalized = (status ?? "").toLowerCase();
-  return normalized !== "route_resolved" && normalized !== "cancelled";
-};
+const fundsAvailabilityLabel = (status: string): string =>
+  status === "posted_available" ? "Available" : status === "pending_usdc_reserved" ? "Pending / reserved" : "Not yet available";
 
-const canCancelInstruction = (status?: string): boolean => {
-  const normalized = (status ?? "").toLowerCase();
-  return normalized !== "cancelled";
+const stageDescription = (order: FundingOrderApi): string => {
+  if (order.orderKind === "ada_wire_transfer") {
+    return order.status === "completed" ? "Your fiat receipt has been confirmed." : "Waiting for the fiat receipt confirmation.";
+  }
+  if (order.status === "completed") return "USDC is available in your destination account.";
+  if (order.status === "blocked_dependency") return "Starts after the fiat receipt is confirmed.";
+  if (order.status === "failed") return "Delivery needs support review; your confirmed funds remain reserved.";
+  return "USDC delivery is in progress and is not yet spendable.";
 };
 
 const formatAmountFromMinorUnits = (minorUnits: string): string => {

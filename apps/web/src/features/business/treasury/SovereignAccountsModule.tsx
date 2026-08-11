@@ -16,7 +16,7 @@ export function SovereignAccountsModule({
 }: {
   adaAccounts: TreasuryAdaAccount[];
   adaAccountsLoading: boolean;
-  onOpenDetail: () => void;
+  onOpenDetail: (accountId: string) => void;
 }) {
   const totalAvailable = formatMinorUnitsAsUsd(sumMinorUnits(adaAccounts, (account) => account.balances?.availableMinorUnits));
   const totalPending = formatMinorUnitsAsUsdc(sumMinorUnits(adaAccounts, (account) => account.balances?.pendingMinorUnits));
@@ -40,7 +40,7 @@ export function SovereignAccountsModule({
         <div className="gtt-welcome-left">
           <div className="gtt-welcome-section-heading">
             <h3>Accounts of Digital Asset</h3>
-            <button onClick={onOpenDetail} type="button">View Ledger Report</button>
+            <button disabled={!adaAccounts[0]} onClick={() => adaAccounts[0] && onOpenDetail(adaAccounts[0].id)} type="button">View Ledger Report</button>
           </div>
           <div className="gtt-welcome-table-wrap">
             <table className="gtt-welcome-table">
@@ -65,6 +65,7 @@ export function SovereignAccountsModule({
                     code={accountDisplayCode(account)}
                     key={account.id}
                     name={account.accountName}
+                    onOpen={() => onOpenDetail(account.id)}
                     status={readableStatus(account.status)}
                     usePurpose={readableUsePurpose(account.usePurpose)}
                   />
@@ -130,13 +131,27 @@ function WelcomeMetric({ icon: Icon, meta, title, unit, value }: { icon: typeof 
   );
 }
 
-function AccountRow({ balance, code, name, status, usePurpose }: { balance: string; code: string; name: string; status: string; usePurpose: string }) {
+function AccountRow({
+  balance,
+  code,
+  name,
+  onOpen,
+  status,
+  usePurpose
+}: {
+  balance: string;
+  code: string;
+  name: string;
+  onOpen: () => void;
+  status: string;
+  usePurpose: string;
+}) {
   return (
     <tr>
       <td><strong>{name}</strong><span>{code} • {usePurpose}</span></td>
       <td><mark>{status}</mark></td>
       <td>{balance}</td>
-      <td><button type="button">Deposit</button><button type="button">Withdraw</button></td>
+      <td><button onClick={onOpen} type="button">View</button><button type="button">Deposit</button><button type="button">Withdraw</button></td>
     </tr>
   );
 }

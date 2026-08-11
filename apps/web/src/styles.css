@@ -10779,7 +10779,7 @@ footer strong {
   color: var(--sovereign-muted);
 }
 
-.gtt-sovereign-topbar-tools span {
+.gtt-sovereign-topbar-tools > span {
   width: 26px;
   height: 26px;
   display: grid;
@@ -10819,6 +10819,10 @@ footer strong {
   font-size: clamp(34px, 4.1vw, 48px);
   line-height: 0.98;
   letter-spacing: 0;
+}
+
+.gtt-sovereign-hero .gtt-sovereign-dashboard-title {
+  font-size: clamp(24px, 2.5vw, 32px);
 }
 
 .gtt-sovereign-hero p,
@@ -10901,6 +10905,12 @@ footer strong {
 
 button.gtt-sovereign-daa-card {
   cursor: pointer;
+}
+
+button.gtt-sovereign-daa-card:hover,
+button.gtt-sovereign-daa-card:focus-visible {
+  border-color: #000000;
+  box-shadow: inset 0 0 0 1px #000000;
 }
 
 .gtt-sovereign-daa-card.primary {
@@ -11001,6 +11011,15 @@ button.gtt-sovereign-daa-card {
   justify-content: center;
   border-style: dashed;
   text-align: center;
+}
+
+.gtt-sovereign-daa-card.loading {
+  min-height: 160px;
+  grid-column: 1 / -1;
+}
+
+.gtt-sovereign-daa-card.loading svg {
+  color: var(--sovereign-text);
 }
 
 .gtt-sovereign-ledger {
@@ -11272,6 +11291,21 @@ button.gtt-sovereign-daa-card {
   gap: 8px;
 }
 
+.gtt-sovereign-detail-notice {
+  border: 1px solid var(--sovereign-border);
+  background: #ffffff;
+  color: var(--sovereign-muted);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.gtt-sovereign-ledger-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sovereign-muted);
+}
+
 .gtt-sovereign-detail-grid td strong,
 .gtt-sovereign-detail-grid td span {
   display: block;
@@ -11520,6 +11554,10 @@ button.gtt-sovereign-daa-card {
   .gtt-sovereign-hero h1,
   .gtt-sovereign-detail-hero h1 {
     font-size: 38px;
+  }
+
+  .gtt-sovereign-hero .gtt-sovereign-dashboard-title {
+    font-size: 26px;
   }
 
   .gtt-sovereign-detail-hero dl,

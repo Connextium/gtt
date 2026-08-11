@@ -186,6 +186,26 @@ export const migrationCatalog: MigrationCatalogEntry[] = [
     version: "0032",
     fileName: "0032_sprint5_funding_instruction_orchestration.sql",
     domainModules: ["payment-execution", "circle-integration", "reconciliation", "events"]
+  },
+  {
+    version: "0033",
+    fileName: "0033_sprint5b_client_exchange_controls.sql",
+    domainModules: ["payment-execution", "digital-accounts", "circle-integration"]
+  },
+  {
+    version: "0034",
+    fileName: "0034_client_funding_conversion_accounting.sql",
+    domainModules: ["payment-execution", "ledger", "digital-accounts"]
+  },
+  {
+    version: "0035",
+    fileName: "0035_backfill_missing_client_ada_balances.sql",
+    domainModules: ["payment-execution", "balance", "digital-accounts"]
+  },
+  {
+    version: "0036",
+    fileName: "0036_sprint5_2_settlement_advance_tenant_disbursement.sql",
+    domainModules: ["payment-execution", "settlement-obligation", "reconciliation", "events"]
   }
 ];
 

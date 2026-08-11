@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type pg from "pg";
 import {
-  executeSprint1PostgresCommand,
-  executeSprint1PostgresQueryWithClient,
-  handleSprint1PostgresCommand
-} from "../../src/db/sprint1-postgres-unit-of-work.js";
+  executePostgresCommand,
+  executePostgresQueryWithClient,
+  handlePostgresCommand
+} from "../../src/db/postgres-route-handler.js";
 import { setPostgresPoolForTest } from "../../src/db/transaction.js";
 import { requestHash } from "../../src/events/idempotency.js";
 
@@ -43,7 +43,7 @@ test("business client command writes domain, audit, outbox, and idempotency in o
     correlationId: "corr-client"
   };
 
-  const result = await executeSprint1PostgresCommand(client as never, input, requestHash(input));
+  const result = await executePostgresCommand(client as never, input, requestHash(input));
 
   assert.equal(result.status, 201);
   assert.equal(queries.some((sql) => sql.includes("insert into business_clients")), true);
@@ -63,7 +63,7 @@ test("api key command stores only hash metadata and returns one-time plaintext",
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -112,7 +112,7 @@ test("matching idempotent command replays response before domain writes", async 
     }
   };
 
-  const result = await executeSprint1PostgresCommand(client as never, input, requestHash(input));
+  const result = await executePostgresCommand(client as never, input, requestHash(input));
 
   assert.equal(result.status, 200);
   assert.deepEqual(result.body, { businessClient: { id: "client_existing" } });
@@ -137,7 +137,7 @@ test("changed idempotent command rejects before domain writes", async () => {
   };
 
   await assert.rejects(
-    () => executeSprint1PostgresCommand(client as never, input, requestHash(input)),
+    () => executePostgresCommand(client as never, input, requestHash(input)),
     /idempotency_key_reused_with_different_request/
   );
 });
@@ -170,7 +170,7 @@ test("opening journal command writes two single-sided journal lines from posting
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -207,7 +207,7 @@ test("manual journal command writes balanced treasury journal entry and lines", 
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -254,7 +254,7 @@ test("trial balance query endpoint returns aggregate debit and credit totals", a
     }
   };
 
-  const result = await executeSprint1PostgresQueryWithClient(client as never, {
+  const result = await executePostgresQueryWithClient(client as never, {
     method: "GET",
     pathname: "/treasury-accounting/trial-balance",
     body: {},
@@ -298,7 +298,7 @@ test("business client lifecycle command writes transition, audit, outbox, and id
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -344,7 +344,7 @@ test("ADA lifecycle command writes transition with tenant-bound client validatio
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -401,7 +401,7 @@ test("ADA linked rail command writes rail, linked instrument, audit, outbox, and
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -462,7 +462,7 @@ test("ADA fiat wire linked instrument in circle sandbox requires CIRCLE_MINT_KEY
   };
 
   try {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -544,7 +544,7 @@ test("ADA activation command enforces instrument and Circle mapping gates transa
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -590,7 +590,7 @@ test("ADA activation blocks when Circle mapping is missing", async () => {
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -650,7 +650,7 @@ test("ADA activation allows tenant internal Tenant ADA without linked instrument
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -752,7 +752,7 @@ test("ADA Circle provisioning persists provider mapping evidence", async () => {
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -858,7 +858,7 @@ test("ADA Circle provisioning reuses existing successful provider mapping withou
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -949,7 +949,7 @@ test("ADA Circle provisioning ignores removed legacy Circle fields", async () =>
   };
 
   try {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -1028,7 +1028,7 @@ test("tenant activation initializes simulator wallet set and stores tenant Circl
   };
 
   try {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -1133,7 +1133,7 @@ test("tenant activation relinks existing tenant ADA to tenant internal business 
   };
 
   try {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -1192,7 +1192,7 @@ test("Circle sandbox diagnostic command persists provider evidence through direc
   };
 
   try {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -1229,10 +1229,10 @@ test("postgres evidence query reads ledger, audit, outbox, and inbox tables", as
     }
   };
 
-  assert.equal((await executeSprint1PostgresQueryWithClient(client as never, { method: "GET", pathname: "/ledger/chart-of-accounts", body: {}, correlationId: "corr" })).status, 200);
-  assert.equal((await executeSprint1PostgresQueryWithClient(client as never, { method: "GET", pathname: "/audit-events", body: {}, correlationId: "corr" })).status, 200);
-  assert.equal((await executeSprint1PostgresQueryWithClient(client as never, { method: "GET", pathname: "/events/outbox", body: {}, correlationId: "corr" })).status, 200);
-  assert.equal((await executeSprint1PostgresQueryWithClient(client as never, { method: "GET", pathname: "/events/inbox", body: {}, correlationId: "corr" })).status, 200);
+  assert.equal((await executePostgresQueryWithClient(client as never, { method: "GET", pathname: "/ledger/chart-of-accounts", body: {}, correlationId: "corr" })).status, 200);
+  assert.equal((await executePostgresQueryWithClient(client as never, { method: "GET", pathname: "/audit-events", body: {}, correlationId: "corr" })).status, 200);
+  assert.equal((await executePostgresQueryWithClient(client as never, { method: "GET", pathname: "/events/outbox", body: {}, correlationId: "corr" })).status, 200);
+  assert.equal((await executePostgresQueryWithClient(client as never, { method: "GET", pathname: "/events/inbox", body: {}, correlationId: "corr" })).status, 200);
 
   assert.equal(queries.some((sql) => sql.includes("from ledger_accounts")), true);
   assert.equal(queries.some((sql) => sql.includes("from audit_events")), true);
@@ -1257,7 +1257,7 @@ test("postgres command rolls back domain write, audit, outbox, and idempotency o
 
     await assert.rejects(
       () =>
-        handleSprint1PostgresCommand({
+        handlePostgresCommand({
           method: "POST",
           pathname: "/business-clients",
           body: { legalName: "Rollback Client" },
@@ -1279,7 +1279,7 @@ test("integration: multi-step posting flow produces statement movements and expl
   const adaId = "00000000-0000-4000-8000-000000000777";
   const client = createLedgerFlowClient(tenantId);
 
-  const opening = await executeSprint1PostgresCommand(
+  const opening = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1295,7 +1295,7 @@ test("integration: multi-step posting flow produces statement movements and expl
   );
   assert.equal(opening.status, 201);
 
-  const manual = await executeSprint1PostgresCommand(
+  const manual = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1316,7 +1316,7 @@ test("integration: multi-step posting flow produces statement movements and expl
   const manualJournalId = (manual.body as { journal?: { id?: string } }).journal?.id;
   assert.equal(typeof manualJournalId, "string");
 
-  const reversal = await executeSprint1PostgresCommand(
+  const reversal = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1331,7 +1331,7 @@ test("integration: multi-step posting flow produces statement movements and expl
   );
   assert.equal(reversal.status, 201);
 
-  const statements = await executeSprint1PostgresQueryWithClient(client as never, {
+  const statements = await executePostgresQueryWithClient(client as never, {
     method: "GET",
     pathname: `/accounts-of-digital-asset/${adaId}/statements`,
     body: {},
@@ -1345,7 +1345,7 @@ test("integration: multi-step posting flow produces statement movements and expl
   const reversalJournalId = (reversal.body as { journal?: { id?: string } }).journal?.id;
   assert.equal(statementBody.journals.some((row) => row.journalEntryId === reversalJournalId), true);
 
-  const journalDetail = await executeSprint1PostgresQueryWithClient(client as never, {
+  const journalDetail = await executePostgresQueryWithClient(client as never, {
     method: "GET",
     pathname: `/ledger/journals/${manualJournalId}`,
     body: {},
@@ -1363,7 +1363,7 @@ test("integration: statement pagination scenario supports stable client-side pag
   const client = createLedgerFlowClient(tenantId);
 
   for (let index = 0; index < 25; index += 1) {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -1383,7 +1383,7 @@ test("integration: statement pagination scenario supports stable client-side pag
     assert.equal(result.status, 201);
   }
 
-  const statements = await executeSprint1PostgresQueryWithClient(client as never, {
+  const statements = await executePostgresQueryWithClient(client as never, {
     method: "GET",
     pathname: `/accounts-of-digital-asset/${adaId}/statements`,
     body: {},
@@ -1454,7 +1454,7 @@ test("sprint5: funding instruction command writes domain, audit, outbox, and ide
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1516,7 +1516,7 @@ test("sprint5: fiat wire account command writes domain, audit, outbox, and idemp
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1575,7 +1575,7 @@ test("sprint5: fiat wire account command in circle sandbox requires CIRCLE_MINT_
   };
 
   try {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -1648,7 +1648,7 @@ test("sprint5: fiat wire account command auto-creates tenant pseudo business cli
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1733,7 +1733,7 @@ test("sprint5: fiat wire mint command writes audit, outbox, and idempotency", as
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1798,7 +1798,7 @@ test("sprint5: fiat wire mint fails when account Circle wallet is not linked", a
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1870,7 +1870,7 @@ test("sprint5: fiat wire mint fails fast when linked Circle wallet address is mi
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -1968,7 +1968,7 @@ test("sprint5: fiat wire mint maps provider failure status and returns 400 for C
   };
 
   try {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -2076,7 +2076,7 @@ test("sprint5: fiat wire mint defaults endpoint and fails when Circle API key is
   };
 
   try {
-    const result = await executeSprint1PostgresCommand(
+    const result = await executePostgresCommand(
       client as never,
       {
         method: "POST",
@@ -2153,7 +2153,7 @@ test("sprint5: fiat mint history includes destination wallet and persisted circl
     }
   };
 
-  const result = await executeSprint1PostgresQueryWithClient(
+  const result = await executePostgresQueryWithClient(
     client as never,
     {
       method: "GET",
@@ -2219,7 +2219,7 @@ test("sprint5: funding reservation command writes reservation, balance update, a
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -2286,7 +2286,7 @@ test("sprint5: funding reservation release command updates reservation status an
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -2336,7 +2336,7 @@ test("sprint5: internal payment command writes payment and idempotency", async (
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -2393,7 +2393,7 @@ test("sprint5: payment submit command updates execution state and emits evidence
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -2437,7 +2437,7 @@ test("sprint5: fiat redemption command writes domain and idempotency", async () 
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -2485,7 +2485,7 @@ test("sprint5: fiat redemption submit command updates status and emits evidence"
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -2518,7 +2518,7 @@ test("sprint5: circle webhook dedupe returns prior processed result without dupl
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",
@@ -2538,6 +2538,104 @@ test("sprint5: circle webhook dedupe returns prior processed result without dupl
   assert.deepEqual(result.body, { webhookEventId: "webhook_existing", duplicate: true, status: "processed" });
   assert.equal(queries.some((sql) => sql.includes("insert into provider_webhook_events")), false);
   assert.equal(queries.some((sql) => sql.includes("insert into treasury_journal_entries")), false);
+});
+
+test("sprint5: circle webhook processing failure rolls back business mutations and retains failure evidence", async () => {
+  const queries: string[] = [];
+  const state = {
+    orderStatus: "pending_provider",
+    instructionStatus: "pending_confirmation",
+    instructionAvailableMinorUnits: "0",
+    webhookStatus: "received",
+    deadLetterInserted: false
+  };
+  let savepointState: typeof state | undefined;
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql === "savepoint circle_webhook_processing") {
+        savepointState = { ...state };
+        return { rows: [] };
+      }
+      if (sql === "rollback to savepoint circle_webhook_processing") {
+        assert.ok(savepointState);
+        Object.assign(state, savepointState);
+        return { rows: [] };
+      }
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from idempotency_keys")) return { rows: [] };
+      if (sql.includes("from provider_webhook_events") && sql.includes("provider_event_id = $2")) return { rows: [] };
+      if (sql.includes("from wire_funding_instructions") && sql.includes("select id,")) {
+        return {
+          rows: [{
+            id: "11111111-2222-4333-8444-555555555555",
+            account_of_digital_asset_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            destination_account_of_digital_asset_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            amount_minor_units: "11000000",
+            instruction_role: "internal_treasury_mint",
+            status: "pending_confirmation"
+          }]
+        };
+      }
+      if (sql.includes("update funding_instruction_orders") && sql.includes("provider_payload_json")) {
+        state.orderStatus = "completed";
+        return { rows: [] };
+      }
+      if (sql.includes("update wire_funding_instructions") && sql.includes("available_usdc_minor_units")) {
+        state.instructionStatus = "posted_available";
+        state.instructionAvailableMinorUnits = "11000000";
+        return { rows: [] };
+      }
+      if (sql.includes("from ledger_accounts")) {
+        return {
+          rows: [
+            { id: "ledger-debit", account_code: "10020" },
+            { id: "ledger-credit", account_code: "20430" }
+          ]
+        };
+      }
+      if (sql.includes("insert into treasury_journal_entries")) {
+        throw new Error("forced_journal_insert_failure");
+      }
+      if (sql.includes("insert into provider_webhook_dead_letters")) {
+        state.deadLetterInserted = true;
+        return { rows: [] };
+      }
+      if (sql.includes("update provider_webhook_events")) {
+        state.webhookStatus = "failed";
+        return { rows: [] };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/webhooks/circle",
+      headers: { "circle-signature": "test_valid_signature" },
+      body: {
+        id: "evt_rollback_test",
+        type: "usdc.mint.confirmed",
+        fundingInstructionId: "11111111-2222-4333-8444-555555555555",
+        amountMinorUnits: "11000000"
+      },
+      idempotencyKey: "circle_webhook_evt_rollback_test",
+      correlationId: "corr-webhook-rollback"
+    },
+    "hash-webhook-rollback"
+  );
+
+  assert.equal(result.status, 500);
+  assert.equal((result.body as { message?: string }).message, "forced_journal_insert_failure");
+  assert.equal(state.orderStatus, "pending_provider");
+  assert.equal(state.instructionStatus, "pending_confirmation");
+  assert.equal(state.instructionAvailableMinorUnits, "0");
+  assert.equal(state.webhookStatus, "failed");
+  assert.equal(state.deadLetterInserted, true);
+  assert.ok(queries.indexOf("rollback to savepoint circle_webhook_processing") > queries.findIndex((sql) => sql.includes("insert into treasury_journal_entries")));
+  assert.ok(queries.findIndex((sql) => sql.includes("insert into provider_webhook_dead_letters")) > queries.indexOf("rollback to savepoint circle_webhook_processing"));
 });
 
 test("sprint5: reconciliation break resolve updates state and emits evidence", async () => {
@@ -2563,7 +2661,7 @@ test("sprint5: reconciliation break resolve updates state and emits evidence", a
     }
   };
 
-  const result = await executeSprint1PostgresCommand(
+  const result = await executePostgresCommand(
     client as never,
     {
       method: "POST",

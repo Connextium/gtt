@@ -178,6 +178,34 @@ curl http://localhost:4000/business-clients \
 
 See `openapi.yaml` for the API contract.
 
+### Simulate a Circle mint confirmation
+
+With the API running locally, submit a signed confirmation for an existing pending Internal Treasury funding instruction:
+
+```bash
+npm run circle:simulate-confirmation -- \
+  --funding-instruction-id <funding-instruction-uuid> \
+  --amount-minor-units 1000000
+```
+
+The command posts `usdc.mint.confirmed` to `http://localhost:4000/webhooks/circle`. Use `--url <webhook-url>` for an ngrok endpoint and `--event-id <unique-id>` when testing duplicate delivery. It reads `CIRCLE_WEBHOOK_SECRET` from `.env.local`; the API and simulator must use the same value.
+
+For a `client_exchange` instruction, simulate the two settlement stages in order. Use a unique event ID for each call:
+
+```bash
+npm run circle:simulate-confirmation -- \
+  --funding-instruction-id <funding-instruction-uuid> \
+  --amount-minor-units 1000000 \
+  --event-type wire.received
+
+npm run circle:simulate-confirmation -- \
+  --funding-instruction-id <funding-instruction-uuid> \
+  --amount-minor-units 1000000 \
+  --event-type usdc.delivery.confirmed
+```
+
+When `GTT_DEV_API_KEY` is configured, the simulator rejects an out-of-order client USDC confirmation before posting the webhook.
+
 ## Sprint 0 Business User Self-Registration
 
 Implemented API-centric Supabase Auth onboarding endpoints:

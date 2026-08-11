@@ -154,7 +154,7 @@ export const internalRoutes: InternalRouteDefinition[] = [
     description: "Create and authorize internal treasury mint funding instructions for ADA account topology.",
     workflow: "liquidity-rebalancing",
     icon: Workflow,
-    showInShellNav: true
+    showInShellNav: false
   },
   {
     label: "Funding Order Console",

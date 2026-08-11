@@ -1,4 +1,4 @@
-import { CheckCircle2, Factory, FileText, MoreHorizontal, PlusSquare, RefreshCcw, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Factory, FileText, Loader2, MoreHorizontal, PlusSquare, RefreshCcw, ShieldCheck } from "lucide-react";
 import {
   accountDisplayCode,
   formatMinorUnitsAsUsd,
@@ -8,13 +8,21 @@ import {
   type TreasuryAdaAccount
 } from "./formatters.js";
 
-export function SovereignDashboardModule({ adaAccounts, onOpenDetail }: { adaAccounts: TreasuryAdaAccount[]; onOpenDetail: () => void }) {
+export function SovereignDashboardModule({
+  adaAccounts,
+  adaAccountsLoading,
+  onOpenDetail
+}: {
+  adaAccounts: TreasuryAdaAccount[];
+  adaAccountsLoading: boolean;
+  onOpenDetail: (accountId: string) => void;
+}) {
   const totalAvailable = formatMinorUnitsAsUsd(sumMinorUnits(adaAccounts, (account) => account.balances?.availableMinorUnits));
   return (
     <div className="gtt-sovereign-page">
       <section className="gtt-sovereign-hero">
         <div>
-          <h1>The Sovereign Ledger.</h1>
+          <h1 className="gtt-sovereign-dashboard-title">Managing Digital Asset Accounts</h1>
           <p>Unified liquidity management for high-velocity trade ecosystems. Managing Digital Asset Accounts with bank-grade finality and regulatory transparency.</p>
         </div>
         <aside>
@@ -33,18 +41,22 @@ export function SovereignDashboardModule({ adaAccounts, onOpenDetail }: { adaAcc
       </section>
 
       <section className="gtt-sovereign-daa-grid">
-        {adaAccounts.length ? adaAccounts.map((account, index) => {
+        {adaAccountsLoading ? (
+          <article aria-live="polite" className="gtt-sovereign-daa-card empty loading">
+            <Loader2 aria-hidden="true" className="spin" size={36} />
+            <h3>Loading Digital Asset Accounts</h3>
+          </article>
+        ) : adaAccounts.length ? adaAccounts.map((account, index) => {
           const isPrimary = index === 0;
           const cardClassName = isPrimary ? "gtt-sovereign-daa-card primary" : "gtt-sovereign-daa-card";
           const Icon = isPrimary ? ShieldCheck : Factory;
-          const CardTag = isPrimary ? "button" : "article";
 
           return (
-            <CardTag
+            <button
               className={cardClassName}
               key={account.id}
-              onClick={isPrimary ? onOpenDetail : undefined}
-              type={isPrimary ? "button" : undefined}
+              onClick={() => onOpenDetail(account.id)}
+              type="button"
             >
               <header>
                 <div>
@@ -59,12 +71,8 @@ export function SovereignDashboardModule({ adaAccounts, onOpenDetail }: { adaAcc
                 <div><dt>Pending</dt><dd>{formatMinorUnitsAsUsd(account.balances?.pendingMinorUnits)}</dd></div>
                 <div><dt>Locked</dt><dd>{formatMinorUnitsAsUsd(account.balances?.lockedMinorUnits)}</dd></div>
               </dl>
-              {isPrimary ? (
-                <footer><span><i /></span><div><em>Status</em><b>{readableStatus(account.status)}</b></div></footer>
-              ) : (
-                <button type="button">Draw Down Funds</button>
-              )}
-            </CardTag>
+              <footer><span><i /></span><div><em>Status</em><b>{readableStatus(account.status)}</b></div></footer>
+            </button>
           );
         }) : (
           <article className="gtt-sovereign-daa-card empty">

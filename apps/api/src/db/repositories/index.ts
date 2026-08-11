@@ -9,6 +9,13 @@ import type {
   JournalEntry
 } from "../../data.js";
 
+export { createCircleOperationRepository, type CircleOperationRepository } from "./circle-operation-repository.js";
+export { createCircleWebhookRepository, type CircleWebhookRepository } from "./circle-webhook-repository.js";
+export { createAdaCircleProvisionRepository, type AdaCircleProvisionRepository } from "./ada-circle-provision-repository.js";
+export { createFiatWireMintRepository, type FiatWireMintRepository } from "./fiat-wire-mint-repository.js";
+export { createTenantActivationRepository, type TenantActivationRepository } from "./tenant-activation-repository.js";
+export { createClientFundingRepository, type ClientFundingRepository } from "./client-funding-repository.js";
+
 export interface RepositoryList<T> {
   list(tenantId: string): Promise<T[]>;
   get(tenantId: string, id: string): Promise<T | undefined>;

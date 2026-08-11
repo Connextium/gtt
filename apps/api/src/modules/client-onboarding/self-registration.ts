@@ -14,7 +14,7 @@ import { postgresUrlFromEnv } from "../../db/connection.js";
 import { withPostgresTransaction } from "../../db/transaction.js";
 import { badRequest, unauthorized, type JsonResponse } from "../../http/index.js";
 
-interface AuthenticatedBusinessUser {
+export interface AuthenticatedBusinessUser {
   authUserId: string;
   email: string;
 }
@@ -171,6 +171,188 @@ export const handleGetOrCreateMyOnboarding = async (
   };
 };
 
+export const handleGetMyAdaBalance = async (
+  state: ApiState,
+  headers: Record<string, string | undefined>,
+  accountId: string
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const owned = await resolveOwnedBusinessAda(state, auth, accountId);
+  if (!owned) return { status: 404, body: { error: "account_not_found" } };
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const result = await client.query(
+          `select account_of_digital_asset_id, asset_code, currency, available_minor_units, pending_minor_units, reserved_minor_units, locked_minor_units, suspense_minor_units, version, projected_at, updated_at
+             from account_of_digital_asset_balances
+            where platform_tenant_id = $1 and account_of_digital_asset_id = $2
+            order by updated_at desc`,
+          [owned.tenantId, accountId]
+        );
+        return {
+          status: 200,
+          body: {
+            accountId,
+            balances: result.rows.map((row) => ({
+              accountId: row.account_of_digital_asset_id,
+              assetCode: row.asset_code,
+              currency: row.currency,
+              availableMinorUnits: String(row.available_minor_units ?? 0),
+              pendingMinorUnits: String(row.pending_minor_units ?? 0),
+              reservedMinorUnits: String(row.reserved_minor_units ?? 0),
+              lockedMinorUnits: String(row.locked_minor_units ?? 0),
+              suspenseMinorUnits: String(row.suspense_minor_units ?? 0),
+              version: Number(row.version ?? 1),
+              projectedAt: timestampToOptionalIsoString(row.projected_at),
+              updatedAt: timestampToOptionalIsoString(row.updated_at)
+            })),
+            source: "account_of_digital_asset_balances"
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleGetMyAdaBalance; falling back", error);
+    }
+  }
+
+  const balance = state.balances.find((item) => item.accountOfDigitalAssetId === accountId);
+  return {
+    status: 200,
+    body: {
+      accountId,
+      balances: balance ? [{
+        accountId,
+        assetCode: "USDC",
+        currency: "USD",
+        availableMinorUnits: balance.availableMinorUnits.toString(),
+        pendingMinorUnits: balance.pendingMinorUnits.toString(),
+        reservedMinorUnits: balance.reservedMinorUnits.toString(),
+        lockedMinorUnits: balance.lockedMinorUnits.toString(),
+        suspenseMinorUnits: balance.suspenseMinorUnits.toString(),
+        version: balance.version
+      }] : [],
+      source: "runtime_state"
+    }
+  };
+};
+
+export const handleGetMyAdaStatement = async (
+  state: ApiState,
+  headers: Record<string, string | undefined>,
+  accountId: string
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const owned = await resolveOwnedBusinessAda(state, auth, accountId);
+  if (!owned) return { status: 404, body: { error: "account_not_found" } };
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const result = await client.query(
+          `select
+             entry.id as journal_entry_id,
+             entry.description,
+             entry.accounting_event_type,
+             entry.correlation_id,
+             entry.idempotency_key,
+             entry.posted_at,
+             ledger.account_code,
+             ledger.account_name,
+             line.asset_code,
+             line.currency,
+             line.debit_minor_units,
+             line.credit_minor_units
+           from treasury_journal_lines line
+           join treasury_journal_entries entry on entry.id = line.journal_entry_id
+           join ledger_accounts ledger on ledger.id = line.ledger_account_id
+           where entry.platform_tenant_id = $1
+             and (
+               line.account_of_digital_asset_id = $2
+               or exists (
+                 select 1
+                   from wire_funding_instructions instruction
+                  where instruction.platform_tenant_id = entry.platform_tenant_id
+                    and instruction.posting_journal_entry_id = entry.id
+                    and $2 in (
+                      instruction.account_of_digital_asset_id,
+                      instruction.source_account_of_digital_asset_id,
+                      instruction.destination_account_of_digital_asset_id
+                    )
+               )
+               or exists (
+                 select 1
+                   from funding_instruction_orders funding_order
+                   join wire_funding_instructions instruction
+                     on instruction.id = funding_order.funding_instruction_id
+                    and instruction.platform_tenant_id = funding_order.platform_tenant_id
+                  where funding_order.platform_tenant_id = entry.platform_tenant_id
+                    and funding_order.journal_entry_id = entry.id
+                    and $2 in (
+                      instruction.account_of_digital_asset_id,
+                      instruction.source_account_of_digital_asset_id,
+                      instruction.destination_account_of_digital_asset_id,
+                      funding_order.source_account_of_digital_asset_id,
+                      funding_order.destination_account_of_digital_asset_id
+                    )
+               )
+             )
+           order by entry.posted_at desc, line.created_at asc`,
+          [owned.tenantId, accountId]
+        );
+        return {
+          status: 200,
+          body: {
+            accountId,
+            journals: result.rows.map((row) => ({
+              journalEntryId: row.journal_entry_id,
+              description: row.description,
+              accountingEventType: row.accounting_event_type,
+              correlationId: row.correlation_id,
+              idempotencyKey: row.idempotency_key,
+              postedAt: timestampToOptionalIsoString(row.posted_at),
+              accountCode: row.account_code,
+              accountName: row.account_name,
+              assetCode: row.asset_code,
+              currency: row.currency,
+              debitMinorUnits: String(row.debit_minor_units ?? 0),
+              creditMinorUnits: String(row.credit_minor_units ?? 0)
+            }))
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleGetMyAdaStatement; falling back", error);
+    }
+  }
+
+  return {
+    status: 200,
+    body: {
+      accountId,
+      journals: state.journals
+        .filter((item) => item.tenantId === owned.tenantId && item.accountOfDigitalAssetId === accountId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .map((journal) => ({
+          journalEntryId: journal.id,
+          description: journal.description,
+          accountingEventType: "runtime_journal",
+          postedAt: journal.createdAt,
+          accountCode: journal.creditLedgerAccountCode,
+          accountName: "Runtime Ledger Account",
+          assetCode: "USDC",
+          currency: "USD",
+          debitMinorUnits: journal.amountMinorUnits.toString(),
+          creditMinorUnits: "0"
+        }))
+    }
+  };
+};
+
 const resolveOnboardingAssets = async (
   state: ApiState,
   application: BusinessOnboardingApplication,
@@ -299,6 +481,67 @@ const resolveOnboardingAssets = async (
   // Never return simulated ADA account data to business users.
   // If Postgres data is unavailable or missing, surface an empty list so UI reflects real backend state only.
   return { businessClient: undefined, adaAccounts: [] };
+};
+
+const resolveOwnedBusinessAda = async (
+  state: ApiState,
+  auth: AuthenticatedBusinessUser,
+  accountId: string
+): Promise<{ accountId: string; businessClientId: string; tenantId: string } | undefined> => {
+  const persisted = await hydrateBusinessUserOnboarding(state, auth);
+  const application = persisted?.application ?? state.businessOnboardingApplications.find((item) => item.authUserId === auth.authUserId);
+  if (!application) return undefined;
+  const applicationId = uuidFromRuntimeId(application.id);
+  const tenantId = uuidFromRuntimeId(application.tenantId) ?? persistentTenantId(state);
+
+  if (postgresUrlFromEnv() && applicationId) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const result = await client.query(
+          `select account.id, account.business_client_id, account.platform_tenant_id
+             from business_onboarding_applications application
+             join business_clients client
+               on client.platform_tenant_id = $1
+              and (
+                client.id = application.id
+                or client.correlation_id = 'business_onboarding:' || application.id::text
+              )
+             join accounts_of_digital_asset account
+               on account.business_client_id = client.id
+              and account.platform_tenant_id = client.platform_tenant_id
+            where application.auth_user_id = $2::uuid
+              and application.status = 'approved'
+              and account.platform_tenant_id = $1
+              and account.id = $3
+            limit 1`,
+          [tenantId, uuidFromRuntimeId(auth.authUserId) ?? auth.authUserId, accountId]
+        );
+        const row = result.rows[0] as Record<string, unknown> | undefined;
+        return row ? {
+          accountId: String(row.id),
+          businessClientId: String(row.business_client_id),
+          tenantId: String(row.platform_tenant_id)
+        } : undefined;
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in resolveOwnedBusinessAda; falling back", error);
+    }
+  }
+
+  const businessClient = state.businessClients.find((item) =>
+    item.tenantId === application.tenantId && item.onboardingStatus === "approved"
+  );
+  const account = state.accounts.find((item) =>
+    item.id === accountId
+    && item.tenantId === (businessClient?.tenantId ?? application.tenantId)
+    && item.businessClientId === businessClient?.id
+  );
+  return account && businessClient ? {
+    accountId: account.id,
+    businessClientId: businessClient.id,
+    tenantId: account.tenantId
+  } : undefined;
 };
 
 export const handleSaveMyOnboardingStep = async (
@@ -782,7 +1025,7 @@ const markInvitationSent = (invitation: BusinessOnboardingInvitation, supabaseUs
   invitation.updatedAt = now;
 };
 
-const authenticateBusinessUser = async (headers: Record<string, string | undefined>): Promise<AuthenticatedBusinessUser | undefined> => {
+export const authenticateBusinessUser = async (headers: Record<string, string | undefined>): Promise<AuthenticatedBusinessUser | undefined> => {
   const header = headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
   if (!token) return undefined;

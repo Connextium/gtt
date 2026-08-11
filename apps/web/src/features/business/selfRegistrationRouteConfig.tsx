@@ -72,11 +72,18 @@ export function resolveSelfRegistrationRoute({
     return withAuth(<RfiResponseModule navigate={navigate} onLogout={onLogout} session={session} />, loading, navigate, session);
   }
   if (path === "/treasury") {
-    return withAuth(<SovereignTreasuryScreen navigate={navigate} session={session} />, loading, navigate, session);
+    return withAuth(<SovereignTreasuryScreen navigate={navigate} onLogout={onLogout} session={session} />, loading, navigate, session);
   }
-  if (path === "/business/treasury/funding") {
+  const fundingDetailMatch = path.match(/^\/business\/treasury\/funding\/([^/]+)$/);
+  if (path === "/business/treasury/funding" || fundingDetailMatch) {
     return withAuth(
-      <SovereignTreasuryScreen initialView="funding" navigate={navigate} session={session} />,
+      <SovereignTreasuryScreen
+        initialFundingInstructionId={fundingDetailMatch ? decodeURIComponent(fundingDetailMatch[1]!) : undefined}
+        initialView="funding"
+        navigate={navigate}
+        onLogout={onLogout}
+        session={session}
+      />,
       loading,
       navigate,
       session
