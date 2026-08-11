@@ -9,6 +9,11 @@ test("route metadata keeps /webhooks/circle public for HEAD and POST", () => {
   assert.equal(routeMetadata("HEAD", "/webhooks/circle/").public, true);
 });
 
+test("route metadata keeps internal credential reset public", () => {
+  assert.equal(routeMetadata("POST", "/internal-access/forgot-credentials").public, true);
+  assert.equal(routeMetadata("POST", "/internal-access/forgot-credentials/").public, true);
+});
+
 test("HEAD /webhooks/circle returns 204 for endpoint validation", async () => {
   const state = createInitialState();
   const result = await handleApiRequest(state, {

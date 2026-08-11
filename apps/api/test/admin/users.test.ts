@@ -288,3 +288,77 @@ test("internal access initialization activates invited internal user and login r
     else process.env.GTT_BOOTSTRAP_TOKEN = previous;
   }
 });
+
+test("forgot credentials emails a fresh internal setup link without returning it", async () => {
+  const previousBootstrap = process.env.GTT_BOOTSTRAP_TOKEN;
+  const previousSupabaseUrl = process.env.SUPABASE_URL;
+  const previousInternalOperationBaseUrl = process.env.INTERNAL_OPERATION_BASE_URL;
+  process.env.GTT_BOOTSTRAP_TOKEN = "test-bootstrap-token";
+  process.env.INTERNAL_OPERATION_BASE_URL = "http://localhost:5173/internal/access/init";
+  delete process.env.SUPABASE_URL;
+  try {
+    const state = createInitialState();
+    const bootstrap = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/admin/bootstrap/super-admin",
+      headers: { "x-bootstrap-token": "test-bootstrap-token" },
+      body: { email: "root@gtt.example" }
+    });
+    const initialToken = (bootstrap.body as { setupToken: string }).setupToken;
+    await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/internal-access/initialize",
+      body: {
+        email: "root@gtt.example",
+        setupToken: initialToken,
+        password: "SecureRoot!2026"
+      }
+    });
+
+    const originalResetHash = state.internalAccessSecrets.find((item) => item.email === "root@gtt.example")?.setupTokenHash;
+    const reset = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/internal-access/forgot-credentials/",
+      body: { email: "root@gtt.example" }
+    });
+    const updatedResetHash = state.internalAccessSecrets.find((item) => item.email === "root@gtt.example")?.setupTokenHash;
+
+    assert.equal(reset.status, 200);
+    assert.notEqual(updatedResetHash, originalResetHash);
+    assert.notEqual(updatedResetHash, initialToken);
+    assert.equal((reset.body as { emailDelivery: { status: string } }).emailDelivery.status, "dev_email_not_configured");
+    assert.equal((reset.body as { emailDelivery: { redirectPath?: string } }).emailDelivery.redirectPath, "/internal/access/init");
+    assert.equal((reset.body as { setupToken?: string }).setupToken, undefined);
+    assert.equal((reset.body as { initializationUrl?: string }).initializationUrl, undefined);
+    assert.equal((reset.body as { emailDelivery: { initializationUrl?: string } }).emailDelivery.initializationUrl, undefined);
+  } finally {
+    if (previousBootstrap === undefined) delete process.env.GTT_BOOTSTRAP_TOKEN;
+    else process.env.GTT_BOOTSTRAP_TOKEN = previousBootstrap;
+    if (previousSupabaseUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = previousSupabaseUrl;
+    if (previousInternalOperationBaseUrl === undefined) delete process.env.INTERNAL_OPERATION_BASE_URL;
+    else process.env.INTERNAL_OPERATION_BASE_URL = previousInternalOperationBaseUrl;
+  }
+});
+
+test("forgot credentials rejects business reset URL for internal users", async () => {
+  const previousInternalOperationBaseUrl = process.env.INTERNAL_OPERATION_BASE_URL;
+  process.env.INTERNAL_OPERATION_BASE_URL = "http://localhost:5173/auth/set-password";
+  try {
+    const state = createInitialState();
+    const result = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/internal-access/forgot-credentials",
+      body: { email: "admin@gtt.example" }
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal((result.body as { emailDelivery: { sent: boolean; status: string } }).emailDelivery.sent, false);
+    assert.equal((result.body as { emailDelivery: { status: string } }).emailDelivery.status, "internal_operation_base_url_invalid");
+    assert.equal((result.body as { setupToken?: string }).setupToken, undefined);
+    assert.equal((result.body as { initializationUrl?: string }).initializationUrl, undefined);
+  } finally {
+    if (previousInternalOperationBaseUrl === undefined) delete process.env.INTERNAL_OPERATION_BASE_URL;
+    else process.env.INTERNAL_OPERATION_BASE_URL = previousInternalOperationBaseUrl;
+  }
+});

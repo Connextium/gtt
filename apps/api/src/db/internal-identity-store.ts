@@ -14,6 +14,7 @@ const roleIds: Record<RoleCode, string> = {
 const identityPaths = new Set([
   "/admin/bootstrap/super-admin",
   "/admin/users/invitations",
+  "/internal-access/forgot-credentials",
   "/internal-access/initialize"
 ]);
 

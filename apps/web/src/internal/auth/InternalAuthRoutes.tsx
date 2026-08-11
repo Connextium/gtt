@@ -1,6 +1,7 @@
 import { ArrowRight, CheckCircle2, Circle, Eye, HelpCircle, Lock, ShieldAlert } from "lucide-react";
 import type { FormEvent } from "react";
 import { useState } from "react";
+import adaOfficeInhouseImageUrl from "../../assets-ada/office-inhouse.jpg";
 import internalHouseImageUrl from "../../assets-internal/internal-house.jpg";
 import {
   canAccessOperations,
@@ -10,6 +11,9 @@ import {
 } from "../../identity.js";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const internalLoginImageUrl = window.location.hostname.startsWith("ada-")
+  ? adaOfficeInhouseImageUrl
+  : internalHouseImageUrl;
 
 interface InternalAuthResponse {
   user?: {
@@ -22,6 +26,14 @@ interface InternalAuthResponse {
     status: AppUser["status"];
   };
   redirectTo?: string;
+  accepted?: boolean;
+  emailDelivery?: {
+    sent?: boolean;
+    status?: string;
+    detail?: string;
+    redirectOrigin?: string;
+    redirectPath?: string;
+  };
   error?: string;
 }
 
@@ -47,15 +59,28 @@ const internalLanding = (_user: AppUser, redirectTo?: string): string => {
   return redirectTo;
 };
 
+const credentialResetNotice = (response: InternalAuthResponse): string => {
+  const redirectTarget = response.emailDelivery?.redirectPath
+    ? ` Redirect target: ${response.emailDelivery.redirectOrigin ?? ""}${response.emailDelivery.redirectPath}.`
+    : "";
+  if (response.emailDelivery?.sent === false && response.emailDelivery.status !== "not_disclosed") {
+    return `Reset request accepted, but email was not sent (${response.emailDelivery.status ?? "delivery_failed"}).${redirectTarget} Contact an administrator.`;
+  }
+  return `If this internal user exists, a reset link has been sent.${redirectTarget}`;
+};
+
 export const InternalOperationGateway = ({ onLogin }: { onLogin: (redirectTo: string, user: AppUser) => void }) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [resetting, setResetting] = useState(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
+    setNotice("");
     try {
       const response = await fetch(`${apiBaseUrl}/internal-access/login`, {
         method: "POST",
@@ -80,6 +105,34 @@ export const InternalOperationGateway = ({ onLogin }: { onLogin: (redirectTo: st
         return;
       }
       onLogin(internalLanding(localUser), localUser);
+    }
+  };
+
+  const forgotCredentials = async () => {
+    const normalizedEmail = email.trim().toLowerCase();
+    setError("");
+    setNotice("");
+    if (!normalizedEmail) {
+      setError("Enter your administrator email first.");
+      return;
+    }
+    setResetting(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/internal-access/forgot-credentials`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail })
+      });
+      const body = await response.json() as InternalAuthResponse;
+      if (!response.ok) {
+        setError(body.error ?? "Credential reset request failed.");
+        return;
+      }
+      setNotice(credentialResetNotice(body));
+    } catch {
+      setError("Credential reset request failed.");
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -116,7 +169,9 @@ export const InternalOperationGateway = ({ onLogin }: { onLogin: (redirectTo: st
               <label htmlFor="password">
                 <span className="internal-label-row">
                   <span>Security Token / Password</span>
-                  <button className="internal-text-command" type="button">Forgot Credentials?</button>
+                  <button className="internal-text-command" disabled={resetting} onClick={() => void forgotCredentials()} type="button">
+                    {resetting ? "Sending..." : "Forgot Credentials?"}
+                  </button>
                 </span>
                 <div className="internal-password-field">
                   <input
@@ -135,6 +190,7 @@ export const InternalOperationGateway = ({ onLogin }: { onLogin: (redirectTo: st
               </label>
 
               {error && <div className="form-error">{error}</div>}
+              {notice && <div className="form-notice">{notice}</div>}
 
               <button className="internal-primary-command" type="submit">
                 Sign in to console
@@ -322,7 +378,7 @@ const RequirementLine = ({ met, label }: { met: boolean; label: string }) => (
 
 const InternalLoginVisual = () => (
   <aside className="internal-visual-panel internal-login-visual">
-    <img alt="" src={internalHouseImageUrl} />
+    <img alt="" src={internalLoginImageUrl} />
     <div className="internal-visual-overlay" />
     <div className="internal-status-stack">
       <span className="internal-terminal-ready">Terminal status: ready</span>

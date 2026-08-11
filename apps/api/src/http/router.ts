@@ -49,16 +49,16 @@ export interface RouteInput {
 }
 
 export const routeMetadata = (method: string, pathname: string): { public?: boolean; requiredScopes?: ApiScope[] } => {
-  const normalizedWebhookPath = pathname.replace(/\/+$/, "");
-  if (method === "GET" && ["/health", "/manifest", "/version", "/readiness"].includes(pathname)) return { public: true };
-  if (["POST", "HEAD"].includes(method) && (normalizedWebhookPath === "/webhooks/circle" || normalizedWebhookPath === "/webhooks/circle/onboarding")) return { public: true };
-  if (method === "POST" && pathname === "/auth/invitations") return { public: true };
-  if (method === "GET" && pathname === "/auth/me") return { public: true };
-  if (method === "POST" && pathname === "/admin/bootstrap/super-admin") return { public: true };
-  if (method === "POST" && ["/internal-access/initialize", "/internal-access/login"].includes(pathname)) return { public: true };
-  if (pathname === "/onboarding/me" || pathname.startsWith("/onboarding/me/")) return { public: true };
-  if (pathname.startsWith("/business/me/accounts-of-digital-asset/")) return { public: true };
-  if (pathname === "/business/me/funding-instructions" || pathname.startsWith("/business/me/funding-instructions/")) return { public: true };
+  const normalizedPathname = pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
+  if (method === "GET" && ["/health", "/manifest", "/version", "/readiness"].includes(normalizedPathname)) return { public: true };
+  if (["POST", "HEAD"].includes(method) && (normalizedPathname === "/webhooks/circle" || normalizedPathname === "/webhooks/circle/onboarding")) return { public: true };
+  if (method === "POST" && normalizedPathname === "/auth/invitations") return { public: true };
+  if (method === "GET" && normalizedPathname === "/auth/me") return { public: true };
+  if (method === "POST" && normalizedPathname === "/admin/bootstrap/super-admin") return { public: true };
+  if (method === "POST" && ["/internal-access/initialize", "/internal-access/login", "/internal-access/forgot-credentials"].includes(normalizedPathname)) return { public: true };
+  if (normalizedPathname === "/onboarding/me" || normalizedPathname.startsWith("/onboarding/me/")) return { public: true };
+  if (normalizedPathname.startsWith("/business/me/accounts-of-digital-asset/")) return { public: true };
+  if (normalizedPathname === "/business/me/funding-instructions" || normalizedPathname.startsWith("/business/me/funding-instructions/")) return { public: true };
   if (pathname.startsWith("/api-keys")) return { requiredScopes: ["admin:api-keys"] };
   if (pathname.startsWith("/integrations/circle")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["admin:api-keys"] };
   if (pathname.startsWith("/tenants")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["admin:users"] };
@@ -83,9 +83,9 @@ export const routeMetadata = (method: string, pathname: string): { public?: bool
 
 export const handleApiRequest = async (state: ApiState, input: RouteInput): Promise<JsonResponse> => {
   const { method, pathname, body = {} } = input;
-  const normalizedWebhookPath = pathname.replace(/\/+$/, "");
+  const normalizedPathname = pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
 
-  if (method === "HEAD" && (normalizedWebhookPath === "/webhooks/circle" || normalizedWebhookPath === "/webhooks/circle/onboarding")) {
+  if (method === "HEAD" && (normalizedPathname === "/webhooks/circle" || normalizedPathname === "/webhooks/circle/onboarding")) {
     return {
       status: 204,
       body: {
@@ -285,22 +285,25 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
     };
   }
 
-  if (method === "POST" && pathname === "/auth/invitations") {
+  if (method === "POST" && normalizedPathname === "/auth/invitations") {
     return handleSelfRegistrationInvitation(state, {
       email: body.email,
       headers: input.headers
     });
   }
-  if (method === "POST" && pathname === "/admin/bootstrap/super-admin") {
+  if (method === "POST" && normalizedPathname === "/admin/bootstrap/super-admin") {
     return handleBootstrapSuperAdmin(state, body, input.headers ?? {});
   }
-  if (method === "POST" && pathname === "/internal-access/initialize") {
+  if (method === "POST" && normalizedPathname === "/internal-access/initialize") {
     return handleInternalAccessInitialize(state, body);
   }
-  if (method === "POST" && pathname === "/internal-access/login") {
+  if (method === "POST" && normalizedPathname === "/internal-access/forgot-credentials") {
+    return await handleInternalAccessForgotCredentials(state, body);
+  }
+  if (method === "POST" && normalizedPathname === "/internal-access/login") {
     return handleInternalAccessLogin(state, body);
   }
-  if (method === "GET" && pathname === "/auth/me") {
+  if (method === "GET" && normalizedPathname === "/auth/me") {
     return handleAuthMe(state, input.headers ?? {});
   }
   if (method === "GET" && pathname === "/onboarding/me") {
@@ -1443,6 +1446,22 @@ const persistentTenantId = (state: ApiState): string => {
   return process.env.GTT_PLATFORM_TENANT_ID ?? "00000000-0000-4000-8000-000000000001";
 };
 
+const internalCredentialResetBaseUrl = (): { baseUrl?: string; error?: string } => {
+  const configured = process.env.INTERNAL_OPERATION_BASE_URL?.trim();
+  if (!configured) return { error: "internal_operation_base_url_required" };
+  if (configured.includes("/auth/set-password")) return { error: "internal_operation_base_url_invalid" };
+  try {
+    const url = new URL(configured);
+    if (url.pathname === "/" || url.pathname === "") url.pathname = "/internal/access/init";
+    if (url.pathname !== "/internal/access/init") return { error: "internal_operation_base_url_invalid" };
+    url.search = "";
+    url.hash = "";
+    return { baseUrl: url.toString().replace(/\/$/, "") };
+  } catch {
+    return { error: "internal_operation_base_url_invalid" };
+  }
+};
+
 const sendInternalInvitationEmail = async (input: {
   email: string;
   displayName: string;
@@ -1504,6 +1523,78 @@ const sendInternalInvitationEmail = async (input: {
     provider: "supabase",
     status: "sent",
     supabaseUserId: data.user?.id
+  };
+};
+
+const emailDeliveryRedirectInfo = (initializationUrl: string): { redirectOrigin?: string; redirectPath?: string } => {
+  try {
+    const url = new URL(initializationUrl);
+    return {
+      redirectOrigin: url.origin,
+      redirectPath: url.pathname
+    };
+  } catch {
+    return {};
+  }
+};
+
+const sendInternalCredentialResetEmail = async (input: {
+  email: string;
+  initializationUrl: string;
+}): Promise<{ sent: boolean; provider: "supabase" | "dev"; status: string; detail?: string; initializationUrl?: string; redirectOrigin?: string; redirectPath?: string }> => {
+  const redirectInfo = emailDeliveryRedirectInfo(input.initializationUrl);
+  if (!process.env.SUPABASE_URL) {
+    return {
+      sent: false,
+      provider: "dev",
+      status: "dev_email_not_configured",
+      detail: "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to send credential reset email.",
+      initializationUrl: input.initializationUrl,
+      ...redirectInfo
+    };
+  }
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return {
+      sent: false,
+      provider: "supabase",
+      status: "supabase_service_role_key_required",
+      detail: "SUPABASE_SERVICE_ROLE_KEY is required to send credential reset email.",
+      initializationUrl: input.initializationUrl,
+      ...redirectInfo
+    };
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return {
+      sent: false,
+      provider: "dev",
+      status: "supabase_admin_not_configured",
+      initializationUrl: input.initializationUrl,
+      ...redirectInfo
+    };
+  }
+
+  const { error } = await supabase.auth.resetPasswordForEmail(input.email, {
+    redirectTo: input.initializationUrl
+  });
+
+  if (error) {
+    return {
+      sent: false,
+      provider: "supabase",
+      status: "supabase_recovery_email_failed",
+      detail: error.message,
+      initializationUrl: input.initializationUrl,
+      ...redirectInfo
+    };
+  }
+
+  return {
+    sent: true,
+    provider: "supabase",
+    status: "sent",
+    ...redirectInfo
   };
 };
 
@@ -1620,6 +1711,101 @@ const handleInternalAccessInitialize = (state: ApiState, body: Record<string, un
   }
   const roles = rolesForUser(state, user.id);
   return ok({ user: userWithRoles(state, user), redirectTo: defaultRedirect(roles, user.status) });
+};
+
+const handleInternalAccessForgotCredentials = async (state: ApiState, body: Record<string, unknown>): Promise<JsonResponse> => {
+  const email = stringBody(body, "email").trim().toLowerCase();
+  if (!email) return badRequest("email_required");
+
+  const now = new Date().toISOString();
+  const setupToken = randomBytes(32).toString("base64url");
+  const existingUser = state.appUsers.find((item) => item.email === email && item.userType === "internal_user");
+  const existingInvitation = state.internalUserInvitations
+    .filter((item) => item.email === email)
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())[0];
+  const userRoles = existingUser ? rolesForUser(state, existingUser.id).filter((role): role is Exclude<RoleCode, "business_user"> => role !== "business_user") : [];
+  const roleCode = existingInvitation?.roleCode ?? userRoles[0];
+
+  if ((!existingUser && !existingInvitation) || !roleCode) {
+    return ok({ accepted: true, emailDelivery: { sent: false, provider: "dev", status: "not_disclosed" } });
+  }
+
+  const resetBaseUrl = internalCredentialResetBaseUrl();
+  if (!resetBaseUrl.baseUrl) {
+    return ok({
+      accepted: true,
+      emailDelivery: {
+        sent: false,
+        provider: "dev",
+        status: resetBaseUrl.error,
+        detail: "INTERNAL_OPERATION_BASE_URL must resolve to /internal/access/init for internal credential reset email."
+      }
+    });
+  }
+
+  let invitation = existingInvitation;
+  if (!invitation) {
+    invitation = {
+      id: randomUUID(),
+      tenantId: existingUser?.tenantId ?? persistentTenantId(state),
+      email,
+      displayName: existingUser?.displayName ?? email,
+      roleCode,
+      status: "sent",
+      supabaseUserId: existingUser?.authUserId,
+      idempotencyKey: `forgot-credentials-${email}-${Date.now()}`,
+      invitedByUserId: "self-service",
+      invitedAt: now,
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
+      createdAt: now,
+      updatedAt: now
+    };
+    state.internalUserInvitations.push(invitation);
+  } else {
+    invitation.status = "sent";
+    invitation.invitedAt = now;
+    invitation.expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
+    invitation.updatedAt = now;
+    invitation.supabaseUserId = existingUser?.authUserId ?? invitation.supabaseUserId;
+  }
+
+  const secret = state.internalAccessSecrets.find((item) =>
+    (existingUser && item.userId === existingUser.id) ||
+    item.invitationId === invitation.id ||
+    item.email === email
+  );
+  if (secret) {
+    secret.userId = existingUser?.id ?? secret.userId;
+    secret.invitationId = invitation.id;
+    secret.email = email;
+    secret.setupTokenHash = hashSecret(setupToken);
+    secret.updatedAt = now;
+  } else {
+    state.internalAccessSecrets.push({
+      userId: existingUser?.id,
+      invitationId: invitation.id,
+      email,
+      setupTokenHash: hashSecret(setupToken),
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  const initializationUrl = `${resetBaseUrl.baseUrl}?email=${encodeURIComponent(email)}&token=${encodeURIComponent(setupToken)}`;
+  const emailDelivery = await sendInternalCredentialResetEmail({
+    email,
+    initializationUrl
+  });
+  emitAudit(state, {
+    eventType: emailDelivery.sent ? "internal_user.credentials_reset_email.sent" : "internal_user.credentials_reset_email.dev_queued",
+    requestPath: "/internal-access/forgot-credentials",
+    requestMethod: "POST",
+    correlationId: invitation.idempotencyKey
+  });
+
+  const publicEmailDelivery = { ...emailDelivery };
+  delete publicEmailDelivery.initializationUrl;
+  return ok({ accepted: true, emailDelivery: publicEmailDelivery });
 };
 
 const handleInternalAccessLogin = (state: ApiState, body: Record<string, unknown>): JsonResponse => {
