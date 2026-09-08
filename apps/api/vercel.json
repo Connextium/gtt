@@ -3,14 +3,14 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "functions": {
-    "api/index.mjs": {
+    "api/index.cjs": {
       "includeFiles": "**/*"
     }
   },
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/api/index.mjs"
+      "destination": "/api/index.cjs"
     }
   ]
 }
