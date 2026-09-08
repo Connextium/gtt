@@ -4,7 +4,6 @@
   "installCommand": "npm install",
   "functions": {
     "apps/api/api/index.mjs": {
-      "runtime": "nodejs20.x",
       "includeFiles": "**/*"
     }
   },
