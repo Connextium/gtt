@@ -2,14 +2,36 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { publicApiKey, type ApiScope } from "../auth/index.js";
 import { checkCircleHealth, circleEnvironment, circleWalletAccountType, initializeCircleWalletSet, initializeTenantCircleWallet, invokeCircle, provisionAdaCircleMapping, verifyCircleWebhook } from "../modules/circle/index.js";
 import {
+  handleBusinessAuthMe,
+  handleBusinessAuthRefresh,
+  handleBusinessAuthResetPassword,
+  handleBusinessAuthSignOut,
+  handleBusinessAuthSetPassword,
+  handleBusinessAuthSignIn,
+  handleAssignMyLinkedInstrumentToAda,
+  handleCreateMyAdaAccount,
+  handleCreateMyBusinessLinkedInstrument,
+  handleCreateMyLinkedInstrument,
+  handleCreateMyApiKey,
+  handleGetMyAdaAccount,
   handleGetMyAdaBalance,
   handleGetMyAdaStatement,
+  handleListMyBusinessLinkedInstruments,
+  handleListMyLinkedInstruments,
+  handleListMyAdaAccounts,
+  handleListMyApiKeys,
   handleGetOrCreateMyOnboarding,
+  handleRevokeMyApiKey,
+  handleRotateMyApiKey,
+  handleUpdateMyAdaAccount,
+  handleUpdateMyLinkedInstrument,
   handleRespondToMyOnboardingRfi,
   handleSaveMyOnboardingStep,
   handleSelfRegistrationInvitation,
-  handleSubmitMyOnboarding
+  handleSubmitMyOnboarding,
+  handleUpdateMyBusinessLinkedInstrument
 } from "../modules/client-onboarding/index.js";
+import { businessClientOpenApiSpec, gttServiceOpenApiSpec, openApiIndex, resolveOpenApiDocument } from "../openapi/specs.js";
 import { checkDatabaseConnection } from "../db/connection.js";
 import { listApiKeysFromState, listApiKeysFromTables } from "../db/api-key-store.js";
 import {
@@ -51,13 +73,24 @@ export interface RouteInput {
 export const routeMetadata = (method: string, pathname: string): { public?: boolean; requiredScopes?: ApiScope[] } => {
   const normalizedPathname = pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
   if (method === "GET" && ["/health", "/manifest", "/version", "/readiness"].includes(normalizedPathname)) return { public: true };
+  if (method === "GET" && (normalizedPathname === "/openapi" || normalizedPathname.startsWith("/openapi/"))) return { public: true };
   if (["POST", "HEAD"].includes(method) && (normalizedPathname === "/webhooks/circle" || normalizedPathname === "/webhooks/circle/onboarding")) return { public: true };
   if (method === "POST" && normalizedPathname === "/auth/invitations") return { public: true };
+  if (method === "POST" && normalizedPathname === "/auth/invitations/confirm") return { public: true };
   if (method === "GET" && normalizedPathname === "/auth/me") return { public: true };
+  if (method === "POST" && normalizedPathname === "/business/auth/sign-in") return { public: true };
+  if (method === "POST" && normalizedPathname === "/business/auth/set-password") return { public: true };
+  if (method === "POST" && normalizedPathname === "/business/auth/reset-password") return { public: true };
+  if (method === "POST" && normalizedPathname === "/business/auth/refresh") return { public: true };
+  if (method === "GET" && normalizedPathname === "/business/auth/me") return { public: true };
+  if (method === "POST" && normalizedPathname === "/business/auth/sign-out") return { public: true };
   if (method === "POST" && normalizedPathname === "/admin/bootstrap/super-admin") return { public: true };
   if (method === "POST" && ["/internal-access/initialize", "/internal-access/login", "/internal-access/forgot-credentials"].includes(normalizedPathname)) return { public: true };
   if (normalizedPathname === "/onboarding/me" || normalizedPathname.startsWith("/onboarding/me/")) return { public: true };
-  if (normalizedPathname.startsWith("/business/me/accounts-of-digital-asset/")) return { public: true };
+  if (normalizedPathname === "/business/accounts-of-digital-asset" || normalizedPathname.startsWith("/business/accounts-of-digital-asset/")) return { public: true };
+  if (normalizedPathname === "/business/linked-instruments" || normalizedPathname.startsWith("/business/linked-instruments/")) return { public: true };
+  if (normalizedPathname === "/business/me/accounts-of-digital-asset" || normalizedPathname.startsWith("/business/me/accounts-of-digital-asset/")) return { public: true };
+  if (normalizedPathname === "/business/api-keys" || normalizedPathname.startsWith("/business/api-keys/")) return { public: true };
   if (normalizedPathname === "/business/me/funding-instructions" || normalizedPathname.startsWith("/business/me/funding-instructions/")) return { public: true };
   if (pathname.startsWith("/api-keys")) return { requiredScopes: ["admin:api-keys"] };
   if (pathname.startsWith("/integrations/circle")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["admin:api-keys"] };
@@ -66,6 +99,7 @@ export const routeMetadata = (method: string, pathname: string): { public?: bool
   if (pathname.startsWith("/admin/users") || pathname === "/admin/roles") return { requiredScopes: ["admin:users"] };
   if (pathname.startsWith("/internal/treasury/settlement-advance")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:obligations"] };
   if (pathname.startsWith("/internal/treasury/tenant-disbursements")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:payments"] };
+  if (pathname.startsWith("/internal/operations/accounts-of-digital-asset")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:accounts"] };
   if (pathname.startsWith("/internal/operations/linked-wire-accounts")) return { requiredScopes: method === "GET" ? ["read:operations"] : ["write:accounts"] };
   if (/^\/funding-instructions\/[^/]+\/(assign-route|cancel)$/.test(pathname)) return { requiredScopes: ["write:payments"] };
   if (method === "GET") return { requiredScopes: ["read:operations"] };
@@ -105,6 +139,19 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
       stateStore: stateStoreStatus,
       circleMode: process.env.CIRCLE_ENVIRONMENT ?? "simulator"
     });
+  }
+  if (method === "GET" && pathname === "/openapi") {
+    return ok(openApiIndex);
+  }
+  if (method === "GET" && pathname.startsWith("/openapi/")) {
+    const document = resolveOpenApiDocument(pathname);
+    if (document) return ok(document);
+  }
+  if (method === "GET" && pathname === "/openapi/business-client") {
+    return ok(businessClientOpenApiSpec);
+  }
+  if (method === "GET" && pathname === "/openapi/gtt-service") {
+    return ok(gttServiceOpenApiSpec);
   }
   if (method === "GET" && pathname === "/integrations/circle/health") {
     const circle = await checkCircleHealth({ probe: false });
@@ -291,6 +338,42 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
       headers: input.headers
     });
   }
+  if (method === "POST" && normalizedPathname === "/auth/invitations/confirm") {
+    return handleBusinessAuthSetPassword({
+      headers: input.headers ?? {},
+      token: body.token,
+      password: body.password
+    });
+  }
+  if (method === "POST" && normalizedPathname === "/business/auth/sign-in") {
+    return handleBusinessAuthSignIn({
+      email: body.email,
+      password: body.password
+    });
+  }
+  if (method === "POST" && normalizedPathname === "/business/auth/set-password") {
+    return handleBusinessAuthSetPassword({
+      headers: input.headers ?? {},
+      token: body.token,
+      password: body.password
+    });
+  }
+  if (method === "POST" && normalizedPathname === "/business/auth/reset-password") {
+    return handleBusinessAuthResetPassword({
+      email: body.email
+    });
+  }
+  if (method === "POST" && normalizedPathname === "/business/auth/refresh") {
+    return handleBusinessAuthRefresh({
+      refreshToken: body.refreshToken
+    });
+  }
+  if (method === "GET" && normalizedPathname === "/business/auth/me") {
+    return handleBusinessAuthMe(input.headers ?? {});
+  }
+  if (method === "POST" && normalizedPathname === "/business/auth/sign-out") {
+    return handleBusinessAuthSignOut(input.headers ?? {});
+  }
   if (method === "POST" && normalizedPathname === "/admin/bootstrap/super-admin") {
     return handleBootstrapSuperAdmin(state, body, input.headers ?? {});
   }
@@ -310,8 +393,153 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
     return handleGetOrCreateMyOnboarding(state, input.headers ?? {});
   }
   const businessAdaBalanceMatch = pathname.match(/^\/business\/me\/accounts-of-digital-asset\/([^/]+)\/balances$/);
+  const businessAdaAccountMatch = pathname.match(/^\/business\/accounts-of-digital-asset\/([^/]+)$/);
+  const businessAdaLinkedInstrumentsMatch = pathname.match(/^\/business\/accounts-of-digital-asset\/([^/]+)\/linked-instruments$/);
+  const businessAdaLinkedInstrumentPatchMatch = pathname.match(/^\/business\/accounts-of-digital-asset\/([^/]+)\/linked-instruments\/([^/]+)$/);
+  const businessLinkedInstrumentPatchMatch = pathname.match(/^\/business\/linked-instruments\/([^/]+)$/);
+  const businessLinkedInstrumentAssignMatch = pathname.match(/^\/business\/linked-instruments\/([^/]+)\/assign-ada$/);
+  const businessApiKeyLifecycleMatch = pathname.match(/^\/business\/api-keys\/([^/]+)\/(revoke|rotate)$/);
+  const pendingApprovalQueuePath = "/internal/operations/accounts-of-digital-asset/pending-approval";
+  const internalApprovalActionMatch = pathname.match(/^\/internal\/operations\/accounts-of-digital-asset\/([^/]+)\/(approve|reject)$/);
+  if (method === "GET" && pathname === "/business/accounts-of-digital-asset") {
+    return handleListMyAdaAccounts(state, input.headers ?? {});
+  }
+  if (method === "GET" && businessAdaAccountMatch) {
+    return handleGetMyAdaAccount(state, input.headers ?? {}, decodeURIComponent(businessAdaAccountMatch[1]!));
+  }
+  if (method === "PATCH" && businessAdaAccountMatch) {
+    return handleUpdateMyAdaAccount(state, {
+      accountId: decodeURIComponent(businessAdaAccountMatch[1]!),
+      headers: input.headers ?? {},
+      payload: body
+    });
+  }
+  if (method === "POST" && pathname === "/business/accounts-of-digital-asset") {
+    return handleCreateMyAdaAccount(state, {
+      headers: input.headers ?? {},
+      payload: body
+    });
+  }
+  if (method === "GET" && pathname === "/business/linked-instruments") {
+    return handleListMyBusinessLinkedInstruments(state, input.headers ?? {});
+  }
+  if (method === "POST" && pathname === "/business/linked-instruments") {
+    return handleCreateMyBusinessLinkedInstrument(state, {
+      headers: input.headers ?? {},
+      payload: body
+    });
+  }
+  if (method === "PATCH" && businessLinkedInstrumentPatchMatch) {
+    return handleUpdateMyBusinessLinkedInstrument(state, {
+      linkedInstrumentId: decodeURIComponent(businessLinkedInstrumentPatchMatch[1]!),
+      headers: input.headers ?? {},
+      payload: body
+    });
+  }
+  if (method === "PATCH" && businessLinkedInstrumentAssignMatch) {
+    return handleAssignMyLinkedInstrumentToAda(state, {
+      linkedInstrumentId: decodeURIComponent(businessLinkedInstrumentAssignMatch[1]!),
+      headers: input.headers ?? {},
+      payload: body
+    });
+  }
+  if (method === "GET" && businessAdaLinkedInstrumentsMatch) {
+    return handleListMyLinkedInstruments(
+      state,
+      input.headers ?? {},
+      decodeURIComponent(businessAdaLinkedInstrumentsMatch[1]!)
+    );
+  }
+  if (method === "POST" && businessAdaLinkedInstrumentsMatch) {
+    return handleCreateMyLinkedInstrument(state, {
+      accountId: decodeURIComponent(businessAdaLinkedInstrumentsMatch[1]!),
+      headers: input.headers ?? {},
+      payload: body
+    });
+  }
+  if (method === "PATCH" && businessAdaLinkedInstrumentPatchMatch) {
+    return handleUpdateMyLinkedInstrument(state, {
+      accountId: decodeURIComponent(businessAdaLinkedInstrumentPatchMatch[1]!),
+      linkedInstrumentId: decodeURIComponent(businessAdaLinkedInstrumentPatchMatch[2]!),
+      headers: input.headers ?? {},
+      payload: body
+    });
+  }
+  if (method === "GET" && pathname === "/business/api-keys") {
+    return handleListMyApiKeys(state, input.headers ?? {});
+  }
+  if (method === "POST" && pathname === "/business/api-keys") {
+    return handleCreateMyApiKey(state, {
+      headers: input.headers ?? {},
+      payload: body
+    });
+  }
+  if (method === "POST" && businessApiKeyLifecycleMatch) {
+    const apiKeyId = decodeURIComponent(businessApiKeyLifecycleMatch[1]!);
+    const action = businessApiKeyLifecycleMatch[2]!;
+    if (action === "revoke") {
+      return handleRevokeMyApiKey(state, {
+        headers: input.headers ?? {},
+        apiKeyId
+      });
+    }
+    return handleRotateMyApiKey(state, {
+      headers: input.headers ?? {},
+      apiKeyId,
+      payload: body
+    });
+  }
+  if (method === "GET" && pathname === pendingApprovalQueuePath) {
+    const list = await handleApiRequest(state, {
+      method: "GET",
+      pathname: "/accounts-of-digital-asset",
+      headers: input.headers,
+      query: input.query
+    });
+    if (list.status !== 200) return list;
+    const accounts = (((list.body as { accounts?: unknown }).accounts ?? []) as Array<Record<string, unknown>>)
+      .filter((item) => String(item.status ?? "") === "pending_activation")
+      .map((item) => ({
+        ...item,
+        approvalStatus: "pending",
+        activationDecision: "approval_required",
+        activationReasonCode: "linked_instrument_requires_internal_approval"
+      }));
+    return { status: 200, body: { accounts } };
+  }
+  if (method === "POST" && internalApprovalActionMatch) {
+    const accountId = decodeURIComponent(internalApprovalActionMatch[1]!);
+    const action = internalApprovalActionMatch[2]!;
+    const reasonCode = optionalStringBody(body, "reasonCode") ?? optionalStringBody(body, "reason");
+    const reasonNote = optionalStringBody(body, "reasonNote") ?? optionalStringBody(body, "note");
+    if (!reasonCode) return badRequest("reason_code_required");
+    if (!reasonNote) return badRequest("reason_note_required");
+
+    const account = state.accounts.find((item) => item.id === accountId);
+    if (!account) return { status: 404, body: { error: "account_not_found" } };
+    const nextStatus = action === "approve" ? "active" : "restricted";
+    const transitionError = validateAccountTransition(account.status, nextStatus);
+    if (transitionError) return badRequest(transitionError);
+    account.status = nextStatus;
+
+    return {
+      status: 200,
+      body: {
+        account,
+        approvalDecision: action === "approve" ? "approved" : "rejected",
+        reasonCode,
+        reasonNote
+      }
+    };
+  }
   if (method === "GET" && businessAdaBalanceMatch) {
     return handleGetMyAdaBalance(state, input.headers ?? {}, decodeURIComponent(businessAdaBalanceMatch[1]!));
+  }
+  if (method === "POST" && pathname === "/business/me/accounts-of-digital-asset") {
+    return handleCreateMyAdaAccount(state, {
+      headers: input.headers ?? {},
+      payload: body
+    });
   }
   const businessAdaStatementMatch = pathname.match(/^\/business\/me\/accounts-of-digital-asset\/([^/]+)\/statements$/);
   if (method === "GET" && businessAdaStatementMatch) {

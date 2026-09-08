@@ -1,0 +1,579 @@
+.route-bindings-scope {
+  --rb-surface: #f9f9f9;
+  --rb-canvas-soft: #f5f5f5;
+  --rb-surface-bright: #ffffff;
+  --rb-primary: #000000;
+  --rb-on-primary: #ffffff;
+  --rb-secondary: #5e5e5e;
+  --rb-hairline: #e0e0e0;
+  --rb-link: #057dbc;
+  --rb-surface-variant: #e2e2e2;
+  background: var(--rb-surface);
+  color: var(--rb-primary);
+  display: flex;
+  flex-direction: column;
+  font-family: "Libre Franklin", Arial, sans-serif;
+  letter-spacing: 0;
+  min-height: calc(100vh - 164px);
+}
+
+.route-bindings-scope *,
+.route-bindings-scope *::before,
+.route-bindings-scope *::after {
+  border-radius: 0;
+  box-sizing: border-box;
+}
+
+.route-bindings-main {
+  flex: 1;
+  margin: 0 auto;
+  max-width: 1400px;
+  padding: 28px 40px;
+  width: 100%;
+}
+
+.route-bindings-hero {
+  margin-bottom: 28px;
+  max-width: 760px;
+}
+
+.route-bindings-hero h1 {
+  color: var(--rb-primary);
+  font-family: "Libre Caslon Text", Georgia, serif;
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 1.05;
+  margin: 0 0 8px;
+}
+
+.route-bindings-hero p {
+  color: var(--rb-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.route-bindings-feedback {
+  border: 1px solid var(--rb-hairline);
+  font-size: 12px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+}
+
+.route-bindings-feedback.error {
+  background: #fff2f2;
+  border-color: #f1cdcd;
+  color: #8f1f1f;
+}
+
+.route-bindings-feedback.success {
+  background: #f1f8ee;
+  border-color: #cddfc4;
+  color: #215d2f;
+}
+
+.route-bindings-grid {
+  align-items: flex-start;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+}
+
+.route-bindings-registry,
+.route-bindings-form {
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-hairline);
+}
+
+.route-bindings-registry {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.route-bindings-registry > header,
+.route-bindings-form > header {
+  background: var(--rb-canvas-soft);
+  border-bottom: 1px solid var(--rb-hairline);
+  padding: 14px 16px;
+}
+
+.route-bindings-registry > header {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.route-bindings-registry h2,
+.route-bindings-form h2 {
+  color: var(--rb-primary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.route-bindings-controls {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.route-bindings-controls label {
+  align-items: center;
+  display: flex;
+  position: relative;
+}
+
+.route-bindings-controls svg {
+  color: var(--rb-secondary);
+  left: 6px;
+  position: absolute;
+}
+
+.route-bindings-controls input {
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-hairline);
+  color: var(--rb-primary);
+  font-size: 12px;
+  height: 32px;
+  outline: none;
+  padding: 6px 8px 6px 26px;
+  width: 260px;
+}
+
+.route-bindings-controls input:focus {
+  border-color: var(--rb-primary);
+}
+
+.route-bindings-controls button,
+.route-bindings-registry footer button {
+  align-items: center;
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-hairline);
+  color: var(--rb-primary);
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  padding: 7px;
+}
+
+.route-bindings-controls button:hover,
+.route-bindings-registry footer button:hover:not(:disabled) {
+  border-color: var(--rb-primary);
+}
+
+.route-bindings-table-wrap {
+  overflow-x: auto;
+}
+
+.route-bindings-registry table {
+  border-collapse: collapse;
+  min-width: 720px;
+  text-align: left;
+  width: 100%;
+}
+
+.route-bindings-registry thead tr {
+  background: var(--rb-surface-bright);
+  border-bottom: 1px solid var(--rb-hairline);
+}
+
+.route-bindings-registry th {
+  color: var(--rb-secondary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  padding: 12px 14px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.route-bindings-registry tbody {
+  font-size: 12px;
+}
+
+.route-bindings-registry tbody tr {
+  border-bottom: 1px solid var(--rb-hairline);
+  transition: background 120ms ease;
+}
+
+.route-bindings-registry tbody tr:hover {
+  background: var(--rb-canvas-soft);
+}
+
+.route-bindings-registry tbody tr.selected,
+.route-bindings-registry tbody tr.selected:hover {
+  background: #e9f4fb;
+}
+
+.route-bindings-registry tbody tr.inactive {
+  opacity: 0.6;
+}
+
+.route-bindings-empty {
+  color: var(--rb-secondary);
+  font-size: 12px;
+  padding: 22px 14px;
+  text-align: center;
+}
+
+.route-bindings-registry td {
+  color: var(--rb-secondary);
+  padding: 14px;
+  vertical-align: middle;
+}
+
+.route-bindings-registry td.strong {
+  color: var(--rb-primary);
+  font-weight: 800;
+}
+
+.route-bindings-registry td.mono {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.route-bindings-registry td.small {
+  font-size: 11px;
+}
+
+.route-bindings-registry td.linkish {
+  color: var(--rb-primary);
+}
+
+.route-bindings-registry tbody tr:hover td.linkish {
+  color: var(--rb-link);
+}
+
+.route-bindings-registry .right {
+  text-align: right;
+}
+
+.route-bindings-registry .center {
+  text-align: center;
+}
+
+.route-bindings-registry td span {
+  border: 1px solid var(--rb-hairline);
+  color: var(--rb-secondary);
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  padding: 3px 6px;
+}
+
+.route-bindings-registry td span.active {
+  background: var(--rb-primary);
+  border-color: var(--rb-primary);
+  color: var(--rb-on-primary);
+}
+
+.route-bindings-registry > footer {
+  align-items: center;
+  background: var(--rb-surface);
+  border-top: 1px solid var(--rb-hairline);
+  display: flex;
+  justify-content: space-between;
+  margin-top: auto;
+  padding: 14px 16px;
+}
+
+.route-bindings-registry > footer > span {
+  color: var(--rb-secondary);
+  font-size: 12px;
+}
+
+.route-bindings-registry footer div {
+  display: flex;
+  gap: 8px;
+}
+
+.route-bindings-registry footer button {
+  height: 32px;
+  width: 32px;
+}
+
+.route-bindings-registry footer button:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.route-bindings-form {
+  position: sticky;
+  top: 24px;
+}
+
+.route-bindings-form form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+}
+
+.route-bindings-field,
+.route-bindings-scope-box label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.route-bindings-field > span,
+.route-bindings-toggle-row > span {
+  color: var(--rb-primary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.route-bindings-field small {
+  color: var(--rb-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.route-bindings-select {
+  position: relative;
+}
+
+.route-bindings-select select,
+.route-bindings-field input,
+.route-bindings-scope-box input {
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-hairline);
+  color: var(--rb-primary);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  padding: 10px;
+  width: 100%;
+}
+
+.route-bindings-field input,
+.route-bindings-scope-box input {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.route-bindings-select select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 28px;
+}
+
+.route-bindings-select svg {
+  color: var(--rb-secondary);
+  pointer-events: none;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.route-bindings-select select:focus,
+.route-bindings-field input:focus,
+.route-bindings-scope-box input:focus {
+  border-color: var(--rb-primary);
+  box-shadow: 0 0 0 1px var(--rb-primary);
+}
+
+.route-bindings-scope-box {
+  background: var(--rb-canvas-soft);
+  border: 1px solid var(--rb-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.route-bindings-scope-box > div {
+  align-items: center;
+  color: var(--rb-secondary);
+  display: flex;
+  gap: 8px;
+}
+
+.route-bindings-scope-box > div span,
+.route-bindings-scope-box label span {
+  color: var(--rb-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.route-bindings-toggle-row {
+  align-items: center;
+  border-top: 1px solid var(--rb-hairline);
+  display: flex;
+  justify-content: space-between;
+  padding-top: 14px;
+}
+
+.route-bindings-toggle-row label {
+  cursor: pointer;
+  display: inline-flex;
+  position: relative;
+}
+
+.route-bindings-toggle-row input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.route-bindings-toggle-row i {
+  background: var(--rb-surface-variant);
+  border: 1px solid var(--rb-hairline);
+  display: block;
+  height: 14px;
+  position: relative;
+  transition: background 120ms ease;
+  width: 28px;
+}
+
+.route-bindings-toggle-row i::after {
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-hairline);
+  content: "";
+  height: 10px;
+  left: 1px;
+  position: absolute;
+  top: 1px;
+  transition: transform 120ms ease, border-color 120ms ease;
+  width: 10px;
+}
+
+.route-bindings-toggle-row input:checked + i {
+  background: var(--rb-primary);
+}
+
+.route-bindings-toggle-row input:checked + i::after {
+  border-color: var(--rb-surface);
+  transform: translateX(12px);
+}
+
+.route-bindings-submit {
+  background: var(--rb-primary);
+  border: 0;
+  color: var(--rb-on-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  padding: 12px;
+  text-transform: uppercase;
+  transition: background 120ms ease;
+  width: 100%;
+}
+
+.route-bindings-submit:hover {
+  background: var(--rb-secondary);
+}
+
+.route-bindings-submit:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.route-bindings-secondary {
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-hairline);
+  color: var(--rb-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  padding: 10px;
+  text-transform: uppercase;
+  width: 100%;
+}
+
+.route-bindings-secondary:hover {
+  border-color: var(--rb-primary);
+}
+
+.route-bindings-secondary.route-bindings-danger {
+  border-color: #8f1f1f;
+  color: #8f1f1f;
+}
+
+.route-bindings-secondary.route-bindings-danger:hover {
+  background: #fff2f2;
+  border-color: #8f1f1f;
+}
+
+.route-bindings-footer {
+  align-items: center;
+  background: var(--rb-surface);
+  border-top: 1px solid var(--rb-hairline);
+  display: flex;
+  font-size: 12px;
+  justify-content: space-between;
+  margin-top: auto;
+  padding: 18px 40px;
+}
+
+.route-bindings-footer strong {
+  color: var(--rb-primary);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.route-bindings-footer nav {
+  display: flex;
+  gap: 16px;
+}
+
+.route-bindings-footer a {
+  color: var(--rb-secondary);
+  text-decoration: none;
+}
+
+.route-bindings-footer a:hover {
+  color: var(--rb-primary);
+}
+
+@media (max-width: 1100px) {
+  .route-bindings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .route-bindings-form {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .route-bindings-main {
+    padding: 16px;
+  }
+
+  .route-bindings-hero h1 {
+    font-size: 32px;
+  }
+
+  .route-bindings-registry > header,
+  .route-bindings-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .route-bindings-controls,
+  .route-bindings-controls label,
+  .route-bindings-controls input,
+  .route-bindings-footer nav {
+    width: 100%;
+  }
+}

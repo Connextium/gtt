@@ -1,10 +1,9 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { ApiManagementContent } from "./api-management/ApiManagementContent.js";
 import { NewApiKeyContent } from "./api-management/NewApiKeyContent.js";
 import { InviteUser, OnboardingSuccess } from "./admin/AdminRoutes.js";
 import SaveUserManagement from "./admin/SaveUserManagement.js";
 import { InternalUsersContent } from "./admin/UserManagement.js";
-import { AdaManagementContent } from "./ada-management/AdaManagementContent.js";
 import { InternalAccessInitialization, InternalOperationGateway } from "./auth/InternalAuthRoutes.js";
 import { BusinessClientManagementContent } from "./business-clients/BusinessClientManagementContent.js";
 import { EvidenceMonitorContent } from "./evidence/EvidenceMonitorContent.js";
@@ -12,10 +11,17 @@ import { InternalShell } from "./InternalShell.js";
 import { LedgerJournalsContent } from "./ledger/LedgerJournalsContent.js";
 import { LedgerOperationsContent } from "./ledger/LedgerOperationsContent.js";
 import { LedgerRegistryContent } from "./ledger/LedgerRegistryContent.js";
+import { NettingWaterfallContent } from "./netting-waterfall/NettingWaterfallContent.js";
 import { InternalCommandCenterContent } from "./operations/InternalCommandCenterContent.js";
-import { InternalFundingInstructionContent } from "./operations/InternalFundingInstructionContent.js";
-import { InternalFundingInstructionOrderConsoleContent } from "./operations/InternalFundingInstructionOrderConsoleContent.js";
+import { ReconciliationSettlementContent } from "./reconciliation-settlement/ReconciliationSettlementContent.js";
+import { RouteBindingsContent } from "./route-bindings/RouteBindingsContent.js";
+import { RouteProfileEditContent } from "./route-profile/RouteProfileEditContent.js";
+import { RouteProfileContent } from "./route-profile/RouteProfileContent.js";
+import { SettlementAdvanceContent } from "./settlement-advance/SettlementAdvanceContent.js";
 import { TenantActivationContent } from "./tenant-activation/TenantActivationContent.js";
+import { TenantDisbursementsContent } from "./tenant-disbursements/TenantDisbursementsContent.js";
+import { TreasuryPoolContent } from "./treasury-pool/TreasuryPoolContent.js";
+import { AdaPendingApprovalQueueContent } from "./ada-approval/AdaPendingApprovalQueueContent.js";
 import type { AppUser, RoleCode, UserStatus } from "../identity.js";
 import { isTreasuryWorksRoute, TreasuryWorksContent } from "./treasury-works/TreasuryWorksApp.js";
 
@@ -33,6 +39,10 @@ const gttApiKey = import.meta.env.VITE_GTT_API_KEY ?? "gtt_live_api_key_dev.dev_
 const internalAccessBaseUrl = `${window.location.origin}/internal/access/init`;
 
 export const isInternalRoute = (path: string): boolean => path === "/internal" || path.startsWith("/internal/");
+
+const AdaManagementContent = lazy(() => import("./ada-management/AdaManagementContent.js").then((module) => ({ default: module.AdaManagementContent })));
+const InternalFundingInstructionContent = lazy(() => import("./operations/InternalFundingInstructionContent.js").then((module) => ({ default: module.InternalFundingInstructionContent })));
+const InternalFundingInstructionOrderConsoleContent = lazy(() => import("./operations/InternalFundingInstructionOrderConsoleContent.js").then((module) => ({ default: module.InternalFundingInstructionOrderConsoleContent })));
 
 export const InternalApp = ({
   navigate,
@@ -395,6 +405,90 @@ export const InternalApp = ({
           fundingInstructionId={fundingInstructionMatch?.[1] ? decodeURIComponent(fundingInstructionMatch[1]) : undefined}
           navigate={navigate}
         />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/route-profiles") {
+    return (
+      <InternalShell activePath="/internal/operations/route-profiles" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <RouteProfileContent mode="list" navigate={navigate} />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/route-profiles/create") {
+    return (
+      <InternalShell activePath="/internal/operations/route-profiles" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <RouteProfileContent mode="create" navigate={navigate} />
+      </InternalShell>
+    );
+  }
+
+  const routeProfileEditMatch = path.match(/^\/internal\/operations\/route-profiles\/([^/]+)\/edit$/);
+  if (routeProfileEditMatch) {
+    return (
+      <InternalShell activePath="/internal/operations/route-profiles" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <RouteProfileEditContent
+          navigate={navigate}
+          profileId={decodeURIComponent(routeProfileEditMatch[1])}
+        />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/route-bindings") {
+    return (
+      <InternalShell activePath="/internal/operations/route-bindings" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <RouteBindingsContent />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/tenant-disbursements") {
+    return (
+      <InternalShell activePath="/internal/operations/tenant-disbursements" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <TenantDisbursementsContent />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/settlement-advance") {
+    return (
+      <InternalShell activePath="/internal/operations/settlement-advance" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <SettlementAdvanceContent />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/treasury-pool") {
+    return (
+      <InternalShell activePath="/internal/operations/treasury-pool" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <TreasuryPoolContent />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/netting-waterfall") {
+    return (
+      <InternalShell activePath="/internal/operations/netting-waterfall" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <NettingWaterfallContent />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/reconciliation" || path.startsWith("/internal/operations/reconciliation/breaks/")) {
+    return (
+      <InternalShell activePath="/internal/operations/reconciliation" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <ReconciliationSettlementContent />
+      </InternalShell>
+    );
+  }
+
+  if (path === "/internal/operations/accounts-of-digital-asset/pending-approval") {
+    return (
+      <InternalShell activePath="/internal/operations/accounts-of-digital-asset/pending-approval" currentUser={currentInternalUser} navigate={navigate} onLogout={logoutInternalUser}>
+        <AdaPendingApprovalQueueContent />
       </InternalShell>
     );
   }

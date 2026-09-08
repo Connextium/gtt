@@ -1,0 +1,281 @@
+.ada-approval-scope {
+  --ada-approval-bg: #f4f4f2;
+  --ada-approval-surface: #fff;
+  --ada-approval-border: #d7d5d2;
+  --ada-approval-text: #1e1e1d;
+  --ada-approval-muted: #5d5b58;
+  --ada-approval-mono: "JetBrains Mono", Menlo, Monaco, monospace;
+  --ada-approval-sans: "Libre Franklin", "Segoe UI", sans-serif;
+  background: var(--ada-approval-bg);
+  color: var(--ada-approval-text);
+  min-height: 100%;
+  padding: 14px;
+}
+
+.ada-approval-content {
+  display: grid;
+  gap: 12px;
+}
+
+.ada-approval-heading {
+  border: 1px solid var(--ada-approval-border);
+  background: var(--ada-approval-surface);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+}
+
+.ada-approval-heading .kicker {
+  margin: 0;
+  color: var(--ada-approval-muted);
+  font-family: var(--ada-approval-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ada-approval-heading h1 {
+  margin: 6px 0;
+  font-size: 27px;
+}
+
+.ada-approval-heading p {
+  margin: 0;
+  color: var(--ada-approval-muted);
+}
+
+.ada-approval-heading > button {
+  min-height: 34px;
+  border: 1px solid #111;
+  background: #111;
+  color: #fff;
+  font-family: var(--ada-approval-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0 12px;
+}
+
+.ada-approval-filters {
+  border: 1px solid var(--ada-approval-border);
+  background: var(--ada-approval-surface);
+  padding: 12px;
+}
+
+.ada-approval-filters label {
+  display: grid;
+  gap: 6px;
+}
+
+.ada-approval-filters span {
+  color: var(--ada-approval-muted);
+  font-family: var(--ada-approval-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.ada-approval-filters input,
+.ada-approval-decision-card select,
+.ada-approval-decision-card textarea {
+  width: 100%;
+  border: 1px solid #222;
+  background: #fff;
+  color: #111;
+  font-family: var(--ada-approval-sans);
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+.ada-approval-error,
+.ada-approval-notice {
+  margin: 0;
+  border: 1px solid;
+  padding: 10px 12px;
+  font-family: var(--ada-approval-mono);
+  font-size: 11px;
+}
+
+.ada-approval-error {
+  border-color: #d19898;
+  background: #fff1f1;
+  color: #771f1f;
+}
+
+.ada-approval-notice {
+  border-color: #8fb6aa;
+  background: #edf8f5;
+  color: #174d40;
+}
+
+.ada-approval-layout {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1.4fr 1fr 1fr;
+}
+
+.ada-approval-queue-card,
+.ada-approval-decision-card,
+.ada-approval-history-card {
+  border: 1px solid var(--ada-approval-border);
+  background: var(--ada-approval-surface);
+  padding: 12px;
+}
+
+.ada-approval-table-wrap {
+  overflow: auto;
+}
+
+.ada-approval-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ada-approval-table-wrap th,
+.ada-approval-table-wrap td {
+  border-bottom: 1px solid var(--ada-approval-border);
+  text-align: left;
+  vertical-align: top;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.ada-approval-table-wrap th {
+  color: var(--ada-approval-muted);
+  font-family: var(--ada-approval-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.ada-approval-table-wrap tbody tr {
+  cursor: pointer;
+}
+
+.ada-approval-table-wrap tbody tr.selected {
+  background: #f8f4e8;
+}
+
+.ada-approval-table-wrap td strong {
+  display: block;
+}
+
+.ada-approval-table-wrap td span {
+  color: var(--ada-approval-muted);
+  font-size: 11px;
+}
+
+.ada-approval-table-wrap .status.pending {
+  border: 1px dashed #9d7a2b;
+  background: #fff9eb;
+  color: #755106;
+  display: inline-block;
+  padding: 3px 6px;
+}
+
+.ada-approval-decision-card h2,
+.ada-approval-history-card h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+
+.ada-approval-decision-card .summary {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+  margin: 0 0 12px;
+}
+
+.ada-approval-decision-card .summary div {
+  border: 1px solid var(--ada-approval-border);
+  padding: 7px;
+}
+
+.ada-approval-decision-card .summary dt {
+  color: var(--ada-approval-muted);
+  font-family: var(--ada-approval-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.ada-approval-decision-card .summary dd {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.ada-approval-decision-card .form-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.ada-approval-decision-card .form-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.ada-approval-decision-card .form-grid label.full {
+  grid-column: 1 / -1;
+}
+
+.ada-approval-decision-card .form-grid span {
+  color: var(--ada-approval-muted);
+  font-family: var(--ada-approval-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.ada-approval-decision-card .actions {
+  margin-top: 10px;
+}
+
+.ada-approval-decision-card .actions button {
+  min-height: 35px;
+  border: 1px solid #111;
+  background: #111;
+  color: #fff;
+  font-family: var(--ada-approval-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 14px;
+}
+
+.ada-approval-decision-card .actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ada-approval-history-card ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.ada-approval-history-card li {
+  border: 1px solid var(--ada-approval-border);
+  padding: 8px;
+}
+
+.ada-approval-history-card li strong {
+  font-family: var(--ada-approval-mono);
+  font-size: 11px;
+}
+
+.ada-approval-history-card li p {
+  margin: 4px 0;
+  font-size: 12px;
+}
+
+.ada-approval-history-card li small,
+.ada-approval-decision-card .empty,
+.ada-approval-history-card .empty {
+  color: var(--ada-approval-muted);
+}
+
+@media (max-width: 1080px) {
+  .ada-approval-layout {
+    grid-template-columns: 1fr;
+  }
+}

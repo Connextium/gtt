@@ -1,4 +1,6 @@
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createPlaintextApiKey, hashApiSecret } from "../../auth/index.js";
 import {
   emitOutbox,
   newId,
@@ -47,9 +49,139 @@ interface OnboardingAdaAccountView {
   };
 }
 
+interface BusinessApiKeyView {
+  createdAt: string;
+  id: string;
+  keyPrefix: string;
+  ownerAuthUserId: string;
+  ownerTenantId: string;
+  ownerBusinessClientId: string;
+  ownerBusinessClientName: string;
+  revokedAt?: string;
+  scopes: string[];
+  status: "active" | "revoked";
+}
+
+export interface AuthenticatedBusinessApiKey {
+  authUserId: string;
+  email: string;
+  keyId: string;
+  scopes: string[];
+}
+
+export interface BusinessJwtSession {
+  access_token: string;
+  token_type: string;
+  expires_in?: number;
+  expires_at?: number;
+  refresh_token?: string;
+  user: {
+    id: string;
+    email?: string;
+  };
+}
+
+interface BusinessAuthTokenClaims {
+  aud: "business-user";
+  email: string;
+  exp: number;
+  iat: number;
+  iss: "gtt-api";
+  jti: string;
+  sid: string;
+  sub: string;
+  token_use: "access" | "refresh";
+}
+
+interface BusinessSessionRecord {
+  accessJti: string;
+  authUserId: string;
+  email: string;
+  expiresAt: number;
+  refreshExpiresAt: number;
+  refreshJti: string;
+  sessionId: string;
+  supabaseAccessToken: string;
+  supabaseRefreshToken?: string;
+}
+
+interface SupabaseBusinessAuthClient {
+  getUser: (accessToken: string) => Promise<{
+    data: { user: { id?: string; email?: string | null } | null };
+    error: { message: string } | null;
+  }>;
+  inviteUserByEmail: (email: string, options: {
+    redirectTo: string;
+    data: Record<string, unknown>;
+  }) => Promise<{
+    data: { user?: { id?: string } | null };
+    error: { message: string } | null;
+  }>;
+  refreshSession: (refreshToken: string) => Promise<{
+    data: {
+      session: {
+        access_token?: string;
+        refresh_token?: string;
+        token_type?: string;
+        expires_in?: number;
+        expires_at?: number;
+        user?: { id?: string; email?: string | null };
+      } | null;
+    };
+    error: { message: string } | null;
+  }>;
+  resetPasswordForEmail: (email: string, options: { redirectTo: string }) => Promise<{ error: { message: string } | null }>;
+  signInWithPassword: (input: { email: string; password: string }) => Promise<{
+    data: {
+      session: {
+        access_token?: string;
+        refresh_token?: string;
+        token_type?: string;
+        expires_in?: number;
+        expires_at?: number;
+        user?: { id?: string; email?: string | null };
+      } | null;
+    };
+    error: { message: string } | null;
+  }>;
+  signOutSession: (accessToken: string) => Promise<{ error: { message: string; status?: number } | null }>;
+  updateUserById: (userId: string, input: { password: string; email_confirm: boolean }) => Promise<{ error: { message: string } | null }>;
+}
+
+type ActivationDecision = "auto" | "approval_required";
+
+interface ActivationView {
+  activationDecision: ActivationDecision;
+  activationReasonCode: string;
+}
+
 const rateLimitWindowMs = 60_000;
 const maxAttemptsPerWindow = 5;
 const invitationAttempts = new Map<string, { count: number; resetAt: number }>();
+const businessApiKeyAllowlist = [
+  "business.profile.read",
+  "onboarding.read",
+  "onboarding.write",
+  "ada.read",
+  "ada.open",
+  "payment-instruction.read",
+  "payment-instruction.create"
+] as const;
+const businessApiKeyRecords = new Map<string, Array<BusinessApiKeyView & { keyHash: string }>>();
+const businessAuthSessions = new Map<string, BusinessSessionRecord>();
+const businessAuthSessionIdByAccessJti = new Map<string, string>();
+const businessAuthSessionIdByRefreshJti = new Map<string, string>();
+let supabaseBusinessAuthClientForTest: SupabaseBusinessAuthClient | undefined;
+
+export const setSupabaseBusinessAuthClientForTest = (client: SupabaseBusinessAuthClient | undefined): void => {
+  supabaseBusinessAuthClientForTest = client;
+};
+
+export const resetBusinessAuthSessionsForTest = (): void => {
+  businessAuthSessions.clear();
+  businessAuthSessionIdByAccessJti.clear();
+  businessAuthSessionIdByRefreshJti.clear();
+};
 
 export const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
@@ -72,7 +204,7 @@ export const handleSelfRegistrationInvitation = async (
 
   const invitation = createOrReuseInvitation(state, email);
   await persistInvitation(invitation);
-  const supabase = supabaseAdminClient();
+  const supabase = supabaseAuthClient();
 
   if (!supabase) {
     if (process.env.ALLOW_DEV_WITHOUT_SUPABASE !== "true") {
@@ -99,7 +231,7 @@ export const handleSelfRegistrationInvitation = async (
     };
   }
 
-  const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
+  const { data, error } = await supabase.inviteUserByEmail(email, {
     redirectTo: inviteRedirectUrl(),
     data: {
       onboardingInvitationId: invitation.id,
@@ -353,6 +485,1203 @@ export const handleGetMyAdaStatement = async (
   };
 };
 
+export const handleListMyAdaAccounts = async (
+  state: ApiState,
+  headers: Record<string, string | undefined>
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const persisted = await hydrateBusinessUserOnboarding(state, auth);
+  const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
+  if (bundle.application.status !== "approved") return badRequest("business_client_not_approved");
+  const stepPayloads = await hydrateOnboardingStepPayloads(state, bundle.application);
+  const assets = await resolveOnboardingAssets(state, bundle.application, stepPayloads);
+  const runtimeClient = state.businessClients.find((item) =>
+    item.tenantId === bundle.application.tenantId && item.onboardingStatus === "approved"
+  );
+  const fallbackAccounts = runtimeClient
+    ? state.accounts
+      .filter((item) => item.tenantId === runtimeClient.tenantId && item.businessClientId === runtimeClient.id)
+      .map((account) => ({
+        id: account.id,
+        accountCode: buildAdaAccountCode(account.accountName, account.usePurpose, "USDC"),
+        accountName: account.accountName,
+        businessClientId: account.businessClientId,
+        businessClientName: runtimeClient.legalName,
+        status: account.status,
+        usePurpose: account.usePurpose,
+        assetCode: "USDC",
+        createdAt: account.createdAt,
+        balances: {
+          availableMinorUnits: "0",
+          pendingMinorUnits: "0",
+          reservedMinorUnits: "0",
+          lockedMinorUnits: "0",
+          suspenseMinorUnits: "0"
+        }
+      }))
+    : [];
+  const sourceAccounts = assets.adaAccounts.length ? assets.adaAccounts : fallbackAccounts;
+  const accounts = sourceAccounts.map((account) => ({
+    ...account,
+    ...activationViewFromAccountStatus(account.status)
+  }));
+  return { status: 200, body: { accounts } };
+};
+
+export const handleGetMyAdaAccount = async (
+  state: ApiState,
+  headers: Record<string, string | undefined>,
+  accountId: string
+): Promise<JsonResponse> => {
+  const list = await handleListMyAdaAccounts(state, headers);
+  if (list.status !== 200) return list;
+  const accounts = ((list.body as { accounts?: unknown }).accounts ?? []) as Array<OnboardingAdaAccountView & ActivationView>;
+  const account = accounts.find((item) => item.id === accountId);
+  if (!account) return { status: 404, body: { error: "account_not_found" } };
+  return { status: 200, body: { account } };
+};
+
+export const handleUpdateMyAdaAccount = async (
+  state: ApiState,
+  input: { accountId: string; headers: Record<string, string | undefined>; payload?: unknown }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const owned = await resolveOwnedBusinessAda(state, auth, input.accountId);
+  if (!owned) return { status: 404, body: { error: "account_not_found" } };
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const requestedName = optionalBodyString(body, "accountName");
+  const requestedUsePurpose = optionalBodyString(body, "usePurpose");
+  const requestedAssetRail = optionalBodyString(body, "assetRail");
+  const requestedStatus = optionalBodyString(body, "status");
+
+  if (!requestedName && !requestedUsePurpose && !requestedAssetRail && !requestedStatus) {
+    return badRequest("account_update_payload_required");
+  }
+
+  const normalizedUsePurpose = requestedUsePurpose ? normalizeUsePurpose(requestedUsePurpose) : undefined;
+  const normalizedStatus = requestedStatus ? requestedStatus.trim().toLowerCase() : undefined;
+  if (normalizedStatus && !["active", "pending_activation", "restricted"].includes(normalizedStatus)) {
+    return badRequest("account_status_invalid");
+  }
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        await client.query(
+          `update accounts_of_digital_asset
+              set account_name = coalesce($4, account_name),
+                  use_purpose = coalesce($5, use_purpose),
+                  asset_rail = coalesce($6, asset_rail),
+                  status = coalesce($7, status),
+                  updated_at = now()
+            where id = $1
+              and platform_tenant_id = $2
+              and business_client_id = $3`,
+          [
+            owned.accountId,
+            owned.tenantId,
+            owned.businessClientId,
+            requestedName ?? null,
+            normalizedUsePurpose ?? null,
+            requestedAssetRail ?? null,
+            normalizedStatus ?? null
+          ]
+        );
+        const result = await handleGetMyAdaAccount(state, input.headers, owned.accountId);
+        return result.status === 200 ? result : { status: 500, body: { error: "account_update_failed" } };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleUpdateMyAdaAccount; falling back", error);
+    }
+  }
+
+  const runtimeAccount = state.accounts.find((item) =>
+    item.id === owned.accountId && item.tenantId === owned.tenantId && item.businessClientId === owned.businessClientId
+  );
+  if (!runtimeAccount) return { status: 404, body: { error: "account_not_found" } };
+
+  if (requestedName) runtimeAccount.accountName = requestedName;
+  if (normalizedUsePurpose) runtimeAccount.usePurpose = runtimePurposeFromUsePurpose(normalizedUsePurpose);
+  if (normalizedStatus) runtimeAccount.status = normalizedStatus as typeof runtimeAccount.status;
+
+  return handleGetMyAdaAccount(state, input.headers, owned.accountId);
+};
+
+export const handleListMyLinkedInstruments = async (
+  state: ApiState,
+  headers: Record<string, string | undefined>,
+  accountId: string
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const owned = await resolveOwnedBusinessAda(state, auth, accountId);
+  if (!owned) return { status: 404, body: { error: "account_not_found" } };
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const schema = await getLinkedInstrumentSchema(client);
+        const whereTenant = schema.hasPlatformTenantId ? "and platform_tenant_id = $1" : "";
+        const result = await client.query(
+          `select ${linkedInstrumentSelectProjection(schema)}
+             from linked_instruments
+            where account_of_digital_asset_id = $2
+              ${whereTenant}
+            order by created_at desc`,
+          [owned.tenantId, owned.accountId]
+        );
+        return {
+          status: 200,
+          body: {
+            accountId: owned.accountId,
+            linkedInstruments: result.rows.map((row) => mapLinkedInstrumentRow(row))
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleListMyLinkedInstruments; falling back", error);
+    }
+  }
+
+  return {
+    status: 200,
+    body: {
+      accountId: owned.accountId,
+      linkedInstruments: []
+    }
+  };
+};
+
+export const handleListMyBusinessLinkedInstruments = async (
+  state: ApiState,
+  headers: Record<string, string | undefined>
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const context = await resolveApprovedBusinessClientContext(state, auth);
+  if (!context) return badRequest("business_client_not_approved");
+
+  const tenantId = uuidFromRuntimeId(context.tenantId) ?? context.tenantId;
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const result = await client.query(
+          `select id, account_of_digital_asset_id, business_client_id, instrument_type, purpose, rail_code, rail_name, rail_type, asset_code, status,
+                  network_code, is_default, provider, verification_status, metadata, created_at, updated_at
+             from linked_instruments
+            where platform_tenant_id = $1
+              and business_client_id = $2
+            order by created_at desc`,
+          [tenantId, context.businessClientId]
+        );
+        return {
+          status: 200,
+          body: {
+            businessClientId: context.businessClientId,
+            linkedInstruments: result.rows.map((row) => mapLinkedInstrumentRow(row))
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleListMyBusinessLinkedInstruments; falling back", error);
+    }
+  }
+
+  return {
+    status: 200,
+    body: {
+      businessClientId: context.businessClientId,
+      linkedInstruments: []
+    }
+  };
+};
+
+const buildLinkedInstrumentPayload = (body: Record<string, unknown>) => {
+  const instrumentType = bodyString(body, "instrumentType", "on_chain_wallet");
+  const railType = bodyString(
+    body,
+    "railType",
+    instrumentType.includes("fiat") ? "fiat" : "on-chain"
+  );
+  const purpose = bodyString(body, "purpose", "settlement");
+  const railCode = bodyString(body, "railCode", `${railType}_${purpose}`.toLowerCase());
+  const railName = bodyString(body, "railName", `${purpose} rail`);
+  const assetCode = normalizeAssetCode(bodyString(body, "assetCode", "USDC"));
+  const networkCode = optionalBodyString(body, "networkCode");
+  const provider = optionalBodyString(body, "provider") ?? (railType === "fiat" ? "bank" : "circle");
+  const verificationStatus = optionalBodyString(body, "verificationStatus") ?? "verified";
+  const isDefault = Boolean(body.isDefault);
+  const status = optionalBodyString(body, "status");
+  const metadata = bodyRecord(body, "metadata");
+
+  const mergedMetadata: Record<string, unknown> = {
+    ...metadata,
+    ...(optionalBodyString(body, "destinationAddress") ? { address: optionalBodyString(body, "destinationAddress") } : {}),
+    ...(optionalBodyString(body, "walletAddress") ? { walletAddress: optionalBodyString(body, "walletAddress") } : {}),
+    ...(optionalBodyString(body, "walletId") ? { walletId: optionalBodyString(body, "walletId") } : {}),
+    ...(optionalBodyString(body, "routingNumber") ? { routingNumber: optionalBodyString(body, "routingNumber") } : {}),
+    ...(optionalBodyString(body, "accountNumber") ? { accountNumberLast4: optionalBodyString(body, "accountNumber")?.slice(-4) } : {}),
+    ...(optionalBodyString(body, "bankingInstitution") ? { bankName: optionalBodyString(body, "bankingInstitution") } : {})
+  };
+
+  return {
+    instrumentType,
+    railType,
+    purpose,
+    railCode,
+    railName,
+    assetCode,
+    networkCode,
+    provider,
+    verificationStatus,
+    isDefault,
+    status,
+    mergedMetadata
+  };
+};
+
+const inferAssetCatalogDefaults = (assetCode: string, railType: string): { assetName: string; minorUnitScale: number } => {
+  if (assetCode === "USDC") return { assetName: "USD Coin", minorUnitScale: 6 };
+  if (assetCode === "EURC") return { assetName: "Euro Coin", minorUnitScale: 6 };
+  if (assetCode === "USD") return { assetName: "US Dollar", minorUnitScale: 2 };
+  return {
+    assetName: railType === "fiat" ? `${assetCode} Fiat` : `${assetCode} Asset`,
+    minorUnitScale: railType === "fiat" ? 2 : 6
+  };
+};
+
+const ensureAssetCatalogRow = async (
+  client: { query: (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+  assetCode: string,
+  railType: string
+) => {
+  const defaults = inferAssetCatalogDefaults(assetCode, railType);
+  await client.query(
+    `insert into assets (asset_code, asset_name, minor_unit_scale, status)
+     values ($1, $2, $3, 'active')
+     on conflict (asset_code) do nothing`,
+    [assetCode, defaults.assetName, defaults.minorUnitScale]
+  );
+};
+
+type LinkedInstrumentSchema = {
+  hasBusinessClientId: boolean;
+  hasPlatformTenantId: boolean;
+  hasRailCode: boolean;
+  hasRailName: boolean;
+  hasRailType: boolean;
+  hasAssetCode: boolean;
+  hasPurpose: boolean;
+  hasProvider: boolean;
+  hasVerificationStatus: boolean;
+  hasMetadata: boolean;
+  hasNetworkCode: boolean;
+  hasIsDefault: boolean;
+  hasUpdatedAt: boolean;
+  hasExternalReference: boolean;
+};
+
+const getLinkedInstrumentSchema = async (
+  client: { query: (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> }
+): Promise<LinkedInstrumentSchema> => {
+  const result = await client.query(
+    `select column_name
+       from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'linked_instruments'`
+  );
+  const columns = new Set(result.rows.map((row) => String(row.column_name ?? "")));
+  return {
+    hasBusinessClientId: columns.has("business_client_id"),
+    hasPlatformTenantId: columns.has("platform_tenant_id"),
+    hasRailCode: columns.has("rail_code"),
+    hasRailName: columns.has("rail_name"),
+    hasRailType: columns.has("rail_type"),
+    hasAssetCode: columns.has("asset_code"),
+    hasPurpose: columns.has("purpose"),
+    hasProvider: columns.has("provider"),
+    hasVerificationStatus: columns.has("verification_status"),
+    hasMetadata: columns.has("metadata"),
+    hasNetworkCode: columns.has("network_code"),
+    hasIsDefault: columns.has("is_default"),
+    hasUpdatedAt: columns.has("updated_at"),
+    hasExternalReference: columns.has("external_reference")
+  };
+};
+
+const linkedInstrumentSelectProjection = (schema: LinkedInstrumentSchema): string => [
+  "id",
+  "account_of_digital_asset_id",
+  schema.hasBusinessClientId ? "business_client_id" : "null::uuid as business_client_id",
+  "instrument_type",
+  schema.hasPurpose ? "purpose" : "null::text as purpose",
+  schema.hasRailCode ? "rail_code" : "null::text as rail_code",
+  schema.hasRailName ? "rail_name" : "null::text as rail_name",
+  schema.hasRailType ? "rail_type" : "null::text as rail_type",
+  schema.hasAssetCode ? "asset_code" : "null::text as asset_code",
+  "status",
+  schema.hasNetworkCode ? "network_code" : "null::text as network_code",
+  schema.hasIsDefault ? "is_default" : "false as is_default",
+  schema.hasProvider ? "provider" : "null::text as provider",
+  schema.hasVerificationStatus ? "verification_status" : "null::text as verification_status",
+  schema.hasMetadata ? "metadata" : "'{}'::jsonb as metadata",
+  "created_at",
+  schema.hasUpdatedAt ? "updated_at" : "created_at as updated_at"
+].join(", ");
+
+const insertLinkedInstrument = async (
+  client: { query: (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+  params: {
+    linkedInstrumentId: string;
+    accountId: string | null;
+    tenantId: string;
+    businessClientId: string;
+    instrumentType: string;
+    status: string;
+    assetCode: string;
+    railType: string;
+    purpose: string;
+    railCode: string;
+    railName: string;
+    provider: string;
+    verificationStatus: string;
+    metadata: Record<string, unknown>;
+    networkCode: string | null;
+    isDefault: boolean;
+    schema: LinkedInstrumentSchema;
+  }
+) => {
+  if (params.schema.hasRailCode) {
+    await client.query(
+      params.schema.hasBusinessClientId
+        ? `insert into linked_instruments
+          (id, account_of_digital_asset_id, platform_tenant_id, business_client_id, instrument_type, status, asset_code, rail_type,
+           purpose, rail_code, rail_name, provider, verification_status, metadata, network_code, is_default, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, now(), now())`
+        : `insert into linked_instruments
+          (id, account_of_digital_asset_id, platform_tenant_id, instrument_type, status, asset_code, rail_type,
+           purpose, rail_code, rail_name, provider, verification_status, metadata, network_code, is_default, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, now(), now())`,
+      params.schema.hasBusinessClientId
+        ? [
+          params.linkedInstrumentId,
+          params.accountId,
+          params.tenantId,
+          params.businessClientId,
+          params.instrumentType,
+          params.status,
+          params.assetCode,
+          params.railType,
+          params.purpose,
+          params.railCode,
+          params.railName,
+          params.provider,
+          params.verificationStatus,
+          JSON.stringify(params.metadata),
+          params.networkCode,
+          params.isDefault
+        ]
+        : [
+          params.linkedInstrumentId,
+          params.accountId,
+          params.tenantId,
+          params.instrumentType,
+          params.status,
+          params.assetCode,
+          params.railType,
+          params.purpose,
+          params.railCode,
+          params.railName,
+          params.provider,
+          params.verificationStatus,
+          JSON.stringify(params.metadata),
+          params.networkCode,
+          params.isDefault
+        ]
+    );
+  } else {
+    const columns = ["id", "account_of_digital_asset_id", "instrument_type", "status", "created_at"];
+    const values: unknown[] = [
+      params.linkedInstrumentId,
+      params.accountId,
+      params.instrumentType,
+      params.status,
+      new Date().toISOString()
+    ];
+
+    if (params.schema.hasPlatformTenantId) {
+      columns.splice(2, 0, "platform_tenant_id");
+      values.splice(2, 0, params.tenantId);
+    }
+    if (params.schema.hasBusinessClientId) {
+      const idx = params.schema.hasPlatformTenantId ? 3 : 2;
+      columns.splice(idx, 0, "business_client_id");
+      values.splice(idx, 0, params.businessClientId);
+    }
+    if (params.schema.hasExternalReference) {
+      const insertIndex = columns.length - 1;
+      columns.splice(insertIndex, 0, "external_reference");
+      values.splice(insertIndex, 0, params.railCode || params.railName || null);
+    }
+
+    const placeholders = values.map((_, index) => `$${index + 1}`).join(", ");
+    await client.query(
+      `insert into linked_instruments (${columns.join(", ")}) values (${placeholders})`,
+      values
+    );
+  }
+
+  const tenantWhere = params.schema.hasPlatformTenantId ? "and platform_tenant_id = $2" : "";
+  const result = await client.query(
+    `select ${linkedInstrumentSelectProjection(params.schema)}
+       from linked_instruments
+      where id = $1 ${tenantWhere}
+      limit 1`,
+    [params.linkedInstrumentId, params.tenantId]
+  );
+  return result.rows[0];
+};
+
+export const handleCreateMyBusinessLinkedInstrument = async (
+  state: ApiState,
+  input: { headers: Record<string, string | undefined>; payload?: unknown }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const context = await resolveApprovedBusinessClientContext(state, auth);
+  if (!context) return badRequest("business_client_not_approved");
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const accountId = optionalBodyString(body, "accountOfDigitalAssetId") ?? optionalBodyString(body, "accountId");
+  let ownedAccount: { accountId: string; businessClientId: string; tenantId: string } | undefined;
+  if (accountId) {
+    ownedAccount = await resolveOwnedBusinessAda(state, auth, accountId);
+    if (!ownedAccount) return { status: 404, body: { error: "account_not_found" } };
+  }
+
+  const payload = buildLinkedInstrumentPayload(body);
+  const tenantId = uuidFromRuntimeId(context.tenantId) ?? context.tenantId;
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const linkedSchema = await getLinkedInstrumentSchema(client);
+        await ensureAssetCatalogRow(client, payload.assetCode, payload.railType);
+        await client.query(
+          `insert into asset_rails (rail_code, asset_code, rail_name, status)
+           values ($1, $2, $3, 'active')
+           on conflict (rail_code) do update
+             set rail_name = excluded.rail_name,
+                 status = excluded.status`,
+          [payload.railCode, payload.assetCode, payload.railName]
+        );
+
+        const linkedInstrumentId = randomUUID();
+        const created = await insertLinkedInstrument(client, {
+          linkedInstrumentId,
+          accountId: ownedAccount?.accountId ?? null,
+          tenantId,
+          businessClientId: context.businessClientId,
+          instrumentType: payload.instrumentType,
+          status: payload.status ?? (ownedAccount ? "active" : "draft"),
+          assetCode: payload.assetCode,
+          railType: payload.railType,
+          purpose: payload.purpose,
+          railCode: payload.railCode,
+          railName: payload.railName,
+          provider: payload.provider,
+          verificationStatus: payload.verificationStatus,
+          metadata: payload.mergedMetadata,
+          networkCode: payload.networkCode ?? null,
+          isDefault: payload.isDefault,
+          schema: linkedSchema
+        });
+
+        if (!created) return { status: 500, body: { error: "linked_instrument_create_failed" } };
+        return {
+          status: 201,
+          body: {
+            businessClientId: context.businessClientId,
+            linkedInstrument: mapLinkedInstrumentRow(created)
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleCreateMyBusinessLinkedInstrument; falling back", error);
+    }
+  }
+
+  return { status: 503, body: { error: "linked_instrument_postgres_required" } };
+};
+
+export const handleCreateMyLinkedInstrument = async (
+  state: ApiState,
+  input: { accountId: string; headers: Record<string, string | undefined>; payload?: unknown }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const owned = await resolveOwnedBusinessAda(state, auth, input.accountId);
+  if (!owned) return { status: 404, body: { error: "account_not_found" } };
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const payload = buildLinkedInstrumentPayload(body);
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const linkedSchema = await getLinkedInstrumentSchema(client);
+        await ensureAssetCatalogRow(client, payload.assetCode, payload.railType);
+        await client.query(
+          `insert into asset_rails (rail_code, asset_code, rail_name, status)
+           values ($1, $2, $3, 'active')
+           on conflict (rail_code) do update
+             set rail_name = excluded.rail_name,
+                 status = excluded.status`,
+          [payload.railCode, payload.assetCode, payload.railName]
+        );
+
+        const linkedInstrumentId = randomUUID();
+        const row = await insertLinkedInstrument(client, {
+          linkedInstrumentId,
+          accountId: owned.accountId,
+          tenantId: owned.tenantId,
+          businessClientId: owned.businessClientId,
+          instrumentType: payload.instrumentType,
+          status: payload.status ?? "active",
+          assetCode: payload.assetCode,
+          railType: payload.railType,
+          purpose: payload.purpose,
+          railCode: payload.railCode,
+          railName: payload.railName,
+          provider: payload.provider,
+          verificationStatus: payload.verificationStatus,
+          metadata: payload.mergedMetadata,
+          networkCode: payload.networkCode ?? null,
+          isDefault: payload.isDefault,
+          schema: linkedSchema
+        });
+        if (!row) return { status: 500, body: { error: "linked_instrument_create_failed" } };
+        return {
+          status: 201,
+          body: {
+            accountId: owned.accountId,
+            linkedInstrument: mapLinkedInstrumentRow(row)
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleCreateMyLinkedInstrument; falling back", error);
+    }
+  }
+
+  return { status: 503, body: { error: "linked_instrument_postgres_required" } };
+};
+
+export const handleUpdateMyLinkedInstrument = async (
+  state: ApiState,
+  input: {
+    accountId: string;
+    linkedInstrumentId: string;
+    headers: Record<string, string | undefined>;
+    payload?: unknown;
+  }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const owned = await resolveOwnedBusinessAda(state, auth, input.accountId);
+  if (!owned) return { status: 404, body: { error: "account_not_found" } };
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const patchPurpose = optionalBodyString(body, "purpose");
+  const patchRailName = optionalBodyString(body, "railName");
+  const patchStatus = optionalBodyString(body, "status");
+  const patchNetworkCode = optionalBodyString(body, "networkCode");
+  const patchIsDefault = typeof body.isDefault === "boolean" ? body.isDefault : undefined;
+  const patchMetadata = bodyRecord(body, "metadata");
+
+  if (!patchPurpose && !patchRailName && !patchStatus && !patchNetworkCode && patchIsDefault === undefined && Object.keys(patchMetadata).length === 0) {
+    return badRequest("linked_instrument_update_payload_required");
+  }
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const existing = await client.query(
+          `select id, instrument_type, purpose, rail_code, rail_name, rail_type, asset_code, status,
+                  network_code, is_default, provider, verification_status, metadata, created_at, updated_at
+             from linked_instruments
+            where id = $1
+              and account_of_digital_asset_id = $2
+              and platform_tenant_id = $3
+            limit 1`,
+          [input.linkedInstrumentId, owned.accountId, owned.tenantId]
+        );
+        const row = existing.rows[0] as Record<string, unknown> | undefined;
+        if (!row) return { status: 404, body: { error: "linked_instrument_not_found" } };
+
+        const existingMetadata = (row.metadata && typeof row.metadata === "object") ? row.metadata as Record<string, unknown> : {};
+        const mergedMetadata = Object.keys(patchMetadata).length > 0 ? { ...existingMetadata, ...patchMetadata } : existingMetadata;
+
+        await client.query(
+          `update linked_instruments
+              set purpose = coalesce($4, purpose),
+                  rail_name = coalesce($5, rail_name),
+                  status = coalesce($6, status),
+                  network_code = coalesce($7, network_code),
+                  is_default = coalesce($8, is_default),
+                  metadata = $9::jsonb,
+                  updated_at = now()
+            where id = $1
+              and account_of_digital_asset_id = $2
+              and platform_tenant_id = $3`,
+          [
+            input.linkedInstrumentId,
+            owned.accountId,
+            owned.tenantId,
+            patchPurpose ?? null,
+            patchRailName ?? null,
+            patchStatus ?? null,
+            patchNetworkCode ?? null,
+            patchIsDefault ?? null,
+            JSON.stringify(mergedMetadata)
+          ]
+        );
+
+        const updated = await client.query(
+          `select id, instrument_type, purpose, rail_code, rail_name, rail_type, asset_code, status,
+                  network_code, is_default, provider, verification_status, metadata, created_at, updated_at
+             from linked_instruments
+            where id = $1
+              and account_of_digital_asset_id = $2
+              and platform_tenant_id = $3
+            limit 1`,
+          [input.linkedInstrumentId, owned.accountId, owned.tenantId]
+        );
+        const updatedRow = updated.rows[0];
+        if (!updatedRow) return { status: 500, body: { error: "linked_instrument_update_failed" } };
+        return {
+          status: 200,
+          body: {
+            accountId: owned.accountId,
+            linkedInstrument: mapLinkedInstrumentRow(updatedRow)
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleUpdateMyLinkedInstrument; falling back", error);
+    }
+  }
+
+  return { status: 503, body: { error: "linked_instrument_postgres_required" } };
+};
+
+export const handleUpdateMyBusinessLinkedInstrument = async (
+  state: ApiState,
+  input: {
+    linkedInstrumentId: string;
+    headers: Record<string, string | undefined>;
+    payload?: unknown;
+  }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const owned = await resolveOwnedBusinessLinkedInstrument(state, auth, input.linkedInstrumentId);
+  if (!owned) return { status: 404, body: { error: "linked_instrument_not_found" } };
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const patchPurpose = optionalBodyString(body, "purpose");
+  const patchRailName = optionalBodyString(body, "railName");
+  const patchStatus = optionalBodyString(body, "status");
+  const patchNetworkCode = optionalBodyString(body, "networkCode");
+  const patchIsDefault = typeof body.isDefault === "boolean" ? body.isDefault : undefined;
+  const patchMetadata = bodyRecord(body, "metadata");
+
+  if (!patchPurpose && !patchRailName && !patchStatus && !patchNetworkCode && patchIsDefault === undefined && Object.keys(patchMetadata).length === 0) {
+    return badRequest("linked_instrument_update_payload_required");
+  }
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const existing = await client.query(
+          `select id, account_of_digital_asset_id, business_client_id, instrument_type, purpose, rail_code, rail_name, rail_type, asset_code, status,
+                  network_code, is_default, provider, verification_status, metadata, created_at, updated_at
+             from linked_instruments
+            where id = $1
+              and platform_tenant_id = $2
+              and business_client_id = $3
+            limit 1`,
+          [owned.linkedInstrumentId, owned.tenantId, owned.businessClientId]
+        );
+        const row = existing.rows[0] as Record<string, unknown> | undefined;
+        if (!row) return { status: 404, body: { error: "linked_instrument_not_found" } };
+
+        const existingMetadata = (row.metadata && typeof row.metadata === "object") ? row.metadata as Record<string, unknown> : {};
+        const mergedMetadata = Object.keys(patchMetadata).length > 0 ? { ...existingMetadata, ...patchMetadata } : existingMetadata;
+
+        await client.query(
+          `update linked_instruments
+              set purpose = coalesce($4, purpose),
+                  rail_name = coalesce($5, rail_name),
+                  status = coalesce($6, status),
+                  network_code = coalesce($7, network_code),
+                  is_default = coalesce($8, is_default),
+                  metadata = $9::jsonb,
+                  updated_at = now()
+            where id = $1
+              and platform_tenant_id = $2
+              and business_client_id = $3`,
+          [
+            owned.linkedInstrumentId,
+            owned.tenantId,
+            owned.businessClientId,
+            patchPurpose ?? null,
+            patchRailName ?? null,
+            patchStatus ?? null,
+            patchNetworkCode ?? null,
+            patchIsDefault ?? null,
+            JSON.stringify(mergedMetadata)
+          ]
+        );
+
+        const updated = await client.query(
+          `select id, account_of_digital_asset_id, business_client_id, instrument_type, purpose, rail_code, rail_name, rail_type, asset_code, status,
+                  network_code, is_default, provider, verification_status, metadata, created_at, updated_at
+             from linked_instruments
+            where id = $1
+              and platform_tenant_id = $2
+              and business_client_id = $3
+            limit 1`,
+          [owned.linkedInstrumentId, owned.tenantId, owned.businessClientId]
+        );
+        const updatedRow = updated.rows[0];
+        if (!updatedRow) return { status: 500, body: { error: "linked_instrument_update_failed" } };
+        return {
+          status: 200,
+          body: {
+            linkedInstrument: mapLinkedInstrumentRow(updatedRow)
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleUpdateMyBusinessLinkedInstrument; falling back", error);
+    }
+  }
+
+  return { status: 503, body: { error: "linked_instrument_postgres_required" } };
+};
+
+export const handleAssignMyLinkedInstrumentToAda = async (
+  state: ApiState,
+  input: {
+    linkedInstrumentId: string;
+    headers: Record<string, string | undefined>;
+    payload?: unknown;
+  }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const ownedLinked = await resolveOwnedBusinessLinkedInstrument(state, auth, input.linkedInstrumentId);
+  if (!ownedLinked) return { status: 404, body: { error: "linked_instrument_not_found" } };
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const accountId = optionalBodyString(body, "accountOfDigitalAssetId") ?? optionalBodyString(body, "accountId");
+  if (!accountId) return badRequest("account_id_required");
+  const ownedAccount = await resolveOwnedBusinessAda(state, auth, accountId);
+  if (!ownedAccount) return { status: 404, body: { error: "account_not_found" } };
+
+  if (ownedAccount.businessClientId !== ownedLinked.businessClientId) {
+    return { status: 400, body: { error: "linked_instrument_business_client_mismatch" } };
+  }
+
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        await client.query(
+          `update linked_instruments
+              set account_of_digital_asset_id = $4,
+                  status = case when status = 'draft' then 'active' else status end,
+                  updated_at = now()
+            where id = $1
+              and platform_tenant_id = $2
+              and business_client_id = $3`,
+          [ownedLinked.linkedInstrumentId, ownedLinked.tenantId, ownedLinked.businessClientId, ownedAccount.accountId]
+        );
+
+        const updated = await client.query(
+          `select id, account_of_digital_asset_id, business_client_id, instrument_type, purpose, rail_code, rail_name, rail_type, asset_code, status,
+                  network_code, is_default, provider, verification_status, metadata, created_at, updated_at
+             from linked_instruments
+            where id = $1
+              and platform_tenant_id = $2
+              and business_client_id = $3
+            limit 1`,
+          [ownedLinked.linkedInstrumentId, ownedLinked.tenantId, ownedLinked.businessClientId]
+        );
+        const row = updated.rows[0];
+        if (!row) return { status: 500, body: { error: "linked_instrument_assign_failed" } };
+        return {
+          status: 200,
+          body: {
+            accountId: ownedAccount.accountId,
+            linkedInstrument: mapLinkedInstrumentRow(row)
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleAssignMyLinkedInstrumentToAda; falling back", error);
+    }
+  }
+
+  return { status: 503, body: { error: "linked_instrument_postgres_required" } };
+};
+
+export const handleCreateMyAdaAccount = async (
+  state: ApiState,
+  input: { headers: Record<string, string | undefined>; payload?: unknown }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const persisted = await hydrateBusinessUserOnboarding(state, auth);
+  const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
+  if (bundle.application.status !== "approved") return badRequest("business_client_not_approved");
+
+  const now = new Date().toISOString();
+  const accountName = bodyString(body, "accountName", "New ADA");
+  const usePurpose = normalizeUsePurpose(bodyString(body, "usePurpose", "settlement"));
+  const topology = bodyString(body, "topology", "unlinked");
+  const assetCode = normalizeAssetCode(bodyString(body, "assetCode", "USDC"));
+  const activationDecision: ActivationDecision = topology === "unlinked" ? "auto" : "approval_required";
+  const activationReasonCode = activationDecision === "auto"
+    ? "virtual_no_linked_instrument_auto_activation"
+    : "linked_instrument_requires_internal_approval";
+  const initialStatus: "active" | "pending_activation" = topology === "unlinked" ? "active" : "pending_activation";
+  const assetRail = bodyString(
+    body,
+    "assetRail",
+    topology === "wallet-linked"
+      ? "wallet_blockchain"
+      : topology === "fiat-linked"
+        ? "commercial_wire"
+        : "circle_internal"
+  );
+
+  const applicationTenantId = uuidFromRuntimeId(bundle.application.tenantId) ?? persistentTenantId(state);
+  const authUserId = uuidFromRuntimeId(auth.authUserId);
+
+  if (postgresUrlFromEnv() && authUserId) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const identity = await client.query(
+          `select business_client.id,
+                  business_client.legal_name,
+                  business_client.platform_tenant_id
+             from business_onboarding_applications application
+             join business_clients business_client
+               on business_client.platform_tenant_id = $1
+              and (
+                business_client.id = application.id
+                or business_client.correlation_id = 'business_onboarding:' || application.id::text
+              )
+            where application.auth_user_id = $2::uuid
+              and application.status = 'approved'
+              and business_client.onboarding_status = 'approved'
+            order by business_client.created_at desc
+            limit 1`,
+          [applicationTenantId, authUserId]
+        );
+
+        const businessClient = identity.rows[0] as {
+          id: string;
+          legal_name: string;
+          platform_tenant_id: string;
+        } | undefined;
+
+        if (!businessClient) return { status: 400, body: { error: "business_client_not_approved" } };
+
+        const accountId = randomUUID();
+        await client.query(
+          `insert into accounts_of_digital_asset
+            (id, platform_tenant_id, business_client_id, account_name, use_purpose, status, asset_code, asset_rail, correlation_id, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+          [
+            accountId,
+            businessClient.platform_tenant_id,
+            businessClient.id,
+            accountName,
+            usePurpose,
+            initialStatus,
+            assetCode,
+            assetRail,
+            `business_me_ada_create:${accountId}`,
+            now
+          ]
+        );
+
+        return {
+          status: 201,
+          body: {
+            account: {
+              id: accountId,
+              tenantId: businessClient.platform_tenant_id,
+              businessClientId: businessClient.id,
+              businessClientName: businessClient.legal_name,
+              accountName,
+              usePurpose,
+              status: initialStatus,
+              activationDecision,
+              activationReasonCode,
+              assetCode,
+              assetRail,
+              createdAt: now
+            }
+          }
+        };
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in handleCreateMyAdaAccount; falling back", error);
+    }
+  }
+
+  const runtimeBusinessClient = state.businessClients.find((item) =>
+    item.tenantId === bundle.application.tenantId && item.onboardingStatus === "approved"
+  );
+  if (!runtimeBusinessClient) return badRequest("business_client_not_approved");
+
+  const runtimeAccount = {
+    id: newId("ada"),
+    tenantId: runtimeBusinessClient.tenantId,
+    businessClientId: runtimeBusinessClient.id,
+    accountName,
+    usePurpose: runtimePurposeFromUsePurpose(usePurpose),
+    status: initialStatus,
+    createdAt: now
+  };
+  state.accounts.push(runtimeAccount);
+  state.balances.push({
+    accountOfDigitalAssetId: runtimeAccount.id,
+    availableMinorUnits: 0n,
+    pendingMinorUnits: 0n,
+    reservedMinorUnits: 0n,
+    lockedMinorUnits: 0n,
+    suspenseMinorUnits: 0n,
+    version: 1
+  });
+
+  return {
+    status: 201,
+    body: {
+      account: {
+        ...runtimeAccount,
+        businessClientName: runtimeBusinessClient.legalName,
+        activationDecision,
+        activationReasonCode,
+        assetCode,
+        assetRail
+      }
+    }
+  };
+};
+
+export const handleListMyApiKeys = async (
+  state: ApiState,
+  headers: Record<string, string | undefined>
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const context = await resolveApprovedBusinessClientContext(state, auth);
+  if (!context) return badRequest("business_client_not_approved");
+  const ownerKey = businessApiKeyStoreKey(context.tenantId, context.businessClientId, context.authUserId);
+  const keys = businessApiKeyRecords.get(ownerKey) ?? [];
+  return {
+    status: 200,
+    body: {
+      keys: keys.map(({ keyHash: _keyHash, ...key }) => key)
+    }
+  };
+};
+
+export const handleCreateMyApiKey = async (
+  state: ApiState,
+  input: { headers: Record<string, string | undefined>; payload?: unknown }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const context = await resolveApprovedBusinessClientContext(state, auth);
+  if (!context) return badRequest("business_client_not_approved");
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const requestedScopes = normalizeBusinessApiKeyScopes(body.scopes);
+  if (requestedScopes.error) return badRequest(requestedScopes.error);
+  const scopes = requestedScopes.scopes;
+  const plaintextKey = createPlaintextApiKey(randomUUID());
+  const secret = plaintextKey.split(".")[1]!;
+  const createdAt = new Date().toISOString();
+  const key: BusinessApiKeyView & { keyHash: string } = {
+    id: randomUUID(),
+    keyPrefix: plaintextKey.split(".")[0]!,
+    ownerAuthUserId: context.authUserId,
+    ownerTenantId: context.tenantId,
+    ownerBusinessClientId: context.businessClientId,
+    ownerBusinessClientName: context.businessClientName,
+    scopes,
+    status: "active",
+    createdAt,
+    keyHash: hashApiSecret(secret)
+  };
+  const ownerKey = businessApiKeyStoreKey(context.tenantId, context.businessClientId, context.authUserId);
+  const keys = businessApiKeyRecords.get(ownerKey) ?? [];
+  businessApiKeyRecords.set(ownerKey, [key, ...keys]);
+
+  emitOutbox(state, "business_user.api_key_created", {
+    authUserId: context.authUserId,
+    businessClientId: context.businessClientId,
+    keyId: key.id,
+    scopes
+  });
+
+  return {
+    status: 201,
+    body: {
+      key: {
+        id: key.id,
+        keyPrefix: key.keyPrefix,
+        ownerBusinessClientId: key.ownerBusinessClientId,
+        ownerBusinessClientName: key.ownerBusinessClientName,
+        scopes: key.scopes,
+        status: key.status,
+        createdAt: key.createdAt
+      },
+      plaintextKey
+    }
+  };
+};
+
+const mapLinkedInstrumentRow = (row: Record<string, unknown>) => ({
+  id: String(row.id ?? ""),
+  accountOfDigitalAssetId: row.account_of_digital_asset_id ? String(row.account_of_digital_asset_id) : undefined,
+  businessClientId: row.business_client_id ? String(row.business_client_id) : undefined,
+  instrumentType: String(row.instrument_type ?? ""),
+  purpose: row.purpose ? String(row.purpose) : undefined,
+  railCode: row.rail_code ? String(row.rail_code) : undefined,
+  railName: row.rail_name ? String(row.rail_name) : undefined,
+  railType: row.rail_type ? String(row.rail_type) : undefined,
+  assetCode: row.asset_code ? String(row.asset_code) : undefined,
+  status: String(row.status ?? ""),
+  networkCode: row.network_code ? String(row.network_code) : undefined,
+  isDefault: Boolean(row.is_default),
+  provider: row.provider ? String(row.provider) : undefined,
+  verificationStatus: row.verification_status ? String(row.verification_status) : undefined,
+  metadata: row.metadata && typeof row.metadata === "object" ? row.metadata as Record<string, unknown> : {},
+  createdAt: timestampToOptionalIsoString(row.created_at),
+  updatedAt: timestampToOptionalIsoString(row.updated_at)
+});
+
+export const handleRevokeMyApiKey = async (
+  state: ApiState,
+  input: { headers: Record<string, string | undefined>; apiKeyId: string }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const context = await resolveApprovedBusinessClientContext(state, auth);
+  if (!context) return badRequest("business_client_not_approved");
+
+  const ownerKey = businessApiKeyStoreKey(context.tenantId, context.businessClientId, context.authUserId);
+  const keys = businessApiKeyRecords.get(ownerKey) ?? [];
+  const target = keys.find((key) => key.id === input.apiKeyId);
+  if (!target) return { status: 404, body: { error: "api_key_not_found" } };
+  if (target.status !== "revoked") {
+    target.status = "revoked";
+    target.revokedAt = new Date().toISOString();
+    emitOutbox(state, "business_user.api_key_revoked", {
+      authUserId: context.authUserId,
+      businessClientId: context.businessClientId,
+      keyId: target.id
+    });
+  }
+  const { keyHash: _keyHash, ...safe } = target;
+  return { status: 200, body: { key: safe } };
+};
+
+export const handleRotateMyApiKey = async (
+  state: ApiState,
+  input: { headers: Record<string, string | undefined>; apiKeyId: string; payload?: unknown }
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(input.headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  const context = await resolveApprovedBusinessClientContext(state, auth);
+  if (!context) return badRequest("business_client_not_approved");
+
+  const body = isRecord(input.payload) ? input.payload : {};
+  const ownerKey = businessApiKeyStoreKey(context.tenantId, context.businessClientId, context.authUserId);
+  const keys = businessApiKeyRecords.get(ownerKey) ?? [];
+  const previous = keys.find((key) => key.id === input.apiKeyId);
+  if (!previous) return { status: 404, body: { error: "api_key_not_found" } };
+
+  if (previous.status !== "revoked") {
+    previous.status = "revoked";
+    previous.revokedAt = new Date().toISOString();
+  }
+
+  const requestedScopes = normalizeBusinessApiKeyScopes(body.scopes);
+  if (requestedScopes.error) return badRequest(requestedScopes.error);
+  const scopes = requestedScopes.scopes.length ? requestedScopes.scopes : previous.scopes;
+  const plaintextKey = createPlaintextApiKey(randomUUID());
+  const secret = plaintextKey.split(".")[1]!;
+  const rotatedKey: BusinessApiKeyView & { keyHash: string } = {
+    id: randomUUID(),
+    keyPrefix: plaintextKey.split(".")[0]!,
+    ownerAuthUserId: context.authUserId,
+    ownerTenantId: context.tenantId,
+    ownerBusinessClientId: context.businessClientId,
+    ownerBusinessClientName: context.businessClientName,
+    scopes,
+    status: "active",
+    createdAt: new Date().toISOString(),
+    keyHash: hashApiSecret(secret)
+  };
+
+  businessApiKeyRecords.set(ownerKey, [rotatedKey, ...keys]);
+  emitOutbox(state, "business_user.api_key_rotated", {
+    authUserId: context.authUserId,
+    businessClientId: context.businessClientId,
+    keyId: rotatedKey.id,
+    rotatedFromApiKeyId: previous.id
+  });
+
+  return {
+    status: 201,
+    body: {
+      key: {
+        id: rotatedKey.id,
+        keyPrefix: rotatedKey.keyPrefix,
+        ownerBusinessClientId: rotatedKey.ownerBusinessClientId,
+        ownerBusinessClientName: rotatedKey.ownerBusinessClientName,
+        scopes: rotatedKey.scopes,
+        status: rotatedKey.status,
+        createdAt: rotatedKey.createdAt
+      },
+      plaintextKey,
+      rotatedFromApiKeyId: previous.id
+    }
+  };
+};
+
 const resolveOnboardingAssets = async (
   state: ApiState,
   application: BusinessOnboardingApplication,
@@ -483,6 +1812,141 @@ const resolveOnboardingAssets = async (
   return { businessClient: undefined, adaAccounts: [] };
 };
 
+const resolveApprovedBusinessClientContext = async (
+  state: ApiState,
+  auth: AuthenticatedBusinessUser
+): Promise<{ authUserId: string; businessClientId: string; businessClientName: string; tenantId: string } | undefined> => {
+  const persisted = await hydrateBusinessUserOnboarding(state, auth);
+  const bundle = persisted ?? ensureBusinessUserOnboarding(state, auth);
+  if (bundle.application.status !== "approved") return undefined;
+  const stepPayloads = await hydrateOnboardingStepPayloads(state, bundle.application);
+  const assets = await resolveOnboardingAssets(state, bundle.application, stepPayloads);
+  if (assets.businessClient && assets.businessClient.onboardingStatus === "approved") {
+    return {
+      authUserId: auth.authUserId,
+      businessClientId: assets.businessClient.id,
+      businessClientName: assets.businessClient.legalName,
+      tenantId: bundle.application.tenantId
+    };
+  }
+  const runtimeClient = state.businessClients.find((item) =>
+    item.tenantId === bundle.application.tenantId && item.onboardingStatus === "approved"
+  );
+  if (!runtimeClient) return undefined;
+  return {
+    authUserId: auth.authUserId,
+    businessClientId: runtimeClient.id,
+    businessClientName: runtimeClient.legalName,
+    tenantId: bundle.application.tenantId
+  };
+};
+
+const businessApiKeyStoreKey = (tenantId: string, businessClientId: string, authUserId: string): string =>
+  `${tenantId}:${businessClientId}:${authUserId}`;
+
+const normalizeBusinessApiKeyScopes = (
+  value: unknown
+): { scopes: string[]; error?: string } => {
+  if (!Array.isArray(value)) return { scopes: ["ada.read", "ada.open"] };
+  const requested = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!requested.length) return { scopes: ["ada.read", "ada.open"] };
+  if (requested.some((scope) => scope.includes("*") || scope.startsWith("internal."))) {
+    return { scopes: [], error: "business_scope_forbidden" };
+  }
+  const allowed = new Set<string>(businessApiKeyAllowlist);
+  const invalid = requested.find((scope) => !allowed.has(scope));
+  if (invalid) return { scopes: [], error: "business_scope_not_allowlisted" };
+  return { scopes: [...new Set(requested)] };
+};
+
+const optionalBodyString = (body: Record<string, unknown>, key: string): string | undefined => {
+  const value = body[key];
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const bodyRecord = (body: Record<string, unknown>, key: string): Record<string, unknown> => {
+  const value = body[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+};
+
+const readBusinessApiKeyFromHeaders = (headers: Record<string, string | undefined>): string | undefined => {
+  const headerKey = headers["x-gtt-api-key"] ?? headers["X-GTT-API-Key"];
+  if (headerKey?.trim()) return headerKey.trim();
+  const authorization = headers.authorization;
+  if (!authorization?.startsWith("Bearer ")) return undefined;
+  const bearer = authorization.slice("Bearer ".length).trim();
+  if (!bearer.startsWith("gtt_live_") || !bearer.includes(".")) return undefined;
+  return bearer;
+};
+
+const resolveBusinessApiKeyRecord = (
+  plaintextKey: string
+): (BusinessApiKeyView & { keyHash: string }) | undefined => {
+  const [prefix, secret] = plaintextKey.split(".");
+  if (!prefix || !secret) return undefined;
+  const secretHash = hashApiSecret(secret);
+  for (const keys of businessApiKeyRecords.values()) {
+    const match = keys.find((candidate) =>
+      candidate.keyPrefix === prefix
+      && candidate.keyHash === secretHash
+      && candidate.status === "active"
+    );
+    if (match) return match;
+  }
+  return undefined;
+};
+
+export const authenticateBusinessApiKey = async (
+  headers: Record<string, string | undefined>,
+  requiredScopes: string[] = []
+): Promise<AuthenticatedBusinessApiKey | undefined> => {
+  const plaintextKey = readBusinessApiKeyFromHeaders(headers);
+  if (!plaintextKey) return undefined;
+  const record = resolveBusinessApiKeyRecord(plaintextKey);
+  if (!record) return undefined;
+  if (requiredScopes.length > 0 && requiredScopes.some((scope) => !record.scopes.includes(scope))) return undefined;
+  return {
+    authUserId: record.ownerAuthUserId,
+    email: "business_api_key@gtt.local",
+    keyId: record.id,
+    scopes: [...record.scopes]
+  };
+};
+
+export const authenticateBusinessUserOrApiKey = async (
+  headers: Record<string, string | undefined>,
+  requiredScopes: string[] = []
+): Promise<AuthenticatedBusinessUser | undefined> => {
+  const user = await authenticateBusinessUser(headers);
+  if (user) return user;
+  const apiKey = await authenticateBusinessApiKey(headers, requiredScopes);
+  if (!apiKey) return undefined;
+  return {
+    authUserId: apiKey.authUserId,
+    email: apiKey.email
+  };
+};
+
+const activationViewFromAccountStatus = (status: string): ActivationView => {
+  if (status === "active") {
+    return {
+      activationDecision: "auto",
+      activationReasonCode: "virtual_no_linked_instrument_auto_activation"
+    };
+  }
+  return {
+    activationDecision: "approval_required",
+    activationReasonCode: "linked_instrument_requires_internal_approval"
+  };
+};
+
 const resolveOwnedBusinessAda = async (
   state: ApiState,
   auth: AuthenticatedBusinessUser,
@@ -542,6 +2006,44 @@ const resolveOwnedBusinessAda = async (
     businessClientId: businessClient.id,
     tenantId: account.tenantId
   } : undefined;
+};
+
+const resolveOwnedBusinessLinkedInstrument = async (
+  state: ApiState,
+  auth: AuthenticatedBusinessUser,
+  linkedInstrumentId: string
+): Promise<{ linkedInstrumentId: string; businessClientId: string; tenantId: string; accountId?: string } | undefined> => {
+  const context = await resolveApprovedBusinessClientContext(state, auth);
+  if (!context) return undefined;
+
+  const tenantId = uuidFromRuntimeId(context.tenantId) ?? context.tenantId;
+  if (postgresUrlFromEnv()) {
+    try {
+      return await withPostgresTransaction(async (client) => {
+        const result = await client.query(
+          `select id, business_client_id, platform_tenant_id, account_of_digital_asset_id
+             from linked_instruments
+            where id = $1
+              and platform_tenant_id = $2
+              and business_client_id = $3
+            limit 1`,
+          [linkedInstrumentId, tenantId, context.businessClientId]
+        );
+        const row = result.rows[0] as Record<string, unknown> | undefined;
+        return row ? {
+          linkedInstrumentId: String(row.id),
+          businessClientId: String(row.business_client_id),
+          tenantId: String(row.platform_tenant_id),
+          accountId: row.account_of_digital_asset_id ? String(row.account_of_digital_asset_id) : undefined
+        } : undefined;
+      });
+    } catch (error) {
+      if (!isPostgresConnectivityError(error)) throw error;
+      console.warn("[self-registration] Postgres unavailable in resolveOwnedBusinessLinkedInstrument; falling back", error);
+    }
+  }
+
+  return undefined;
 };
 
 export const handleSaveMyOnboardingStep = async (
@@ -1026,28 +2528,541 @@ const markInvitationSent = (invitation: BusinessOnboardingInvitation, supabaseUs
 };
 
 export const authenticateBusinessUser = async (headers: Record<string, string | undefined>): Promise<AuthenticatedBusinessUser | undefined> => {
-  const header = headers.authorization;
-  const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
-  if (!token) return undefined;
+  const token = bearerTokenFromHeaders(headers);
+  if (token) {
+    const firstPartyAuth = await authenticateFirstPartyBusinessUser(token);
+    if (firstPartyAuth) return firstPartyAuth;
+  }
+  return authenticateDevBusinessUser(headers);
+};
 
-  const supabase = supabaseAdminClient();
+const authenticateDevBusinessUser = (
+  headers: Record<string, string | undefined>
+): AuthenticatedBusinessUser | undefined => {
+  if (process.env.ALLOW_DEV_WITHOUT_SUPABASE !== "true") return undefined;
+  const authUserId = headers["x-dev-auth-user-id"]?.trim();
+  const email = headers["x-dev-auth-email"]?.trim();
+  if (!authUserId || !email) return undefined;
+  return {
+    authUserId,
+    email: normalizeEmail(email)
+  };
+};
+
+const bearerTokenFromHeaders = (headers: Record<string, string | undefined>): string | undefined => {
+  const header = headers.authorization;
+  if (!header?.startsWith("Bearer ")) return undefined;
+  const token = header.slice("Bearer ".length).trim();
+  return token ? token : undefined;
+};
+
+const mapSupabaseSessionToBusinessSession = async (
+  session: {
+    access_token?: string;
+    token_type?: string;
+    expires_in?: number;
+    expires_at?: number;
+    refresh_token?: string;
+    user?: {
+      id?: string;
+      email?: string | null;
+    };
+  }
+): Promise<BusinessJwtSession | undefined> => {
+  if (!session.access_token || !session.user?.id || !session.user.email) return undefined;
+  const tokenBundle = createBusinessSessionToken({
+    authUserId: session.user.id,
+    email: normalizeEmail(session.user.email),
+    sessionId: randomUUID(),
+    tokenUse: "access"
+  });
+  const refreshTokenBundle = createBusinessSessionToken({
+    authUserId: session.user.id,
+    email: normalizeEmail(session.user.email),
+    sessionId: tokenBundle?.sessionId ?? randomUUID(),
+    tokenUse: "refresh",
+    expiresIn: businessJwtRefreshExpiresInSeconds()
+  });
+  if (!tokenBundle || !refreshTokenBundle) return undefined;
+
+  const storedSession: BusinessSessionRecord = {
+    sessionId: tokenBundle.sessionId,
+    authUserId: session.user.id,
+    email: normalizeEmail(session.user.email),
+    accessJti: tokenBundle.jti,
+    refreshJti: refreshTokenBundle.jti,
+    expiresAt: tokenBundle.expiresAt,
+    refreshExpiresAt: refreshTokenBundle.expiresAt,
+    supabaseAccessToken: session.access_token,
+    supabaseRefreshToken: session.refresh_token
+  };
+
+  await upsertBusinessAuthSession(storedSession);
+
+  return {
+    access_token: tokenBundle.token,
+    token_type: "bearer",
+    expires_in: tokenBundle.expiresIn,
+    expires_at: Math.floor(tokenBundle.expiresAt / 1000),
+    refresh_token: refreshTokenBundle.token,
+    user: {
+      id: session.user.id,
+      email: session.user.email
+    }
+  };
+};
+
+export const handleBusinessAuthSignIn = async (
+  input: { email?: unknown; password?: unknown }
+): Promise<JsonResponse> => {
+  const email = normalizeEmail(String(input.email ?? ""));
+  const password = String(input.password ?? "");
+  if (!isValidEmail(email)) return badRequest("valid_email_required");
+  if (!password.trim()) return badRequest("password_required");
+
+  const supabase = supabaseAuthClient();
   if (!supabase) {
-    if (process.env.ALLOW_DEV_WITHOUT_SUPABASE !== "true") return undefined;
-    const authUserId = headers["x-dev-auth-user-id"];
-    const email = headers["x-dev-auth-email"];
-    if (!authUserId || !email) return undefined;
-    return { authUserId, email: normalizeEmail(email) };
+    return {
+      status: 503,
+      body: { error: "supabase_admin_not_configured" }
+    };
   }
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user?.email) return undefined;
+  const { data, error } = await supabase.signInWithPassword({ email, password });
+  if (error || !data.session) {
+    return {
+      status: 401,
+      body: { error: "invalid_credentials" }
+    };
+  }
+
+  const session = await mapSupabaseSessionToBusinessSession(data.session);
+  if (!session) {
+    return {
+      status: 503,
+      body: { error: "business_auth_not_configured" }
+    };
+  }
+
   return {
-    authUserId: data.user.id,
-    email: normalizeEmail(data.user.email)
+    status: 200,
+    body: { session }
+  };
+};
+
+export const handleBusinessAuthSetPassword = async (
+  input: { headers: Record<string, string | undefined>; token?: unknown; password?: unknown }
+): Promise<JsonResponse> => {
+  const password = String(input.password ?? "");
+  if (!password.trim()) return badRequest("password_required");
+
+  const tokenFromBody = typeof input.token === "string" ? input.token.trim() : "";
+  const token = tokenFromBody || bearerTokenFromHeaders(input.headers) || "";
+  if (!token) return unauthorized("business_user_auth_required");
+
+  const supabase = supabaseAuthClient();
+  if (!supabase) {
+    return {
+      status: 503,
+      body: { error: "supabase_admin_not_configured" }
+    };
+  }
+
+  const userResult = await supabase.getUser(token);
+  if (userResult.error || !userResult.data.user?.id || !userResult.data.user?.email) {
+    return unauthorized("business_user_auth_required");
+  }
+
+  const update = await supabase.updateUserById(userResult.data.user.id, {
+    password,
+    email_confirm: true
+  });
+  if (update.error) {
+    return {
+      status: 502,
+      body: { error: "set_password_failed", detail: update.error.message }
+    };
+  }
+
+  const signIn = await supabase.signInWithPassword({
+    email: userResult.data.user.email,
+    password
+  });
+  if (signIn.error || !signIn.data.session) {
+    return {
+      status: 502,
+      body: { error: "auth_session_unavailable" }
+    };
+  }
+
+  const session = await mapSupabaseSessionToBusinessSession(signIn.data.session);
+  if (!session) {
+    return {
+      status: 503,
+      body: { error: "business_auth_not_configured" }
+    };
+  }
+
+  return {
+    status: 200,
+    body: { session }
+  };
+};
+
+export const handleBusinessAuthResetPassword = async (
+  input: { email?: unknown }
+): Promise<JsonResponse> => {
+  const email = normalizeEmail(String(input.email ?? ""));
+  if (!isValidEmail(email)) return badRequest("valid_email_required");
+
+  const supabase = supabaseAuthClient();
+  if (!supabase) {
+    return {
+      status: 503,
+      body: { error: "supabase_admin_not_configured" }
+    };
+  }
+
+  const { error } = await supabase.resetPasswordForEmail(email, {
+    redirectTo: inviteRedirectUrl()
+  });
+
+  if (error) {
+    return {
+      status: 502,
+      body: { error: "password_reset_failed", detail: error.message }
+    };
+  }
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      status: "password_reset_sent",
+      message: "Password recovery email sent."
+    }
+  };
+};
+
+export const handleBusinessAuthMe = async (
+  headers: Record<string, string | undefined>
+): Promise<JsonResponse> => {
+  const auth = await authenticateBusinessUser(headers);
+  if (!auth) return unauthorized("business_user_auth_required");
+  return {
+    status: 200,
+    body: {
+      user: {
+        authUserId: auth.authUserId,
+        email: auth.email
+      }
+    }
+  };
+};
+
+export const handleBusinessAuthSignOut = async (
+  headers: Record<string, string | undefined>
+): Promise<JsonResponse> => {
+  const token = bearerTokenFromHeaders(headers);
+  if (!token) return unauthorized("business_user_auth_required");
+
+  const verified = verifyBusinessSessionToken(token);
+  if (!verified) return unauthorized("business_user_auth_required");
+
+  if (verified.token_use !== "access") return unauthorized("business_user_auth_required");
+
+  const session = await getBusinessAuthSessionByAccessJti(verified.jti);
+  if (!session) return unauthorized("business_user_auth_required");
+
+  if (session.expiresAt <= Date.now()) {
+    await revokeBusinessAuthSession(session.sessionId);
+    return unauthorized("business_user_auth_required");
+  }
+
+  const supabase = supabaseAuthClient();
+  if (!supabase) {
+    return {
+      status: 503,
+      body: { error: "supabase_admin_not_configured" }
+    };
+  }
+
+  const { error } = await supabase.signOutSession(session.supabaseAccessToken);
+  if (error) {
+    const statusCode = typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : undefined;
+    if (statusCode === 401 || statusCode === 403) {
+      return unauthorized("business_user_auth_required");
+    }
+    return {
+      status: 502,
+      body: { error: "sign_out_failed", detail: error.message }
+    };
+  }
+
+  await revokeBusinessAuthSession(session.sessionId);
+
+  return {
+    status: 200,
+    body: { ok: true }
+  };
+};
+
+export const handleBusinessAuthRefresh = async (
+  input: { refreshToken?: unknown }
+): Promise<JsonResponse> => {
+  const refreshToken = typeof input.refreshToken === "string" ? input.refreshToken.trim() : "";
+  if (!refreshToken) return unauthorized("business_user_auth_required");
+
+  const verified = verifyBusinessSessionToken(refreshToken);
+  if (!verified || verified.token_use !== "refresh") return unauthorized("business_user_auth_required");
+
+  const existing = await getBusinessAuthSessionByRefreshJti(verified.jti);
+  if (!existing) return unauthorized("business_user_auth_required");
+  if (existing.refreshExpiresAt <= Date.now()) {
+    await revokeBusinessAuthSession(existing.sessionId);
+    return unauthorized("business_user_auth_required");
+  }
+
+  const supabase = supabaseAuthClient();
+  if (!supabase) {
+    return {
+      status: 503,
+      body: { error: "supabase_admin_not_configured" }
+    };
+  }
+
+  if (!existing.supabaseRefreshToken) {
+    return unauthorized("business_user_auth_required");
+  }
+
+  const refreshed = await supabase.refreshSession(existing.supabaseRefreshToken);
+  if (refreshed.error || !refreshed.data.session?.access_token) {
+    await revokeBusinessAuthSession(existing.sessionId);
+    return unauthorized("business_user_auth_required");
+  }
+
+  const nextAccessToken = createBusinessSessionToken({
+    authUserId: existing.authUserId,
+    email: existing.email,
+    sessionId: existing.sessionId,
+    tokenUse: "access"
+  });
+  const nextRefreshToken = createBusinessSessionToken({
+    authUserId: existing.authUserId,
+    email: existing.email,
+    sessionId: existing.sessionId,
+    tokenUse: "refresh",
+    expiresIn: businessJwtRefreshExpiresInSeconds()
+  });
+  if (!nextAccessToken || !nextRefreshToken) {
+    return {
+      status: 503,
+      body: { error: "business_auth_not_configured" }
+    };
+  }
+
+  const updatedSession: BusinessSessionRecord = {
+    ...existing,
+    accessJti: nextAccessToken.jti,
+    expiresAt: nextAccessToken.expiresAt,
+    refreshJti: nextRefreshToken.jti,
+    refreshExpiresAt: nextRefreshToken.expiresAt,
+    supabaseAccessToken: refreshed.data.session.access_token,
+    supabaseRefreshToken: refreshed.data.session.refresh_token ?? existing.supabaseRefreshToken
+  };
+  await upsertBusinessAuthSession(updatedSession);
+
+  return {
+    status: 200,
+    body: {
+      session: {
+        access_token: nextAccessToken.token,
+        token_type: "bearer",
+        expires_in: nextAccessToken.expiresIn,
+        expires_at: Math.floor(nextAccessToken.expiresAt / 1000),
+        refresh_token: nextRefreshToken.token,
+        user: {
+          id: existing.authUserId,
+          email: existing.email
+        }
+      }
+    }
+  };
+};
+
+const authenticateFirstPartyBusinessUser = async (token: string): Promise<AuthenticatedBusinessUser | undefined> => {
+  const verified = verifyBusinessSessionToken(token);
+  if (!verified) return undefined;
+  if (verified.token_use !== "access") return undefined;
+
+  const session = await getBusinessAuthSessionByAccessJti(verified.jti);
+  if (!session) return undefined;
+  if (session.expiresAt <= Date.now()) {
+    await revokeBusinessAuthSession(session.sessionId);
+    return undefined;
+  }
+  if (session.sessionId !== verified.sid || session.authUserId !== verified.sub) {
+    return undefined;
+  }
+
+  return {
+    authUserId: session.authUserId,
+    email: session.email
+  };
+};
+
+const createBusinessSessionToken = (
+  input: { authUserId: string; email: string; expiresIn?: number; sessionId: string; tokenUse: "access" | "refresh" }
+): { expiresAt: number; expiresIn: number; jti: string; sessionId: string; token: string } | undefined => {
+  const secret = businessJwtSecret();
+  if (!secret) return undefined;
+
+  const now = Math.floor(Date.now() / 1000);
+  const expiresIn = input.expiresIn ?? businessJwtExpiresInSeconds();
+  const jti = randomUUID();
+  const payload: BusinessAuthTokenClaims = {
+    iss: "gtt-api",
+    aud: "business-user",
+    sub: input.authUserId,
+    sid: input.sessionId,
+    token_use: input.tokenUse,
+    email: input.email,
+    jti,
+    iat: now,
+    exp: now + expiresIn
+  };
+  const token = signBusinessSessionPayload(payload, secret);
+  return {
+    expiresAt: (now + expiresIn) * 1000,
+    expiresIn,
+    jti,
+    sessionId: input.sessionId,
+    token
+  };
+};
+
+const verifyBusinessSessionToken = (token: string): BusinessAuthTokenClaims | undefined => {
+  const secret = businessJwtSecret();
+  if (!secret) return undefined;
+
+  const parts = token.split(".");
+  if (parts.length !== 3) return undefined;
+  const [headerPart, payloadPart, signaturePart] = parts;
+  if (!headerPart || !payloadPart || !signaturePart) return undefined;
+
+  const signingInput = `${headerPart}.${payloadPart}`;
+  const expectedSignature = base64UrlEncode(createHmac("sha256", secret).update(signingInput).digest());
+  const expectedBuf = Buffer.from(expectedSignature);
+  const receivedBuf = Buffer.from(signaturePart);
+  if (expectedBuf.length !== receivedBuf.length || !timingSafeEqual(expectedBuf, receivedBuf)) return undefined;
+
+  const payloadJson = base64UrlDecodeToString(payloadPart);
+  if (!payloadJson) return undefined;
+
+  let payloadUnknown: unknown;
+  try {
+    payloadUnknown = JSON.parse(payloadJson);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(payloadUnknown)) return undefined;
+
+  const iss = payloadUnknown.iss;
+  const aud = payloadUnknown.aud;
+  const sub = payloadUnknown.sub;
+  const sid = payloadUnknown.sid;
+  const tokenUse = payloadUnknown.token_use;
+  const email = payloadUnknown.email;
+  const jti = payloadUnknown.jti;
+  const iat = payloadUnknown.iat;
+  const exp = payloadUnknown.exp;
+  if (iss !== "gtt-api" || aud !== "business-user") return undefined;
+  if (typeof sub !== "string" || !sub) return undefined;
+  if (typeof sid !== "string" || !sid) return undefined;
+  if (tokenUse !== "access" && tokenUse !== "refresh") return undefined;
+  if (typeof email !== "string" || !email) return undefined;
+  if (typeof jti !== "string" || !jti) return undefined;
+  if (typeof iat !== "number" || typeof exp !== "number") return undefined;
+  if (exp <= Math.floor(Date.now() / 1000)) return undefined;
+
+  return {
+    iss,
+    aud,
+    sub,
+    sid,
+    token_use: tokenUse,
+    email,
+    jti,
+    iat,
+    exp
+  };
+};
+
+const signBusinessSessionPayload = (payload: BusinessAuthTokenClaims, secret: string): string => {
+  const header = { alg: "HS256", typ: "JWT" };
+  const headerPart = base64UrlEncode(Buffer.from(JSON.stringify(header), "utf8"));
+  const payloadPart = base64UrlEncode(Buffer.from(JSON.stringify(payload), "utf8"));
+  const signingInput = `${headerPart}.${payloadPart}`;
+  const signaturePart = base64UrlEncode(createHmac("sha256", secret).update(signingInput).digest());
+  return `${signingInput}.${signaturePart}`;
+};
+
+const businessJwtSecret = (): string | undefined => {
+  const secret = process.env.BUSINESS_AUTH_JWT_SECRET?.trim();
+  return secret || undefined;
+};
+
+const businessJwtExpiresInSeconds = (): number => {
+  const fromEnv = Number.parseInt(process.env.BUSINESS_AUTH_JWT_EXPIRES_IN_SECONDS ?? "", 10);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return 3600;
+};
+
+const businessJwtRefreshExpiresInSeconds = (): number => {
+  const fromEnv = Number.parseInt(process.env.BUSINESS_AUTH_JWT_REFRESH_EXPIRES_IN_SECONDS ?? "", 10);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return 60 * 60 * 24 * 30;
+};
+
+const base64UrlEncode = (value: Buffer): string =>
+  value
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+const base64UrlDecodeToString = (value: string): string | undefined => {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padLen = (4 - (normalized.length % 4)) % 4;
+    const padded = `${normalized}${"=".repeat(padLen)}`;
+    return Buffer.from(padded, "base64").toString("utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+const supabaseAuthClient = (): SupabaseBusinessAuthClient | undefined => {
+  if (supabaseBusinessAuthClientForTest) return supabaseBusinessAuthClientForTest;
+
+  const rawClient = supabaseAdminClient();
+  if (!rawClient) return undefined;
+
+  return {
+    inviteUserByEmail: (email, options) => rawClient.auth.admin.inviteUserByEmail(email, options),
+    signInWithPassword: (input) => rawClient.auth.signInWithPassword(input),
+    getUser: (accessToken) => rawClient.auth.getUser(accessToken),
+    updateUserById: (userId, input) => rawClient.auth.admin.updateUserById(userId, input),
+    resetPasswordForEmail: (email, options) => rawClient.auth.resetPasswordForEmail(email, options),
+    signOutSession: (accessToken) => rawClient.auth.admin.signOut(accessToken, "local"),
+    refreshSession: (refreshToken) => rawClient.auth.refreshSession({ refresh_token: refreshToken })
   };
 };
 
 const supabaseAdminClient = (): SupabaseClient | undefined => {
+
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return undefined;
@@ -1057,6 +3072,183 @@ const supabaseAdminClient = (): SupabaseClient | undefined => {
       persistSession: false
     }
   });
+};
+
+const upsertBusinessAuthSession = async (session: BusinessSessionRecord): Promise<void> => {
+  upsertRuntimeBusinessAuthSession(session);
+
+  if (!postgresUrlFromEnv()) return;
+  try {
+    await withPostgresTransaction(async (client) => {
+      await client.query(
+        `insert into business_auth_sessions
+          (session_id, auth_user_id, email, access_jti, access_expires_at, refresh_jti, refresh_expires_at, supabase_access_token, supabase_refresh_token, revoked_at, created_at, updated_at)
+         values ($1, $2, $3, $4, to_timestamp($5 / 1000.0), $6, to_timestamp($7 / 1000.0), $8, $9, null, now(), now())
+         on conflict (session_id) do update set
+           auth_user_id = excluded.auth_user_id,
+           email = excluded.email,
+           access_jti = excluded.access_jti,
+           access_expires_at = excluded.access_expires_at,
+           refresh_jti = excluded.refresh_jti,
+           refresh_expires_at = excluded.refresh_expires_at,
+           supabase_access_token = excluded.supabase_access_token,
+           supabase_refresh_token = excluded.supabase_refresh_token,
+           revoked_at = excluded.revoked_at,
+           updated_at = now()`,
+        [
+          session.sessionId,
+          session.authUserId,
+          session.email,
+          session.accessJti,
+          session.expiresAt,
+          session.refreshJti,
+          session.refreshExpiresAt,
+          session.supabaseAccessToken,
+          session.supabaseRefreshToken ?? null
+        ]
+      );
+    });
+  } catch (error) {
+    if (isPostgresConnectivityError(error) || isMissingTableError(error, "business_auth_sessions")) return;
+    throw error;
+  }
+};
+
+const revokeBusinessAuthSession = async (sessionId: string): Promise<void> => {
+  deleteRuntimeBusinessAuthSession(sessionId);
+  if (!postgresUrlFromEnv()) return;
+  try {
+    await withPostgresTransaction(async (client) => {
+      await client.query(
+        `update business_auth_sessions
+            set revoked_at = now(),
+                updated_at = now()
+          where session_id = $1`,
+        [sessionId]
+      );
+    });
+  } catch (error) {
+    if (isPostgresConnectivityError(error) || isMissingTableError(error, "business_auth_sessions")) return;
+    throw error;
+  }
+};
+
+const getBusinessAuthSessionByAccessJti = async (accessJti: string): Promise<BusinessSessionRecord | undefined> => {
+  const runtimeSession = getRuntimeBusinessAuthSessionByAccessJti(accessJti);
+  if (runtimeSession) return runtimeSession;
+
+  if (!postgresUrlFromEnv()) return undefined;
+  try {
+    const stored = await withPostgresTransaction(async (client) => {
+      const result = await client.query(
+        `select session_id, auth_user_id, email, access_jti, refresh_jti, access_expires_at, refresh_expires_at, supabase_access_token, supabase_refresh_token, revoked_at
+           from business_auth_sessions
+          where access_jti = $1
+          limit 1`,
+        [accessJti]
+      );
+      return result.rows[0] as Record<string, unknown> | undefined;
+    });
+    if (!stored || stored.revoked_at) return undefined;
+    const session = mapStoredBusinessAuthSession(stored);
+    if (!session) return undefined;
+    upsertRuntimeBusinessAuthSession(session);
+    return session;
+  } catch (error) {
+    if (isPostgresConnectivityError(error) || isMissingTableError(error, "business_auth_sessions")) return undefined;
+    throw error;
+  }
+};
+
+const getBusinessAuthSessionByRefreshJti = async (refreshJti: string): Promise<BusinessSessionRecord | undefined> => {
+  const runtimeSession = getRuntimeBusinessAuthSessionByRefreshJti(refreshJti);
+  if (runtimeSession) return runtimeSession;
+
+  if (!postgresUrlFromEnv()) return undefined;
+  try {
+    const stored = await withPostgresTransaction(async (client) => {
+      const result = await client.query(
+        `select session_id, auth_user_id, email, access_jti, refresh_jti, access_expires_at, refresh_expires_at, supabase_access_token, supabase_refresh_token, revoked_at
+           from business_auth_sessions
+          where refresh_jti = $1
+          limit 1`,
+        [refreshJti]
+      );
+      return result.rows[0] as Record<string, unknown> | undefined;
+    });
+    if (!stored || stored.revoked_at) return undefined;
+    const session = mapStoredBusinessAuthSession(stored);
+    if (!session) return undefined;
+    upsertRuntimeBusinessAuthSession(session);
+    return session;
+  } catch (error) {
+    if (isPostgresConnectivityError(error) || isMissingTableError(error, "business_auth_sessions")) return undefined;
+    throw error;
+  }
+};
+
+const mapStoredBusinessAuthSession = (row: Record<string, unknown>): BusinessSessionRecord | undefined => {
+  const sessionId = typeof row.session_id === "string" ? row.session_id : undefined;
+  const authUserId = typeof row.auth_user_id === "string" ? row.auth_user_id : undefined;
+  const email = typeof row.email === "string" ? row.email : undefined;
+  const accessJti = typeof row.access_jti === "string" ? row.access_jti : undefined;
+  const refreshJti = typeof row.refresh_jti === "string" ? row.refresh_jti : undefined;
+  const supabaseAccessToken = typeof row.supabase_access_token === "string" ? row.supabase_access_token : undefined;
+  if (!sessionId || !authUserId || !email || !accessJti || !refreshJti || !supabaseAccessToken) return undefined;
+
+  const accessExpiresAt = parseTimestampToMillis(row.access_expires_at);
+  const refreshExpiresAt = parseTimestampToMillis(row.refresh_expires_at);
+  if (!accessExpiresAt || !refreshExpiresAt) return undefined;
+
+  return {
+    sessionId,
+    authUserId,
+    email,
+    accessJti,
+    refreshJti,
+    expiresAt: accessExpiresAt,
+    refreshExpiresAt,
+    supabaseAccessToken,
+    supabaseRefreshToken: typeof row.supabase_refresh_token === "string" ? row.supabase_refresh_token : undefined
+  };
+};
+
+const parseTimestampToMillis = (value: unknown): number | undefined => {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+};
+
+const upsertRuntimeBusinessAuthSession = (session: BusinessSessionRecord): void => {
+  const previous = businessAuthSessions.get(session.sessionId);
+  if (previous) {
+    businessAuthSessionIdByAccessJti.delete(previous.accessJti);
+    businessAuthSessionIdByRefreshJti.delete(previous.refreshJti);
+  }
+  businessAuthSessions.set(session.sessionId, session);
+  businessAuthSessionIdByAccessJti.set(session.accessJti, session.sessionId);
+  businessAuthSessionIdByRefreshJti.set(session.refreshJti, session.sessionId);
+};
+
+const getRuntimeBusinessAuthSessionByAccessJti = (accessJti: string): BusinessSessionRecord | undefined => {
+  const sessionId = businessAuthSessionIdByAccessJti.get(accessJti);
+  return sessionId ? businessAuthSessions.get(sessionId) : undefined;
+};
+
+const getRuntimeBusinessAuthSessionByRefreshJti = (refreshJti: string): BusinessSessionRecord | undefined => {
+  const sessionId = businessAuthSessionIdByRefreshJti.get(refreshJti);
+  return sessionId ? businessAuthSessions.get(sessionId) : undefined;
+};
+
+const deleteRuntimeBusinessAuthSession = (sessionId: string): void => {
+  const existing = businessAuthSessions.get(sessionId);
+  if (!existing) return;
+  businessAuthSessions.delete(sessionId);
+  businessAuthSessionIdByAccessJti.delete(existing.accessJti);
+  businessAuthSessionIdByRefreshJti.delete(existing.refreshJti);
 };
 
 const inviteRedirectUrl = (): string => process.env.AUTH_INVITE_REDIRECT_URL ?? "http://localhost:5173/auth/set-password";
@@ -1497,4 +3689,28 @@ const countryCodeFromPayload = (payload: Record<string, unknown>): string => {
     "usa": "US"
   };
   return mapped[normalized] ?? (country.trim().slice(0, 2).toUpperCase() || "US");
+};
+
+const bodyString = (payload: Record<string, unknown>, key: string, fallback: string): string => {
+  const value = payload[key];
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+};
+
+const normalizeUsePurpose = (input: string): string => {
+  const normalized = input.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized || "settlement";
+};
+
+const runtimePurposeFromUsePurpose = (usePurpose: string): "operating" | "settlement" | "escrow" | "suspense" => {
+  if (usePurpose.includes("operat")) return "operating";
+  if (usePurpose.includes("escrow")) return "escrow";
+  if (usePurpose.includes("suspense")) return "suspense";
+  return "settlement";
+};
+
+const normalizeAssetCode = (value: string): string => {
+  const normalized = value.trim().toUpperCase();
+  return normalized === "EURC" || normalized === "USD" || normalized === "USDC" ? normalized : "USDC";
 };

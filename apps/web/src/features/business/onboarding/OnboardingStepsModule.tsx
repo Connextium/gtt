@@ -1,4 +1,3 @@
-import { type Session } from "@supabase/supabase-js";
 import {
   ArrowLeft,
   ArrowRight,
@@ -23,6 +22,7 @@ import officeInhouse from "../../../assets/office-inhouse.jpg";
 import { type MyOnboardingResponse, type OnboardingApplication, type OnboardingDraftPayload, type OnboardingStepKey } from "./types.js";
 import { draftArray, draftString, formToPayload, loadOnboardingDraft, saveOnboardingDraft } from "./draftUtils.js";
 import { apiRequest } from "../shared/apiClient.js";
+import { type BusinessJwtSession } from "../shared/useSupabaseSession.js";
 import { BusinessAvatarMenu } from "../shared/BusinessAvatarMenu.js";
 
 type Navigate = (path: string) => void;
@@ -39,7 +39,7 @@ type StepProps = {
 type OnboardingStepsModuleProps = {
   path: string;
   navigate: Navigate;
-  session: Session | null;
+  session: BusinessJwtSession | null;
   onLogout: () => void;
   routeForApplication: (application: OnboardingApplication) => string;
   onboardingStepNumber: (step: OnboardingStepKey) => number;

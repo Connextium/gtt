@@ -1,4 +1,3 @@
-import { type Session } from "@supabase/supabase-js";
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,22 +19,12 @@ import headquartersBuildingAda from "../../../assets-ada/headquarters-building.j
 import officeInhouseAda from "../../../assets-ada/office-inhouse.jpg";
 import { type InvitationResponse } from "./types.js";
 import { apiRequest } from "../shared/apiClient.js";
+import { type BusinessJwtSession } from "../shared/useSupabaseSession.js";
 
 type Navigate = (path: string) => void;
 
-type SupabaseLike = {
-  auth: {
-    getSession: () => Promise<{ data: { session: Session | null } }>;
-    resetPasswordForEmail: (
-      email: string,
-      options: { redirectTo: string }
-    ) => Promise<{ error: { message: string } | null }>;
-    signInWithPassword: (credentials: {
-      email: string;
-      password: string;
-    }) => Promise<{ data: { session: Session | null }; error: { message: string } | null }>;
-    updateUser: (attributes: { password: string }) => Promise<{ error: { message: string } | null }>;
-  };
+type BusinessAuthSessionResponse = {
+  session: BusinessJwtSession;
 };
 
 const isAdaHost = typeof window !== "undefined" && window.location.host.toLowerCase().startsWith("ada-");
@@ -162,13 +151,13 @@ export function CheckEmailScreen({ navigate }: { navigate: Navigate }) {
 export function SetPasswordScreen({
   navigate,
   nextOnboardingRoute,
-  session,
-  supabase
+  onAuthenticated,
+  session
 }: {
   navigate: Navigate;
   nextOnboardingRoute: (token: string) => Promise<string>;
-  session: Session | null;
-  supabase?: SupabaseLike;
+  onAuthenticated: (session: BusinessJwtSession) => void;
+  session: BusinessJwtSession | null;
 }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -186,10 +175,6 @@ export function SetPasswordScreen({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(undefined);
-    if (!supabase) {
-      setError("Supabase browser configuration is missing.");
-      return;
-    }
     if (!isValid) {
       setError("Password must satisfy all institutional security requirements.");
       return;
@@ -197,12 +182,17 @@ export function SetPasswordScreen({
 
     setSubmitting(true);
     try {
-      const { error: updateError } = await supabase.auth.updateUser({ password });
-      if (updateError) throw updateError;
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token ?? session?.access_token;
-      if (!token) throw new Error("Supabase invitation session is not active.");
-      navigate(await nextOnboardingRoute(token));
+      const token = session?.access_token ?? accessTokenFromLocation();
+      if (!token) throw new Error("Invitation session token is missing or expired.");
+      const result = await apiRequest<BusinessAuthSessionResponse>("/business/auth/set-password", {
+        method: "POST",
+        body: {
+          token,
+          password
+        }
+      });
+      onAuthenticated(result.session);
+      navigate(await nextOnboardingRoute(result.session.access_token));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to set password.");
     } finally {
@@ -271,7 +261,7 @@ export function SetPasswordScreen({
           </div>
 
           {error ? <div className="form-error">{error}</div> : null}
-          <button className="gtt-primary-action credential" disabled={!supabase || !isValid || submitting} type="submit">
+          <button className="gtt-primary-action credential" disabled={!isValid || submitting} type="submit">
             <span>{submitting ? "Securing account" : "Secure account"}</span>
             {submitting ? <Loader2 className="spin" size={20} /> : <ArrowRight size={20} />}
           </button>
@@ -293,7 +283,13 @@ export function SetPasswordScreen({
   );
 }
 
-export function SignInScreen({ navigate, supabase }: { navigate: Navigate; supabase?: SupabaseLike }) {
+export function SignInScreen({
+  navigate,
+  onAuthenticated
+}: {
+  navigate: Navigate;
+  onAuthenticated: (session: BusinessJwtSession) => void;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | undefined>();
@@ -305,27 +301,17 @@ export function SignInScreen({ navigate, supabase }: { navigate: Navigate; supab
     event.preventDefault();
     setError(undefined);
     setNotice(undefined);
-    if (!supabase) {
-      setError("Supabase browser configuration is missing.");
-      return;
-    }
     const normalizedEmail = email.trim().toLowerCase();
     setSubmitting(true);
     try {
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
-      if (signInError) {
-        setError(signInError.message);
-        return;
-      }
-
-      const token = signInData.session?.access_token ?? (await supabase.auth.getSession()).data.session?.access_token;
-      if (!token) {
-        navigate("/welcome");
-        return;
-      }
-
-      // Give the auth state listener one tick to publish the signed-in session.
-      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      const result = await apiRequest<BusinessAuthSessionResponse>("/business/auth/sign-in", {
+        method: "POST",
+        body: {
+          email: normalizedEmail,
+          password
+        }
+      });
+      onAuthenticated(result.session);
       navigate("/welcome");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to sign in.");
@@ -337,10 +323,6 @@ export function SignInScreen({ navigate, supabase }: { navigate: Navigate; supab
   async function sendPasswordRecovery() {
     setError(undefined);
     setNotice(undefined);
-    if (!supabase) {
-      setError("Supabase browser configuration is missing.");
-      return;
-    }
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail) {
       setError("Enter your business email before requesting password recovery.");
@@ -348,15 +330,17 @@ export function SignInScreen({ navigate, supabase }: { navigate: Navigate; supab
     }
 
     setResetting(true);
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-      redirectTo: `${window.location.origin}/auth/set-password`
-    });
-    setResetting(false);
-    if (resetError) {
-      setError(resetError.message);
-      return;
+    try {
+      const result = await apiRequest<{ message: string }>("/business/auth/reset-password", {
+        method: "POST",
+        body: { email: normalizedEmail }
+      });
+      setNotice(result.message);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to send password reset email.");
+    } finally {
+      setResetting(false);
     }
-    setNotice("Password recovery email sent. Use the email link to set a new password, then sign in again.");
   }
 
   return (
@@ -412,6 +396,21 @@ export function SignInScreen({ navigate, supabase }: { navigate: Navigate; supab
       </aside>
     </main>
   );
+}
+
+function accessTokenFromLocation(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+
+  const query = new URLSearchParams(window.location.search);
+  const directQuery = query.get("access_token")?.trim();
+  if (directQuery) return directQuery;
+
+  const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+  const hashParams = new URLSearchParams(hash);
+  const directHash = hashParams.get("access_token")?.trim();
+  if (directHash) return directHash;
+
+  return undefined;
 }
 
 function FeatureBlock({

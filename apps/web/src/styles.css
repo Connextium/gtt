@@ -43,6 +43,18 @@ select {
   font: inherit;
 }
 
+.gtt-app-loading {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: #f9f9f9;
+  color: #3f3a3b;
+  font-family: var(--font-data-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .gtt-register-shell {
   min-height: 100dvh;
   display: grid;
@@ -216,6 +228,30 @@ select {
 .gtt-business-avatar-popover button:hover {
   background: #000000;
   color: #ffffff;
+}
+
+.gtt-business-avatar-actions-group {
+  border-bottom: 1px solid #e0e0e0;
+  padding: 8px 0;
+  margin: 0 0 6px;
+}
+
+.gtt-business-avatar-actions-group p {
+  margin: 0;
+  color: #5e5e5e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 10px 6px;
+}
+
+.gtt-business-avatar-actions-group button {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  padding-top: 7px;
+  padding-bottom: 7px;
 }
 
 .gtt-register-main {
@@ -10576,6 +10612,7 @@ footer strong {
   --sovereign-border: #d6d6d0;
   --sovereign-text: #050505;
   --sovereign-muted: #696966;
+  --sovereign-top-strip-height: 78px;
   min-height: 100vh;
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -10600,7 +10637,7 @@ footer strong {
 }
 
 .gtt-sovereign-brand {
-  min-height: 78px;
+  min-height: var(--sovereign-top-strip-height);
   display: grid;
   align-content: center;
   gap: 2px;
@@ -10740,7 +10777,7 @@ footer strong {
   position: sticky;
   top: 0;
   z-index: 10;
-  min-height: 60px;
+  min-height: var(--sovereign-top-strip-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -10777,6 +10814,68 @@ footer strong {
 
 .gtt-sovereign-topbar-tools {
   color: var(--sovereign-muted);
+}
+
+.gtt-sovereign-settings-menu {
+  position: relative;
+}
+
+.gtt-sovereign-settings-trigger {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #000000;
+  background: #f9f9f9;
+  color: #000000;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.gtt-sovereign-settings-trigger:hover,
+.gtt-sovereign-settings-trigger[aria-expanded="true"] {
+  background: #000000;
+  color: #ffffff;
+}
+
+.gtt-sovereign-settings-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 96;
+  min-width: 220px;
+  border: 1px solid #000000;
+  background: #ffffff;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.12);
+  padding: 7px;
+}
+
+.gtt-sovereign-settings-popover p {
+  margin: 0;
+  border-bottom: 1px solid #e0e0e0;
+  color: #5e5e5e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px 8px;
+}
+
+.gtt-sovereign-settings-popover button {
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  background: transparent;
+  color: #000000;
+  text-align: left;
+  font-size: 12px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.gtt-sovereign-settings-popover button:hover {
+  background: #000000;
+  color: #ffffff;
 }
 
 .gtt-sovereign-topbar-tools > span {

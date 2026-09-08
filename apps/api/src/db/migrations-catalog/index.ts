@@ -206,6 +206,26 @@ export const migrationCatalog: MigrationCatalogEntry[] = [
     version: "0036",
     fileName: "0036_sprint5_2_settlement_advance_tenant_disbursement.sql",
     domainModules: ["payment-execution", "settlement-obligation", "reconciliation", "events"]
+  },
+  {
+    version: "0037",
+    fileName: "0037_sprint6_settlement_obligations_funding_reservations.sql",
+    domainModules: ["settlement-obligation", "funding-reservation", "ledger", "events"]
+  },
+  {
+    version: "0038",
+    fileName: "0038_sprint7_payment_instruction_router_internal_ada_settlement.sql",
+    domainModules: ["payment-execution", "settlement-obligation", "funding-reservation", "events"]
+  },
+  {
+    version: "0039",
+    fileName: "0039_business_linked_instruments_pre_ada_assignment.sql",
+    domainModules: ["client-onboarding", "digital-accounts"]
+  },
+  {
+    version: "0040",
+    fileName: "0040_business_auth_sessions_refresh_tokens.sql",
+    domainModules: ["client-onboarding", "api-auth"]
   }
 ];
 

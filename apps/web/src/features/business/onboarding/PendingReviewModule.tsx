@@ -1,10 +1,10 @@
-import type { Session } from "@supabase/supabase-js";
 import { AlertCircle, ArrowLeft, ArrowRight, Bell, Building2, Check, CreditCard, FileText, Gavel, Headphones, Info, KeyRound, Lock, Search, Settings, Shield, UploadCloud, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import applicationPendingGraphic from "../../../assets/application-pending-graphic.svg";
 import rfiScreenA from "../../../assets/rfi-screen-a.png";
 import { BusinessAvatarMenu } from "../shared/BusinessAvatarMenu.js";
 import { apiRequest } from "../shared/apiClient.js";
+import { type BusinessJwtSession } from "../shared/useSupabaseSession.js";
 import type { MyOnboardingResponse, OnboardingApplication, OnboardingRfiTask, OnboardingStatus } from "./types.js";
 
 export function PendingReviewModule({
@@ -16,7 +16,7 @@ export function PendingReviewModule({
   navigate: (path: string) => void;
   onLogout: () => Promise<void> | void;
   routeForApplication: (application: OnboardingApplication) => string;
-  session: Session | null;
+  session: BusinessJwtSession | null;
 }) {
   const [application, setApplication] = useState<OnboardingApplication | undefined>();
   const [rfiTasks, setRfiTasks] = useState<OnboardingRfiTask[]>([]);
@@ -206,7 +206,7 @@ export function RfiResponseModule({
 }: {
   navigate: (path: string) => void;
   onLogout: () => Promise<void> | void;
-  session: Session | null;
+  session: BusinessJwtSession | null;
 }) {
   const [application, setApplication] = useState<OnboardingApplication | undefined>();
   const [rfiTasks, setRfiTasks] = useState<OnboardingRfiTask[]>([]);

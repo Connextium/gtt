@@ -1,11 +1,18 @@
 import { LogOut, User } from "lucide-react";
 import { useState } from "react";
 
+type BusinessAvatarMenuAction = {
+  label: string;
+  onSelect: () => void;
+};
+
 export function BusinessAvatarMenu({
+  actions,
   direction = "down",
   email,
   onLogout
 }: {
+  actions?: BusinessAvatarMenuAction[];
   direction?: "down" | "up";
   email?: string;
   onLogout: () => void;
@@ -16,6 +23,11 @@ export function BusinessAvatarMenu({
   function logout() {
     setOpen(false);
     onLogout();
+  }
+
+  function selectAction(action: BusinessAvatarMenuAction) {
+    setOpen(false);
+    action.onSelect();
   }
 
   return (
@@ -37,6 +49,16 @@ export function BusinessAvatarMenu({
             <span>Business User</span>
             <small>{displayEmail}</small>
           </div>
+          {actions?.length ? (
+            <section className="gtt-business-avatar-actions-group" aria-label="Configuration">
+              <p>Configuration</p>
+              {actions.map((action) => (
+                <button key={action.label} onClick={() => selectAction(action)} role="menuitem" type="button">
+                  {action.label}
+                </button>
+              ))}
+            </section>
+          ) : null}
           <button onClick={logout} role="menuitem" type="button">
             <LogOut size={14} />
             Logout

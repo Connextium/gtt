@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config as loadEnv } from "dotenv";
+import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stringify as toYaml } from "yaml";
 import type { ApiAuthContext } from "./auth/index.js";
 import { authenticateApiRequestWithDatabaseFallback } from "./auth/middleware.js";
 import { createInitialState, emitAudit } from "./data.js";
@@ -13,6 +15,7 @@ import { persistInternalIdentityTables, refreshInternalIdentityStateFromTables, 
 import { readRawBody, sendJson, badRequest, corsHeaders } from "./http/index.js";
 import { findIdempotentResponse, recordIdempotentResponse, requestHash } from "./events/idempotency.js";
 import { handleApiRequest, routeMetadata } from "./http/router.js";
+import { resolveOpenApiDocument } from "./openapi/specs.js";
 
 const loadEnvironment = () => {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +34,9 @@ const loadEnvironment = () => {
 
 loadEnvironment();
 
+const BUSINESS_CLIENT_DOCS_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../docs/business-client-api-docs.html");
+let businessClientDocsHtmlCache: string | undefined;
+
 export interface ApiServerOptions {
   port?: number;
   host?: string;
@@ -48,8 +54,22 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
 
     const url = parseRequestUrl(request.url ?? "/");
     try {
+      const docsServed = await tryServeBusinessClientDocs(request, response, url.pathname);
+      if (docsServed) return;
+
+      if ((request.method ?? "GET") === "GET" && url.pathname.endsWith(".yaml")) {
+        const document = resolveOpenApiDocument(url.pathname);
+        if (document) {
+          response.writeHead(200, {
+            "content-type": "application/yaml; charset=utf-8",
+            ...corsHeaders(request.headers.origin)
+          });
+          response.end(toYaml(document));
+          return;
+        }
+      }
       const state = await statePromise;
-      const isMutatingRequest = ["POST", "PATCH", "PUT"].includes(request.method ?? "GET");
+      const isMutatingRequest = ["POST", "PATCH", "PUT", "DELETE"].includes(request.method ?? "GET");
       const rawBody = isMutatingRequest ? await readRawBody(request) : "";
       const body = rawBody.trim() ? JSON.parse(rawBody) as Record<string, unknown> : {};
       if (shouldRefreshInternalIdentity(url.pathname)) {
@@ -187,3 +207,36 @@ export const startApiServer = (options: ApiServerOptions = {}) => {
 if (import.meta.url === `file://${process.argv[1]}`) {
   startApiServer();
 }
+
+const tryServeBusinessClientDocs = async (
+  request: IncomingMessage,
+  response: ServerResponse,
+  pathname: string
+): Promise<boolean> => {
+  const method = request.method ?? "GET";
+  if (!isBusinessClientDocsPath(pathname) || !["GET", "HEAD"].includes(method)) {
+    return false;
+  }
+
+  const html = businessClientDocsHtmlCache ?? await readFile(BUSINESS_CLIENT_DOCS_PATH, "utf8");
+  businessClientDocsHtmlCache = html;
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    ...corsHeaders(request.headers.origin)
+  });
+  if (method === "HEAD") {
+    response.end();
+    return true;
+  }
+  response.end(html);
+  return true;
+};
+
+const isBusinessClientDocsPath = (pathname: string): boolean => (
+  pathname === "/docs/business-client"
+  || pathname === "/docs/business-client/"
+  || pathname === "/docs/business-client-api"
+  || pathname === "/docs/business-client-api/"
+  || pathname === "/openapi/business-client/docs"
+  || pathname === "/openapi/business-client/docs/"
+);

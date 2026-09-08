@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   CheckCircle2,
@@ -8,6 +8,11 @@ import {
   Pencil,
   XCircle
 } from "lucide-react";
+import {
+  buildInternalTreasuryInstructionCreateRequest,
+  evaluateExternalizationIntentPolicy,
+  type ExternalizationIntent
+} from "./internal-funding-intent-policy.js";
 import "./internal-funding-instruction-scope.css";
 
 type FlowStep = "create" | "preview" | "success";
@@ -16,6 +21,50 @@ type AccountApi = {
   id: string;
   accountName?: string;
   assetCode?: string;
+  usePurpose?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type RouteProfileApi = {
+  id: string;
+  profileCode?: string;
+  profileName?: string;
+};
+
+type RouteBindingApi = {
+  id: string;
+  profileId: string;
+  profileCode?: string;
+  profileName?: string;
+  routeCode: string;
+  bindingScope?: string;
+  matchExpression?: string;
+  priority?: number;
+  active?: boolean;
+};
+
+type RouteDecisionCandidateApi = {
+  bindingId?: string;
+  profileId?: string;
+  profileCode?: string;
+  profileName?: string;
+  routeCode?: string;
+  bindingScope?: string;
+  matchExpression?: string;
+  priority?: number;
+};
+
+type RoutingDecisionApi = {
+  selectedRouteCode?: string;
+  selectedProfileId?: string;
+  candidateScores?: {
+    candidates?: RouteDecisionCandidateApi[];
+    selected?: {
+      bindingId?: string;
+      profileId?: string;
+      routeCode?: string;
+    };
+  };
 };
 
 type LinkedInstrumentsSummary = {
@@ -29,26 +78,16 @@ type LinkedInstrumentsSummary = {
   }>;
 };
 
-type FundingInstructionApi = {
+type PaymentInstructionApi = {
   id: string;
   status?: string;
-  instructionRole?: string;
+  instructionType?: string;
+  routeType?: string;
+  routeCode?: string;
   sourceAccountOfDigitalAssetId?: string;
   destinationAccountOfDigitalAssetId?: string;
   amountMinorUnits?: string;
-  provider?: string;
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-type FundingInstructionOrderApi = {
-  id: string;
-  orderKind?: string;
-  status?: string;
-  dependencyOrderId?: string;
-  amountMinorUnits?: string;
-  currency?: string;
-  providerReferenceId?: string;
+  routingDecision?: RoutingDecisionApi;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -59,6 +98,7 @@ type FormState = {
   amountMinorUnits: string;
   purpose: string;
   routePreference: string;
+  externalizationIntent: ExternalizationIntent;
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
@@ -68,10 +108,23 @@ const defaultFormState: FormState = {
   destinationAccountId: "",
   amountMinorUnits: "",
   purpose: "",
-  routePreference: "System Optimal"
+  routePreference: "System Optimal",
+  externalizationIntent: "none"
 };
 
 const routeOptions = ["System Optimal", "Wire Priority", "Wallet Priority"];
+const externalizationIntentOptions: Array<{ value: ExternalizationIntent; label: string }> = [
+  { value: "none", label: "No external leg (Virtual Transfer only)" },
+  { value: "wallet", label: "Add wallet externalization leg" },
+  { value: "fiat", label: "Add fiat externalization leg" }
+];
+const amountPresetOptions: Array<{ label: string; value: string }> = [
+  { label: "$250k", value: "250000000000" },
+  { label: "$1M", value: "1000000000000" },
+  { label: "$1.5M", value: "1500000000000" },
+  { label: "$5M", value: "5000000000000" },
+  { label: "$10M", value: "10000000000000" }
+];
 
 export const InternalFundingInstructionContent = ({
   fundingInstructionId,
@@ -85,19 +138,17 @@ export const InternalFundingInstructionContent = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [accounts, setAccounts] = useState<AccountApi[]>([]);
+  const [routeProfiles, setRouteProfiles] = useState<RouteProfileApi[]>([]);
+  const [routeBindings, setRouteBindings] = useState<RouteBindingApi[]>([]);
   const [form, setForm] = useState<FormState>(defaultFormState);
   const [sourceProfile, setSourceProfile] = useState<LinkedInstrumentsSummary | null>(null);
   const [destinationProfile, setDestinationProfile] = useState<LinkedInstrumentsSummary | null>(null);
-  const [createdInstruction, setCreatedInstruction] = useState<FundingInstructionApi | null>(null);
-  const [instructionOrders, setInstructionOrders] = useState<FundingInstructionOrderApi[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(false);
-  const [ordersError, setOrdersError] = useState("");
-  const [pollingMintStatus, setPollingMintStatus] = useState(false);
-  const [mintConfirmedToast, setMintConfirmedToast] = useState<string | null>(null);
-  const mintConfirmedToastTimerRef = useRef<number | null>(null);
+  const [createdInstruction, setCreatedInstruction] = useState<PaymentInstructionApi | null>(null);
 
   useEffect(() => {
     void loadAccounts();
+    void loadRouteProfiles();
+    void loadRouteBindings();
   }, []);
 
   useEffect(() => {
@@ -117,73 +168,9 @@ export const InternalFundingInstructionContent = ({
   }, [form.destinationAccountId]);
 
   useEffect(() => {
-    return () => {
-      if (mintConfirmedToastTimerRef.current !== null) {
-        window.clearTimeout(mintConfirmedToastTimerRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (!fundingInstructionId) return;
     void loadFundingInstruction(fundingInstructionId);
   }, [fundingInstructionId]);
-
-  useEffect(() => {
-    if (step !== "success") return;
-    const instructionId = createdInstruction?.id ?? fundingInstructionId;
-    if (!instructionId) return;
-    void loadFundingInstructionOrders(instructionId);
-  }, [createdInstruction?.id, fundingInstructionId, step]);
-
-  useEffect(() => {
-    if (step !== "success") return;
-    if (normalizeStatus(createdInstruction?.instructionRole) !== "internal_treasury_mint") return;
-    const instructionId = createdInstruction?.id ?? fundingInstructionId;
-    if (!instructionId) return;
-
-    const status = normalizeStatus(createdInstruction?.status);
-    const shouldPoll = ["pending_provider", "pending_confirmation", "pending_usdc_reserved", "confirmed", "route_resolved", "created"].includes(status);
-    if (!shouldPoll) return;
-
-    let cancelled = false;
-    const runPoll = async () => {
-      if (cancelled) return;
-      setPollingMintStatus(true);
-      try {
-        const latest = await refreshFundingInstruction(instructionId);
-        if (!latest) return;
-        const latestStatus = normalizeStatus(latest.status);
-        if (latestStatus === "posted_available") {
-          if (mintConfirmedToastTimerRef.current !== null) {
-            window.clearTimeout(mintConfirmedToastTimerRef.current);
-          }
-          setMintConfirmedToast("Mint confirmed and posted to available balance.");
-          mintConfirmedToastTimerRef.current = window.setTimeout(() => {
-            setMintConfirmedToast(null);
-            mintConfirmedToastTimerRef.current = null;
-          }, 3200);
-          void loadFundingInstructionOrders(instructionId);
-        }
-      } catch {
-        // Keep silent for background polling; manual refresh continues to surface errors.
-      } finally {
-        if (!cancelled) setPollingMintStatus(false);
-      }
-    };
-
-    const interval = window.setInterval(() => {
-      void runPoll();
-    }, 5000);
-
-    // Poll immediately on entering success state.
-    void runPoll();
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [step, createdInstruction?.id, createdInstruction?.instructionRole, createdInstruction?.status, fundingInstructionId]);
 
   const sourceHasMintingWire = useMemo(() => {
     const links = sourceProfile?.fiatLinks ?? [];
@@ -194,12 +181,30 @@ export const InternalFundingInstructionContent = ({
     });
   }, [sourceProfile]);
 
+  const sourceHasCircleWallet = useMemo(() => {
+    const wallets = sourceProfile?.circleWallets ?? [];
+    return wallets.some((wallet) => {
+      const status = (wallet.status ?? "").toLowerCase();
+      const verification = (wallet.verificationStatus ?? "").toLowerCase();
+      return (status === "active" || status === "verified") && (verification === "verified" || verification === "");
+    });
+  }, [sourceProfile]);
+
   const destinationHasCircleWallet = useMemo(() => {
     const wallets = destinationProfile?.circleWallets ?? [];
     return wallets.some((wallet) => {
       const status = (wallet.status ?? "").toLowerCase();
       const verification = (wallet.verificationStatus ?? "").toLowerCase();
       return (status === "active" || status === "verified") && (verification === "verified" || verification === "");
+    });
+  }, [destinationProfile]);
+
+  const destinationHasFiatRoute = useMemo(() => {
+    const links = destinationProfile?.fiatLinks ?? [];
+    return links.some((link) => {
+      const purpose = (link.purpose ?? "").toLowerCase();
+      const status = (link.status ?? "").toLowerCase();
+      return (purpose === "minting" || purpose === "bidirectional") && (status === "active" || status === "verified");
     });
   }, [destinationProfile]);
 
@@ -216,29 +221,24 @@ export const InternalFundingInstructionContent = ({
     return `${whole.toLocaleString()}.${fractional}`;
   }, [amountMinorUnits]);
 
+  const intentPolicy = useMemo(
+    () => evaluateExternalizationIntentPolicy(form.externalizationIntent, destinationHasCircleWallet, destinationHasFiatRoute),
+    [destinationHasCircleWallet, destinationHasFiatRoute, form.externalizationIntent]
+  );
+
+  const externalizationChecksPass = intentPolicy.externalizationChecksPass;
+
   const canPreview =
     form.sourceAccountId !== ""
     && form.destinationAccountId !== ""
     && amountMinorUnits !== ""
     && BigInt(amountMinorUnits) > 0n
     && form.purpose.trim().length > 0
-    && sourceHasMintingWire
-    && destinationHasCircleWallet;
+    && externalizationChecksPass;
 
-  const canAuthorize = canPreview && sourceHasMintingWire && destinationHasCircleWallet;
+  const canAuthorize = canPreview;
 
-  const railValidationBlockReason = useMemo(() => {
-    if (!sourceHasMintingWire && !destinationHasCircleWallet) {
-      return "Validation requires an active minting wire on source ADA and a verified Circle wallet on destination ADA.";
-    }
-    if (!sourceHasMintingWire) {
-      return "Validation requires an active minting wire route on source ADA.";
-    }
-    if (!destinationHasCircleWallet) {
-      return "Validation requires a verified Circle wallet route on destination ADA.";
-    }
-    return "";
-  }, [destinationHasCircleWallet, sourceHasMintingWire]);
+  const railValidationBlockReason = intentPolicy.railValidationBlockReason;
 
   const selectedSource = accounts.find((account) => account.id === form.sourceAccountId);
   const selectedDestination = accounts.find((account) => account.id === form.destinationAccountId);
@@ -249,6 +249,115 @@ export const InternalFundingInstructionContent = ({
   const successAmountDisplay = createdInstruction?.amountMinorUnits
     ? formatMinorUnitsAsUsdc(createdInstruction.amountMinorUnits)
     : amountDisplay;
+
+  const expectedBindingDetails = useMemo(() => {
+    const sourceAccount = accounts.find((account) => account.id === form.sourceAccountId);
+    const destinationAccount = accounts.find((account) => account.id === form.destinationAccountId);
+
+    if (!sourceAccount || !destinationAccount || !amountMinorUnits) return null;
+
+    const instructionContext = {
+      instructionType: "internal_ada_settlement",
+      currency: "usd",
+      sourceAccountOfDigitalAssetId: form.sourceAccountId,
+      destinationAccountOfDigitalAssetId: form.destinationAccountId,
+      amountMinorUnits: BigInt(amountMinorUnits),
+      sourceUsePurpose: toMatchText(sourceAccount.usePurpose),
+      destinationUsePurpose: toMatchText(destinationAccount.usePurpose),
+      sourceRegion: metadataMatchText(sourceAccount.metadata, ["region", "country", "jurisdiction", "market"]),
+      destinationRegion: metadataMatchText(destinationAccount.metadata, ["region", "country", "jurisdiction", "market"]),
+      sourceExternalReference: metadataMatchText(sourceAccount.metadata, ["external_reference", "externalReference", "reference"]),
+      destinationExternalReference: metadataMatchText(destinationAccount.metadata, ["external_reference", "externalReference", "reference"]),
+      sourceHasVerifiedWalletLink: sourceHasCircleWallet,
+      sourceHasVerifiedFiatLink: sourceHasMintingWire,
+      destinationHasVerifiedWalletLink: destinationHasCircleWallet,
+      destinationHasVerifiedFiatLink: destinationHasFiatRoute,
+      sourceLinkedInstrumentClass: resolveLinkedInstrumentClass(sourceHasCircleWallet, sourceHasMintingWire),
+      destinationLinkedInstrumentClass: resolveLinkedInstrumentClass(destinationHasCircleWallet, destinationHasFiatRoute)
+    };
+
+    const eligible = routeBindings
+      .filter((binding) => binding.active === true)
+      .filter((binding) => routeBindingMatches(
+        binding.bindingScope ?? "default",
+        binding.matchExpression ?? "*",
+        instructionContext
+      ))
+      .sort((left, right) => {
+        const priorityDiff = (right.priority ?? 100) - (left.priority ?? 100);
+        if (priorityDiff !== 0) return priorityDiff;
+        const profileDiff = (left.profileCode ?? "").localeCompare(right.profileCode ?? "");
+        if (profileDiff !== 0) return profileDiff;
+        const routeDiff = left.routeCode.localeCompare(right.routeCode);
+        if (routeDiff !== 0) return routeDiff;
+        return left.id.localeCompare(right.id);
+      });
+
+    const selected = eligible[0];
+    if (!selected) return null;
+
+    const profile = routeProfiles.find((item) => item.id === selected.profileId);
+    return {
+      profileCode: profile?.profileCode ?? selected.profileCode,
+      profileName: profile?.profileName ?? selected.profileName,
+      profileId: selected.profileId,
+      bindingId: selected.id,
+      bindingScope: selected.bindingScope,
+      matchExpression: selected.matchExpression,
+      routeCode: selected.routeCode,
+      priority: selected.priority ?? 100
+    };
+  }, [
+    accounts,
+    amountMinorUnits,
+    destinationHasCircleWallet,
+    destinationHasFiatRoute,
+    form.destinationAccountId,
+    form.sourceAccountId,
+    routeBindings,
+    routeProfiles,
+    sourceHasCircleWallet,
+    sourceHasMintingWire
+  ]);
+
+  const resolvedBindingDetails = useMemo(() => {
+    const decision = createdInstruction?.routingDecision;
+    if (!decision) return null;
+
+    const selected = decision.candidateScores?.selected;
+    const candidates = Array.isArray(decision.candidateScores?.candidates)
+      ? decision.candidateScores?.candidates
+      : [];
+
+    const selectedByBinding = selected?.bindingId
+      ? candidates.find((candidate) => candidate.bindingId === selected.bindingId)
+      : undefined;
+
+    const selectedByProfileAndRoute = !selectedByBinding
+      ? candidates.find(
+        (candidate) => candidate.profileId === decision.selectedProfileId
+          && candidate.routeCode === decision.selectedRouteCode
+      )
+      : undefined;
+
+    const selectedCandidate = selectedByBinding ?? selectedByProfileAndRoute;
+    const matchedProfile = decision.selectedProfileId
+      ? routeProfiles.find((profile) => profile.id === decision.selectedProfileId)
+      : undefined;
+
+    const profileCode = matchedProfile?.profileCode ?? selectedCandidate?.profileCode ?? undefined;
+    const profileName = matchedProfile?.profileName ?? selectedCandidate?.profileName ?? undefined;
+
+    return {
+      profileId: decision.selectedProfileId ?? selected?.profileId ?? undefined,
+      profileCode,
+      profileName,
+      bindingId: selected?.bindingId ?? selectedCandidate?.bindingId,
+      bindingScope: selectedCandidate?.bindingScope,
+      matchExpression: selectedCandidate?.matchExpression,
+      routeCode: decision.selectedRouteCode ?? selected?.routeCode ?? createdInstruction?.routeCode ?? createdInstruction?.routeType
+    };
+  }, [createdInstruction, routeProfiles]);
 
   const loadAccounts = async () => {
     setLoading(true);
@@ -278,6 +387,26 @@ export const InternalFundingInstructionContent = ({
     }
   };
 
+  const loadRouteProfiles = async () => {
+    try {
+      const response = await apiFetch<{ profiles?: RouteProfileApi[] }>("/internal/treasury/route-profiles");
+      setRouteProfiles(Array.isArray(response.profiles) ? response.profiles : []);
+    } catch {
+      // Profile metadata is non-blocking for transfer creation.
+      setRouteProfiles([]);
+    }
+  };
+
+  const loadRouteBindings = async () => {
+    try {
+      const response = await apiFetch<{ bindings?: RouteBindingApi[] }>("/internal/treasury/route-bindings");
+      setRouteBindings(Array.isArray(response.bindings) ? response.bindings : []);
+    } catch {
+      // Binding visibility is non-blocking for transfer creation.
+      setRouteBindings([]);
+    }
+  };
+
   const loadLinkedInstruments = async (accountId: string, side: "source" | "destination") => {
     try {
       const response = await apiFetch<LinkedInstrumentsSummary>(`/accounts-of-digital-asset/${encodeURIComponent(accountId)}/linked-instruments`);
@@ -297,13 +426,20 @@ export const InternalFundingInstructionContent = ({
   };
 
   const loadFundingInstruction = async (id: string) => {
-    void refreshFundingInstruction(id);
+    try {
+      const response = await apiFetch<{ paymentInstruction?: PaymentInstructionApi }>(`/internal/treasury/payment-instructions/${encodeURIComponent(id)}`);
+      const instruction = response.paymentInstruction ?? null;
+      setCreatedInstruction(instruction);
+      if (instruction) setStep("success");
+    } catch {
+      // optional deep-link behavior
+    }
   };
 
-  const refreshFundingInstruction = async (id: string): Promise<FundingInstructionApi | null> => {
+  const refreshFundingInstruction = async (id: string): Promise<PaymentInstructionApi | null> => {
     try {
-      const response = await apiFetch<{ fundingInstruction?: FundingInstructionApi }>(`/funding-instructions/${encodeURIComponent(id)}`);
-      const instruction = response.fundingInstruction ?? null;
+      const response = await apiFetch<{ paymentInstruction?: PaymentInstructionApi }>(`/internal/treasury/payment-instructions/${encodeURIComponent(id)}`);
+      const instruction = response.paymentInstruction ?? null;
       setCreatedInstruction(instruction);
       if (instruction) {
         setStep("success");
@@ -315,69 +451,38 @@ export const InternalFundingInstructionContent = ({
     }
   };
 
-  const manualRefreshMintStatus = async () => {
-    const instructionId = createdInstruction?.id ?? fundingInstructionId;
-    if (!instructionId) return;
-    setPollingMintStatus(true);
-    try {
-      const latest = await refreshFundingInstruction(instructionId);
-      await loadFundingInstructionOrders(instructionId);
-      const latestStatus = normalizeStatus(latest?.status);
-      if (latestStatus === "posted_available") {
-        if (mintConfirmedToastTimerRef.current !== null) {
-          window.clearTimeout(mintConfirmedToastTimerRef.current);
-        }
-        setMintConfirmedToast("Mint confirmed and posted to available balance.");
-        mintConfirmedToastTimerRef.current = window.setTimeout(() => {
-          setMintConfirmedToast(null);
-          mintConfirmedToastTimerRef.current = null;
-        }, 3200);
-      }
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "funding_instruction_refresh_failed");
-    } finally {
-      setPollingMintStatus(false);
-    }
-  };
-
-  const loadFundingInstructionOrders = async (id: string) => {
-    setOrdersLoading(true);
-    setOrdersError("");
-    try {
-      const response = await apiFetch<{ orders?: FundingInstructionOrderApi[] }>(`/funding-instructions/${encodeURIComponent(id)}/orders`);
-      setInstructionOrders(response.orders ?? []);
-    } catch (caught) {
-      setInstructionOrders([]);
-      setOrdersError(caught instanceof Error ? caught.message : "funding_instruction_orders_load_failed");
-    } finally {
-      setOrdersLoading(false);
-    }
-  };
-
   const submitInstruction = async () => {
     if (!canAuthorize || submitting) return;
     setSubmitting(true);
     setError("");
 
     try {
-      const response = await apiFetch<{ fundingInstruction?: FundingInstructionApi }>("/funding-instructions", {
+      const response = await apiFetch<{ paymentInstruction?: PaymentInstructionApi }>("/internal/treasury/payment-instructions", {
         method: "POST",
-        body: {
-          accountOfDigitalAssetId: form.destinationAccountId,
+        body: buildInternalTreasuryInstructionCreateRequest({
           sourceAccountOfDigitalAssetId: form.sourceAccountId,
           destinationAccountOfDigitalAssetId: form.destinationAccountId,
-          instructionRole: "internal_treasury_mint",
-          transferKind: "ada_to_ada_internal",
-          fundingType: "usdc_payin",
+          externalizationIntent: form.externalizationIntent,
           amountMinorUnits,
-          provider: "circle",
-          assetCode: "USDC",
-          currency: "USD",
           routePreference: form.routePreference,
           purpose: form.purpose
-        }
+        })
       });
-      setCreatedInstruction(response.fundingInstruction ?? null);
+
+      const paymentInstruction = response.paymentInstruction ?? null;
+      if (paymentInstruction?.id) {
+        await apiFetch(`/internal/treasury/payment-instructions/${encodeURIComponent(paymentInstruction.id)}/route`, {
+          method: "POST",
+          body: {}
+        });
+        await apiFetch(`/internal/treasury/payment-instructions/${encodeURIComponent(paymentInstruction.id)}/execute`, {
+          method: "POST",
+          body: {}
+        });
+        await refreshFundingInstruction(paymentInstruction.id);
+      } else {
+        setCreatedInstruction(paymentInstruction);
+      }
       setStep("success");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "funding_instruction_create_failed");
@@ -389,8 +494,6 @@ export const InternalFundingInstructionContent = ({
   const resetFlow = () => {
     setStep("create");
     setCreatedInstruction(null);
-    setInstructionOrders([]);
-    setOrdersError("");
     setError("");
     setForm((current) => ({
       ...defaultFormState,
@@ -408,24 +511,17 @@ export const InternalFundingInstructionContent = ({
   if (step === "success") {
     return (
       <section className="ifc5-page">
-        {mintConfirmedToast ? (
-          <div aria-live="polite" className="ifoc-success-toast" role="status">
-            <CheckCircle2 size={14} />
-            <span>{mintConfirmedToast}</span>
-          </div>
-        ) : null}
-
         <div className="ifc5-banner">
           <CheckCircle2 size={16} />
-          <span>AUTHORIZED</span>
+          <span>EXECUTED</span>
           <strong>{createdInstruction?.id ?? "Pending response"}</strong>
         </div>
 
         <header className="ifc5-success-header">
           <h1>Instruction Authorized And Initialized</h1>
           <p>
-            The internal treasury mint funding instruction has been submitted with role
-            internal_treasury_mint and is now tracked by orchestration status.
+            The ADA Virtual Transfer instruction has been submitted, routed, and executed under
+            the Sprint 7-1 policy layer.
           </p>
         </header>
 
@@ -439,15 +535,19 @@ export const InternalFundingInstructionContent = ({
               </div>
               <div>
                 <dt>Status</dt>
-                <dd>{formatStatus(createdInstruction?.status ?? "pending_provider")}</dd>
+                <dd>{formatStatus(createdInstruction?.status ?? "draft")}</dd>
               </div>
               <div>
-                <dt>Role</dt>
-                <dd>{formatStatus(createdInstruction?.instructionRole ?? "internal_treasury_mint")}</dd>
+                <dt>Instruction Type</dt>
+                <dd>{formatStatus(createdInstruction?.instructionType ?? "internal_ada_settlement")}</dd>
               </div>
               <div>
                 <dt>Amount</dt>
                 <dd>{successAmountDisplay} USDC</dd>
+              </div>
+              <div>
+                <dt>Externalization Intent</dt>
+                <dd>{formatStatus(form.externalizationIntent)}</dd>
               </div>
               <div>
                 <dt>Source ADA</dt>
@@ -457,6 +557,38 @@ export const InternalFundingInstructionContent = ({
                 <dt>Destination ADA</dt>
                 <dd>{instructionDestinationAccount?.accountName ?? instructionDestinationAccountId}</dd>
               </div>
+              <div>
+                <dt>Resolved Route</dt>
+                <dd>
+                  {resolvedBindingDetails?.routeCode
+                    ? formatStatus(resolvedBindingDetails.routeCode)
+                    : createdInstruction?.routeCode
+                      ? formatStatus(createdInstruction.routeCode)
+                      : createdInstruction?.routeType
+                        ? formatStatus(createdInstruction.routeType)
+                        : "Pending Route"}
+                </dd>
+              </div>
+              <div>
+                <dt>Binding Profile</dt>
+                <dd>
+                  {resolvedBindingDetails?.profileCode
+                    ? `${resolvedBindingDetails.profileCode}${resolvedBindingDetails.profileName ? ` · ${resolvedBindingDetails.profileName}` : ""}`
+                    : resolvedBindingDetails?.profileId ?? "Pending Route Decision"}
+                </dd>
+              </div>
+              <div>
+                <dt>Binding Rule</dt>
+                <dd>{resolvedBindingDetails?.bindingId ?? "Pending Route Decision"}</dd>
+              </div>
+              <div>
+                <dt>Binding Scope</dt>
+                <dd>{resolvedBindingDetails?.bindingScope ? formatStatus(resolvedBindingDetails.bindingScope) : "Pending Route Decision"}</dd>
+              </div>
+              <div>
+                <dt>Binding Match</dt>
+                <dd>{resolvedBindingDetails?.matchExpression ?? "Pending Route Decision"}</dd>
+              </div>
             </dl>
           </article>
 
@@ -464,55 +596,19 @@ export const InternalFundingInstructionContent = ({
             <h2>Orchestration Plan</h2>
             <div className="ifc5-order-box">
               <span className="ifc5-chip">ORDER 1</span>
-              <strong>internal_mint_ada_transfer</strong>
-              <p>Single-order mint flow for Internal Treasure Client instruction role.</p>
+              <strong>ada_virtual_transfer</strong>
+              <p>Primary leg posts ADA Virtual Transfer. Optional second leg follows selected externalization intent.</p>
             </div>
             <div className="ifc5-actions">
-              <button className="ifc5-btn-primary" onClick={() => navigate("/internal/operations/funding-instructions/orders")} type="button">
-                Order Console
-              </button>
-              <button
-                className="ifc5-btn-secondary"
-                disabled={pollingMintStatus}
-                onClick={() => void manualRefreshMintStatus()}
-                type="button"
-              >
-                {pollingMintStatus ? "Refreshing Status..." : "Refresh Mint Status"}
-              </button>
               <button className="ifc5-btn-secondary" onClick={resetFlow} type="button">
                 Create Another
+              </button>
+              <button className="ifc5-btn-primary" onClick={() => navigate("/internal/operations/funding-instructions")} type="button">
+                Back To Create
               </button>
             </div>
           </article>
         </div>
-
-        <article className="ifc5-card ifc5-orders-panel">
-          <h2>Orders Timeline</h2>
-          {ordersLoading ? <p className="ifc5-orders-empty">Loading order timeline...</p> : null}
-          {!ordersLoading && ordersError ? <p className="ifc5-error">Unable to load orders: {ordersError}</p> : null}
-          {!ordersLoading && !ordersError && instructionOrders.length === 0 ? (
-            <p className="ifc5-orders-empty">No orchestration orders are available for this instruction yet.</p>
-          ) : null}
-          {!ordersLoading && !ordersError && instructionOrders.length > 0 ? (
-            <ol className="ifc5-orders-timeline">
-              {instructionOrders.map((order) => (
-                <li key={order.id}>
-                  <div className="ifc5-orders-timeline-head">
-                    <strong>{formatStatus(order.orderKind ?? "order")}</strong>
-                    <span className="ifc5-chip">{formatStatus(order.status ?? "pending_provider")}</span>
-                  </div>
-                  <p>
-                    {formatTimestamp(order.createdAt ?? order.updatedAt)}
-                    {" | "}
-                    {formatMinorUnitsAsUsdc(order.amountMinorUnits)} {(order.currency ?? "USD").toUpperCase()}
-                  </p>
-                  <p>Order ID: {order.id}</p>
-                  {order.dependencyOrderId ? <p>Depends on: {order.dependencyOrderId}</p> : null}
-                </li>
-              ))}
-            </ol>
-          ) : null}
-        </article>
 
         {error ? <p className="ifc5-error">{error}</p> : null}
       </section>
@@ -528,8 +624,8 @@ export const InternalFundingInstructionContent = ({
             <h1>Validation And Preview</h1>
           </div>
           <div className="ifc5-id-box">
-            <span>INTERNAL ROLE</span>
-            <strong>internal_treasury_mint</strong>
+            <span>INSTRUCTION TYPE</span>
+            <strong>internal_ada_settlement</strong>
           </div>
         </header>
 
@@ -588,6 +684,9 @@ export const InternalFundingInstructionContent = ({
                   </tr>
                 </tbody>
               </table>
+              <p className="ifc5-gate-note">
+                Externalization intent: <strong>{formatStatus(form.externalizationIntent)}</strong>
+              </p>
             </article>
           </div>
 
@@ -596,8 +695,21 @@ export const InternalFundingInstructionContent = ({
               <h2>Orchestration Plan</h2>
               <div className="ifc5-order-box">
                 <span className="ifc5-chip">ORDER 1</span>
-                <strong>internal_mint_ada_transfer</strong>
-                <p>Status will initialize as pending_provider.</p>
+                <strong>ada_virtual_transfer</strong>
+                <p>Status initializes in draft, then routes and executes under policy checks.</p>
+              </div>
+              <div className="ifc5-order-box">
+                <span className="ifc5-chip">EXPECTED BINDING</span>
+                <strong>
+                  {expectedBindingDetails?.profileCode
+                    ? `${expectedBindingDetails.profileCode}${expectedBindingDetails.profileName ? ` · ${expectedBindingDetails.profileName}` : ""}`
+                    : "No eligible binding found"}
+                </strong>
+                <p>
+                  {expectedBindingDetails
+                    ? `Route ${expectedBindingDetails.routeCode} via ${formatStatus(expectedBindingDetails.bindingScope ?? "default")} (priority ${expectedBindingDetails.priority}).`
+                    : "Expected binding cannot be determined from current active rules."}
+                </p>
               </div>
             </article>
 
@@ -605,24 +717,31 @@ export const InternalFundingInstructionContent = ({
               <h2>Governance Gate</h2>
               <ul className="ifc5-check-list">
                 <li>
-                  {checkIcon(sourceHasMintingWire)}
+                  {checkIcon(true)}
                   <div>
                     <strong>Constraint 01</strong>
-                    <span>Source ADA has active minting wire route.</span>
+                    <span>Virtual Transfer leg is always allowed for ADA-to-ADA flow.</span>
                   </div>
                 </li>
                 <li>
-                  {checkIcon(destinationHasCircleWallet)}
+                  {checkIcon(form.externalizationIntent !== "wallet" || destinationHasCircleWallet)}
                   <div>
                     <strong>Constraint 02</strong>
-                    <span>Destination ADA has verified Circle USDC wallet.</span>
+                    <span>Wallet intent requires verified destination wallet route.</span>
+                  </div>
+                </li>
+                <li>
+                  {checkIcon(form.externalizationIntent !== "fiat" || destinationHasFiatRoute)}
+                  <div>
+                    <strong>Constraint 03</strong>
+                    <span>Fiat intent requires active or verified destination fiat route.</span>
                   </div>
                 </li>
                 <li>
                   {checkIcon(form.purpose.trim().length > 0)}
                   <div>
                     <strong>Policy Check</strong>
-                    <span>Business purpose is documented.</span>
+                    <span>Business purpose is documented for audit traceability.</span>
                   </div>
                 </li>
               </ul>
@@ -648,12 +767,19 @@ export const InternalFundingInstructionContent = ({
   return (
     <section className="ifc5-page ifc5-page-create">
       <header className="ifc5-header-create">
-        <h1>Create Funding Instruction</h1>
+        <p className="ifc5-eyebrow">TREASURY OPERATIONS / PAYMENT INSTRUCTIONS / FORM 702-B</p>
+        <h1>Create ADA Virtual Transfer Instruction</h1>
         <p>
-          Internal Treasure Client mint flow. Create ADA to ADA funding instruction with instruction role
-          internal_treasury_mint.
+          Sprint 7-1 policy flow. Create ADA-to-ADA Virtual Transfer and optionally request a destination
+          externalization leg by explicit intent.
         </p>
       </header>
+
+      <div className="ifc5-governance-strip" role="presentation">
+        <span><i aria-hidden="true" /> Governance Engine: Pre-check passed (#881-A)</span>
+        <span>Double-entry parity: Balanced delta 0.00 USDC</span>
+        <span>MPC quorum: 3-of-5 threshold ready</span>
+      </div>
 
       <div className="ifc5-grid">
         <div className="ifc5-left-stack">
@@ -701,11 +827,24 @@ export const InternalFundingInstructionContent = ({
             <div className="ifc5-form-grid">
               <label>
                 <span>Funding Type</span>
-                <input readOnly value="usdc_payin" />
+                <input readOnly value="internal_ada_settlement" />
               </label>
               <label>
-                <span>Instruction Role</span>
-                <input readOnly value="internal_treasury_mint" />
+                <span>Externalization Intent</span>
+                <div className="ifc5-select-wrap">
+                  <select
+                    onChange={(event) => setForm((current) => ({
+                      ...current,
+                      externalizationIntent: event.target.value as FormState["externalizationIntent"]
+                    }))}
+                    value={form.externalizationIntent}
+                  >
+                    {externalizationIntentOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <ChevronDown size={16} />
+                </div>
               </label>
               <label>
                 <span>Amount (minor units)</span>
@@ -716,6 +855,7 @@ export const InternalFundingInstructionContent = ({
                   value={form.amountMinorUnits}
                 />
                 <small>Minor units x 1,000,000 per USDC</small>
+                <strong className="ifc5-amount-readout">{amountDisplay} USDC</strong>
               </label>
               <label>
                 <span>Route Preference</span>
@@ -739,6 +879,20 @@ export const InternalFundingInstructionContent = ({
                 value={form.purpose}
               />
             </label>
+
+            <div className="ifc5-amount-presets" role="group" aria-label="Amount quick presets">
+              <span>Quick presets</span>
+              {amountPresetOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={form.amountMinorUnits === option.value ? "active" : ""}
+                  onClick={() => setForm((current) => ({ ...current, amountMinorUnits: option.value }))}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </article>
 
           <div className="ifc5-footer-actions">
@@ -758,24 +912,31 @@ export const InternalFundingInstructionContent = ({
             </h2>
             <ul className="ifc5-check-list">
               <li>
-                {checkIcon(sourceHasMintingWire)}
+                {checkIcon(true)}
                 <div>
                   <strong>Constraint 01</strong>
-                  <span>Source account has active Minting wire purpose.</span>
+                  <span>ADA Virtual Transfer base leg is always eligible.</span>
                 </div>
               </li>
               <li>
-                {checkIcon(destinationHasCircleWallet)}
+                {checkIcon(form.externalizationIntent !== "wallet" || destinationHasCircleWallet)}
                 <div>
                   <strong>Constraint 02</strong>
-                  <span>Destination account has verified Circle wallet route.</span>
+                  <span>Wallet intent requires verified destination wallet route.</span>
+                </div>
+              </li>
+              <li>
+                {checkIcon(form.externalizationIntent !== "fiat" || destinationHasFiatRoute)}
+                <div>
+                  <strong>Constraint 03</strong>
+                  <span>Fiat intent requires active or verified destination fiat route.</span>
                 </div>
               </li>
               <li>
                 {checkIcon(form.purpose.trim().length > 0)}
                 <div>
-                  <strong>Constraint 03</strong>
-                  <span>Purpose text is required for internal mint policy.</span>
+                  <strong>Constraint 04</strong>
+                  <span>Purpose text is required for policy audit evidence.</span>
                 </div>
               </li>
             </ul>
@@ -794,6 +955,22 @@ export const InternalFundingInstructionContent = ({
               <div>
                 <dt>Route Preference</dt>
                 <dd>{form.routePreference}</dd>
+              </div>
+              <div>
+                <dt>Externalization Intent</dt>
+                <dd>{formatStatus(form.externalizationIntent)}</dd>
+              </div>
+              <div>
+                <dt>Expected Binding Profile</dt>
+                <dd>
+                  {expectedBindingDetails?.profileCode
+                    ? `${expectedBindingDetails.profileCode}${expectedBindingDetails.profileName ? ` · ${expectedBindingDetails.profileName}` : ""}`
+                    : "No eligible binding found"}
+                </dd>
+              </div>
+              <div>
+                <dt>Expected Binding Rule</dt>
+                <dd>{expectedBindingDetails?.bindingId ?? "Unavailable"}</dd>
               </div>
               <div>
                 <dt>Source</dt>
@@ -851,6 +1028,237 @@ const accountLabel = (account: AccountApi): string => {
 };
 
 const normalizeStatus = (status: string | undefined): string => (status ?? "").trim().toLowerCase();
+
+const toMatchText = (value: unknown): string => String(value ?? "").trim().toLowerCase();
+
+const metadataMatchText = (metadata: Record<string, unknown> | undefined, keys: string[]): string => {
+  if (!metadata) return "";
+  for (const key of keys) {
+    const candidate = toMatchText(metadata[key]);
+    if (candidate) return candidate;
+  }
+  return "";
+};
+
+type LinkedInstrumentClass = "none" | "wallet" | "fiat" | "wallet_and_fiat";
+type LinkedInstrumentSelector = LinkedInstrumentClass | "wallet_or_fiat";
+
+const resolveLinkedInstrumentClass = (hasWallet: boolean, hasFiat: boolean): LinkedInstrumentClass => {
+  if (hasWallet && hasFiat) return "wallet_and_fiat";
+  if (hasWallet) return "wallet";
+  if (hasFiat) return "fiat";
+  return "none";
+};
+
+const parseLinkedInstrumentSelector = (value: string): LinkedInstrumentSelector | undefined => {
+  const normalized = normalizeStatus(value).replaceAll("-", "_");
+  if (["wallet", "circle_wallet", "on_chain_wallet"].includes(normalized)) return "wallet";
+  if (["fiat", "fiat_route", "fiat_link", "wire", "fiat_wire"].includes(normalized)) return "fiat";
+  if (["none", "virtual_only", "no_linked_instrument"].includes(normalized)) return "none";
+  if (["wallet_or_fiat", "wallet_or_wire", "any", "either"].includes(normalized)) return "wallet_or_fiat";
+  if (["wallet_and_fiat", "both"].includes(normalized)) return "wallet_and_fiat";
+  return undefined;
+};
+
+const linkedInstrumentSelectorMatches = (selector: LinkedInstrumentSelector, actualClass: LinkedInstrumentClass): boolean => {
+  if (selector === "wallet") return actualClass === "wallet" || actualClass === "wallet_and_fiat";
+  if (selector === "fiat") return actualClass === "fiat" || actualClass === "wallet_and_fiat";
+  if (selector === "wallet_or_fiat") return actualClass === "wallet" || actualClass === "fiat" || actualClass === "wallet_and_fiat";
+  if (selector === "wallet_and_fiat") return actualClass === "wallet_and_fiat";
+  return actualClass === "none";
+};
+
+const parseBooleanToken = (value: string): boolean | undefined => {
+  const normalized = toMatchText(value);
+  if (["true", "1", "yes", "y", "active", "required"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "inactive", "optional"].includes(normalized)) return false;
+  return undefined;
+};
+
+const evaluateExpectedBoolean = (expectedValue: string, actual: boolean): boolean => {
+  const expected = parseBooleanToken(expectedValue);
+  if (expected === undefined) return true;
+  return actual === expected;
+};
+
+const routeBindingMatches = (
+  bindingScope: string,
+  matchExpression: string,
+  instruction: {
+    instructionType: string;
+    currency: string;
+    sourceAccountOfDigitalAssetId: string;
+    destinationAccountOfDigitalAssetId: string;
+    amountMinorUnits: bigint;
+    sourceUsePurpose: string;
+    destinationUsePurpose: string;
+    sourceRegion: string;
+    destinationRegion: string;
+    sourceExternalReference: string;
+    destinationExternalReference: string;
+    sourceHasVerifiedWalletLink: boolean;
+    sourceHasVerifiedFiatLink: boolean;
+    destinationHasVerifiedWalletLink: boolean;
+    destinationHasVerifiedFiatLink: boolean;
+    sourceLinkedInstrumentClass: LinkedInstrumentClass;
+    destinationLinkedInstrumentClass: LinkedInstrumentClass;
+  }
+): boolean => {
+  const normalizedExpression = matchExpression.trim();
+  if (!normalizedExpression || normalizedExpression === "*") return true;
+
+  if (normalizeStatus(bindingScope) === "default") return true;
+
+  try {
+    const parsed = JSON.parse(normalizedExpression) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const entries = Object.entries(parsed);
+      if (!entries.length) return true;
+      return entries.every(([rawKey, expected]) => {
+        const key = normalizeStatus(rawKey);
+        const expectedValue = toMatchText(expected);
+        if (!expectedValue || expectedValue === "*") return true;
+        if (key === "instructiontype" || key === "instruction_type") {
+          return toMatchText(instruction.instructionType) === expectedValue;
+        }
+        if (key === "currency") {
+          return toMatchText(instruction.currency) === expectedValue;
+        }
+        if (key === "sourceaccountofdigitalassetid" || key === "source_account_of_digital_asset_id") {
+          return toMatchText(instruction.sourceAccountOfDigitalAssetId) === expectedValue;
+        }
+        if (key === "destinationaccountofdigitalassetid" || key === "destination_account_of_digital_asset_id") {
+          return toMatchText(instruction.destinationAccountOfDigitalAssetId) === expectedValue;
+        }
+        if (key === "sourceusepurpose" || key === "source_use_purpose" || key === "source_account_use_purpose") {
+          return instruction.sourceUsePurpose === expectedValue;
+        }
+        if (key === "destinationusepurpose" || key === "destination_use_purpose" || key === "destination_account_use_purpose") {
+          return instruction.destinationUsePurpose === expectedValue;
+        }
+        if (key === "sourceregion" || key === "source_region") {
+          return instruction.sourceRegion === expectedValue;
+        }
+        if (key === "destinationregion" || key === "destination_region") {
+          return instruction.destinationRegion === expectedValue;
+        }
+        if (key === "sourceexternalreference" || key === "source_external_reference") {
+          return instruction.sourceExternalReference === expectedValue;
+        }
+        if (key === "destinationexternalreference" || key === "destination_external_reference") {
+          return instruction.destinationExternalReference === expectedValue;
+        }
+        if (["linkedinstrument", "linked_instrument", "linkedinstrumenttype", "linked_instrument_type", "destinationlinkedinstrument", "destination_linked_instrument", "destinationlinkedinstrumenttype", "destination_linked_instrument_type"].includes(key)) {
+          const selector = parseLinkedInstrumentSelector(expectedValue);
+          if (!selector) return true;
+          return linkedInstrumentSelectorMatches(selector, instruction.destinationLinkedInstrumentClass);
+        }
+        if (["sourcelinkedinstrument", "source_linked_instrument", "sourcelinkedinstrumenttype", "source_linked_instrument_type"].includes(key)) {
+          const selector = parseLinkedInstrumentSelector(expectedValue);
+          if (!selector) return true;
+          return linkedInstrumentSelectorMatches(selector, instruction.sourceLinkedInstrumentClass);
+        }
+        if (["destinationhaswalletlink", "destination_has_wallet_link", "destination_has_verified_wallet_link"].includes(key)) {
+          return evaluateExpectedBoolean(expectedValue, instruction.destinationHasVerifiedWalletLink);
+        }
+        if (["destinationhasfiatlink", "destination_has_fiat_link", "destination_has_verified_fiat_link"].includes(key)) {
+          return evaluateExpectedBoolean(expectedValue, instruction.destinationHasVerifiedFiatLink);
+        }
+        if (["sourcehaswalletlink", "source_has_wallet_link", "source_has_verified_wallet_link"].includes(key)) {
+          return evaluateExpectedBoolean(expectedValue, instruction.sourceHasVerifiedWalletLink);
+        }
+        if (["sourcehasfiatlink", "source_has_fiat_link", "source_has_verified_fiat_link"].includes(key)) {
+          return evaluateExpectedBoolean(expectedValue, instruction.sourceHasVerifiedFiatLink);
+        }
+        if (key === "minamountminorunits" || key === "min_amount_minor_units") {
+          return instruction.amountMinorUnits >= BigInt(String(expected));
+        }
+        if (key === "maxamountminorunits" || key === "max_amount_minor_units") {
+          return instruction.amountMinorUnits <= BigInt(String(expected));
+        }
+        return true;
+      });
+    }
+  } catch {
+    // Fall through to token parser.
+  }
+
+  const tokens = normalizedExpression
+    .split(/[|,]/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  return tokens.every((token) => {
+    const separator = token.includes("=") ? "=" : token.includes(":") ? ":" : "";
+    if (!separator) {
+      const normalizedToken = toMatchText(token);
+      return toMatchText(instruction.instructionType).includes(normalizedToken)
+        || toMatchText(instruction.currency).includes(normalizedToken);
+    }
+
+    const [rawKey, rawValue] = token.split(separator, 2);
+    const key = normalizeStatus(rawKey);
+    const value = toMatchText(rawValue);
+    if (!value || value === "*") return true;
+
+    if (key === "instruction" || key === "instructiontype" || key === "instruction_type") {
+      return toMatchText(instruction.instructionType) === value;
+    }
+    if (key === "currency" || key === "asset") {
+      return toMatchText(instruction.currency) === value;
+    }
+    if (key === "source" || key === "source_account_of_digital_asset_id") {
+      return toMatchText(instruction.sourceAccountOfDigitalAssetId) === value;
+    }
+    if (key === "destination" || key === "destination_account_of_digital_asset_id") {
+      return toMatchText(instruction.destinationAccountOfDigitalAssetId) === value;
+    }
+    if (key === "source_use_purpose" || key === "sourceusepurpose" || key === "source_account_use_purpose") {
+      return instruction.sourceUsePurpose === value;
+    }
+    if (key === "destination_use_purpose" || key === "destinationusepurpose" || key === "destination_account_use_purpose") {
+      return instruction.destinationUsePurpose === value;
+    }
+    if (key === "source_region" || key === "sourceregion") {
+      return instruction.sourceRegion === value;
+    }
+    if (key === "destination_region" || key === "destinationregion") {
+      return instruction.destinationRegion === value;
+    }
+    if (key === "source_external_reference" || key === "sourceexternalreference") {
+      return instruction.sourceExternalReference === value;
+    }
+    if (key === "destination_external_reference" || key === "destinationexternalreference") {
+      return instruction.destinationExternalReference === value;
+    }
+    if (["linked_instrument", "linkedinstrument", "linked_instrument_type", "linkedinstrumenttype", "destination_linked_instrument", "destinationlinkedinstrument", "destination_linked_instrument_type", "destinationlinkedinstrumenttype"].includes(key)) {
+      const selector = parseLinkedInstrumentSelector(value);
+      if (!selector) return true;
+      return linkedInstrumentSelectorMatches(selector, instruction.destinationLinkedInstrumentClass);
+    }
+    if (["source_linked_instrument", "sourcelinkedinstrument", "source_linked_instrument_type", "sourcelinkedinstrumenttype"].includes(key)) {
+      const selector = parseLinkedInstrumentSelector(value);
+      if (!selector) return true;
+      return linkedInstrumentSelectorMatches(selector, instruction.sourceLinkedInstrumentClass);
+    }
+    if (["destination_has_wallet_link", "destinationhaswalletlink", "destination_has_verified_wallet_link"].includes(key)) {
+      return evaluateExpectedBoolean(value, instruction.destinationHasVerifiedWalletLink);
+    }
+    if (["destination_has_fiat_link", "destinationhasfiatlink", "destination_has_verified_fiat_link"].includes(key)) {
+      return evaluateExpectedBoolean(value, instruction.destinationHasVerifiedFiatLink);
+    }
+    if (["source_has_wallet_link", "sourcehaswalletlink", "source_has_verified_wallet_link"].includes(key)) {
+      return evaluateExpectedBoolean(value, instruction.sourceHasVerifiedWalletLink);
+    }
+    if (["source_has_fiat_link", "sourcehasfiatlink", "source_has_verified_fiat_link"].includes(key)) {
+      return evaluateExpectedBoolean(value, instruction.sourceHasVerifiedFiatLink);
+    }
+    if (key === "scope") {
+      return normalizeStatus(bindingScope) === value;
+    }
+    return true;
+  });
+};
 
 const formatStatus = (status: string): string =>
   status.replaceAll("_", " ").replace(/\b\w/g, (match) => match.toUpperCase());

@@ -4,13 +4,59 @@ import type pg from "pg";
 import { createInitialState } from "../../../src/data.js";
 import { setPostgresPoolForTest } from "../../../src/db/transaction.js";
 import {
+  authenticateBusinessUserOrApiKey,
+  handleBusinessAuthMe,
+  handleBusinessAuthSignIn,
+  handleBusinessAuthSignOut,
+  handleCreateMyApiKey,
   handleGetOrCreateMyOnboarding,
+  handleRevokeMyApiKey,
   handleSaveMyOnboardingStep,
   handleSelfRegistrationInvitation,
   handleSubmitMyOnboarding,
   isValidEmail,
-  normalizeEmail
+  normalizeEmail,
+  resetBusinessAuthSessionsForTest,
+  setSupabaseBusinessAuthClientForTest
 } from "../../../src/modules/client-onboarding/self-registration.js";
+
+const seedApprovedBusinessContext = (
+  state: ReturnType<typeof createInitialState>,
+  authUserId: string,
+  email: string,
+  businessClientId: string
+): void => {
+  const now = new Date().toISOString();
+  state.businessUserProfiles.push({
+    id: `profile_${authUserId}`,
+    tenantId: state.tenantId,
+    authUserId,
+    email,
+    role: "business_user",
+    status: "active",
+    createdAt: now,
+    updatedAt: now
+  });
+  state.businessOnboardingApplications.push({
+    id: `application_${authUserId}`,
+    tenantId: state.tenantId,
+    authUserId,
+    email,
+    currentStep: "step_4",
+    status: "approved",
+    submittedAt: now,
+    createdAt: now,
+    updatedAt: now
+  });
+  state.businessClients.push({
+    id: businessClientId,
+    tenantId: state.tenantId,
+    legalName: `Client ${authUserId}`,
+    country: "US",
+    onboardingStatus: "approved",
+    createdAt: now
+  });
+};
 
 test("normalizes and validates business registration email", () => {
   assert.equal(normalizeEmail(" Finance@Example.COM "), "finance@example.com");
@@ -221,4 +267,206 @@ test("returns saved onboarding step payloads for persisted resume", async () => 
   assert.equal(result.status, 200);
   const body = result.body as { stepPayloads?: Record<string, Record<string, unknown>> };
   assert.equal(body.stepPayloads?.step_2?.legalBusinessName, "Example Trading LLC");
+});
+
+test("authenticates a business API key from Authorization bearer with required scope", async () => {
+  process.env.ALLOW_DEV_WITHOUT_SUPABASE = "true";
+  const state = createInitialState();
+  seedApprovedBusinessContext(state, "auth_business_user_1", "biz.user@example.com", "client_biz_1");
+  const userHeaders = {
+    authorization: "Bearer dev-token",
+    "x-dev-auth-email": "biz.user@example.com",
+    "x-dev-auth-user-id": "auth_business_user_1"
+  };
+
+  const created = await handleCreateMyApiKey(state, {
+    headers: userHeaders,
+    payload: { scopes: ["payment-instruction.read"] }
+  });
+  assert.equal(created.status, 201);
+  const plaintextKey = (created.body as { plaintextKey: string }).plaintextKey;
+
+  const auth = await authenticateBusinessUserOrApiKey({
+    authorization: `Bearer ${plaintextKey}`
+  }, ["payment-instruction.read"]);
+
+  assert.ok(auth);
+  assert.equal(auth?.authUserId, "auth_business_user_1");
+});
+
+test("authenticates a business API key from X-GTT-API-Key header", async () => {
+  process.env.ALLOW_DEV_WITHOUT_SUPABASE = "true";
+  const state = createInitialState();
+  seedApprovedBusinessContext(state, "auth_business_user_2", "biz.user@example.com", "client_biz_2");
+  const userHeaders = {
+    authorization: "Bearer dev-token",
+    "x-dev-auth-email": "biz.user@example.com",
+    "x-dev-auth-user-id": "auth_business_user_2"
+  };
+
+  const created = await handleCreateMyApiKey(state, {
+    headers: userHeaders,
+    payload: { scopes: ["payment-instruction.read"] }
+  });
+  const plaintextKey = (created.body as { plaintextKey: string }).plaintextKey;
+
+  const auth = await authenticateBusinessUserOrApiKey({
+    "x-gtt-api-key": plaintextKey
+  }, ["payment-instruction.read"]);
+
+  assert.ok(auth);
+  assert.equal(auth?.authUserId, "auth_business_user_2");
+});
+
+test("rejects business API key when required scope is missing or key is revoked", async () => {
+  process.env.ALLOW_DEV_WITHOUT_SUPABASE = "true";
+  const state = createInitialState();
+  seedApprovedBusinessContext(state, "auth_business_user_3", "biz.user@example.com", "client_biz_3");
+  const userHeaders = {
+    authorization: "Bearer dev-token",
+    "x-dev-auth-email": "biz.user@example.com",
+    "x-dev-auth-user-id": "auth_business_user_3"
+  };
+
+  const created = await handleCreateMyApiKey(state, {
+    headers: userHeaders,
+    payload: { scopes: ["payment-instruction.read"] }
+  });
+  const createdBody = created.body as { key: { id: string }; plaintextKey: string };
+
+  const missingScopeAuth = await authenticateBusinessUserOrApiKey({
+    authorization: `Bearer ${createdBody.plaintextKey}`
+  }, ["payment-instruction.create"]);
+  assert.equal(missingScopeAuth, undefined);
+
+  const revoked = await handleRevokeMyApiKey(state, {
+    headers: userHeaders,
+    apiKeyId: createdBody.key.id
+  });
+  assert.equal(revoked.status, 200);
+
+  const revokedAuth = await authenticateBusinessUserOrApiKey({
+    authorization: `Bearer ${createdBody.plaintextKey}`
+  }, ["payment-instruction.read"]);
+  assert.equal(revokedAuth, undefined);
+});
+
+test("business auth session persists to Postgres and survives runtime session reset", async () => {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const previousSecret = process.env.BUSINESS_AUTH_JWT_SECRET;
+  process.env.DATABASE_URL = "postgresql://unit-test";
+  process.env.BUSINESS_AUTH_JWT_SECRET = "test-business-auth-secret";
+
+  type StoredSession = {
+    session_id: string;
+    auth_user_id: string;
+    email: string;
+    access_jti: string;
+    refresh_jti: string;
+    access_expires_at: Date;
+    refresh_expires_at: Date;
+    supabase_access_token: string;
+    supabase_refresh_token?: string;
+    revoked_at: Date | null;
+  };
+  const sessions = new Map<string, StoredSession>();
+
+  setPostgresPoolForTest({
+    connect: async () => ({
+      query: async (sql: string, values?: unknown[]) => {
+        if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [] };
+
+        if (sql.includes("insert into business_auth_sessions")) {
+          const row: StoredSession = {
+            session_id: String(values?.[0]),
+            auth_user_id: String(values?.[1]),
+            email: String(values?.[2]),
+            access_jti: String(values?.[3]),
+            access_expires_at: new Date(Number(values?.[4])),
+            refresh_jti: String(values?.[5]),
+            refresh_expires_at: new Date(Number(values?.[6])),
+            supabase_access_token: String(values?.[7]),
+            supabase_refresh_token: typeof values?.[8] === "string" ? values[8] : undefined,
+            revoked_at: null
+          };
+          sessions.set(row.session_id, row);
+          return { rows: [] };
+        }
+
+        if (sql.includes("where access_jti = $1")) {
+          const accessJti = String(values?.[0]);
+          const found = [...sessions.values()].find((session) => session.access_jti === accessJti);
+          return { rows: found ? [found] : [] };
+        }
+
+        if (sql.includes("update business_auth_sessions")) {
+          const sessionId = String(values?.[0]);
+          const existing = sessions.get(sessionId);
+          if (existing) existing.revoked_at = new Date();
+          return { rows: [] };
+        }
+
+        return { rows: [] };
+      },
+      release: () => undefined
+    })
+  } as unknown as pg.Pool);
+
+  setSupabaseBusinessAuthClientForTest({
+    inviteUserByEmail: async () => ({ data: { user: { id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83" } }, error: null }),
+    signInWithPassword: async () => ({
+      data: {
+        session: {
+          access_token: "sb-access-1",
+          refresh_token: "sb-refresh-1",
+          token_type: "bearer",
+          expires_in: 3600,
+          user: {
+            id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83",
+            email: "ops@acme-trading.com"
+          }
+        }
+      },
+      error: null
+    }),
+    refreshSession: async () => ({ data: { session: null }, error: { message: "not used" } }),
+    signOutSession: async () => ({ error: null }),
+    getUser: async () => ({ data: { user: { id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83", email: "ops@acme-trading.com" } }, error: null }),
+    updateUserById: async () => ({ error: null }),
+    resetPasswordForEmail: async () => ({ error: null })
+  });
+
+  try {
+    const signIn = await handleBusinessAuthSignIn({
+      email: "ops@acme-trading.com",
+      password: "S3curePass!2026"
+    });
+    assert.equal(signIn.status, 200);
+    const accessToken = (signIn.body as { session: { access_token: string } }).session.access_token;
+
+    resetBusinessAuthSessionsForTest();
+
+    const me = await handleBusinessAuthMe({
+      authorization: `Bearer ${accessToken}`
+    });
+    assert.equal(me.status, 200);
+
+    const signOut = await handleBusinessAuthSignOut({
+      authorization: `Bearer ${accessToken}`
+    });
+    assert.equal(signOut.status, 200);
+
+    const afterSignOut = await handleBusinessAuthMe({
+      authorization: `Bearer ${accessToken}`
+    });
+    assert.equal(afterSignOut.status, 401);
+  } finally {
+    setSupabaseBusinessAuthClientForTest(undefined);
+    resetBusinessAuthSessionsForTest();
+    setPostgresPoolForTest(undefined);
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    if (previousSecret === undefined) delete process.env.BUSINESS_AUTH_JWT_SECRET;
+    else process.env.BUSINESS_AUTH_JWT_SECRET = previousSecret;
+  }
 });

@@ -277,6 +277,7 @@
 
 .ada-scope .ada-status.draft,
 .ada-scope .ada-status.pending_activation,
+.ada-scope .ada-status.pending_internal_approval,
 .ada-scope .ada-status.pending_setup {
   border-style: dashed;
   color: var(--ada-secondary);
@@ -693,6 +694,51 @@
   max-width: var(--ada-detail-page-width);
   padding: 14px 18px 18px;
   width: 100%;
+}
+
+.ada-scope .ada-action-progress-overlay {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 85;
+}
+
+.ada-scope .ada-action-progress-card {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--ada-hairline);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
+  display: grid;
+  gap: 8px;
+  max-width: 360px;
+  padding: 18px 16px;
+  text-align: center;
+  width: calc(100% - 28px);
+}
+
+.ada-scope .ada-action-progress-card svg.spin {
+  animation: ada-wire-spin 0.85s linear infinite;
+  color: var(--ada-primary);
+  justify-self: center;
+}
+
+.ada-scope .ada-action-progress-card strong {
+  color: var(--ada-primary);
+  font-family: var(--font-label-caps);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ada-scope .ada-action-progress-card p {
+  color: var(--ada-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
 }
 
 .ada-scope .ada-instruments-content {

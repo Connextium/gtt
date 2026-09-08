@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && npm run build:docs",
+    "build:docs": "node scripts/sync-business-client-docs.mjs",
     "check": "tsc --noEmit",
-    "dev": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
     "bootstrap:super-admin": "tsx src/cli/provision-super-admin.ts",
     "circle:sandbox-check": "tsx src/cli/circle-sandbox-check.ts",
     "circle:simulate-confirmation": "tsx src/cli/simulate-circle-confirmation.ts",
@@ -20,7 +21,8 @@
     "@circle-fin/developer-controlled-wallets": "^10.8.0",
     "@supabase/supabase-js": "^2.110.6",
     "dotenv": "^17.4.2",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

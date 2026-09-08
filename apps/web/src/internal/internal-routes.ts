@@ -9,6 +9,7 @@ import {
   Landmark,
   ListChecks,
   RefreshCw,
+  Route,
   ShieldCheck,
   UserCheck,
   Users,
@@ -102,6 +103,14 @@ export const internalRoutes: InternalRouteDefinition[] = [
         workflow: "client-operations",
         icon: Wallet,
         showInShellNav: true
+      },
+      {
+        label: "ADA Pending Approval",
+        path: "/internal/operations/accounts-of-digital-asset/pending-approval",
+        description: "Review fiat-linked ADA requests awaiting internal approval decisions.",
+        workflow: "client-operations",
+        icon: ClipboardCheck,
+        showInShellNav: true
       }
     ],
     showInShellNav: true
@@ -194,6 +203,48 @@ export const internalRoutes: InternalRouteDefinition[] = [
     description: "Review policy-driven liquidity recommendations before instruction creation.",
     workflow: "liquidity-rebalancing",
     icon: BanknoteArrowUp,
+    showInShellNav: true
+  },
+  {
+    label: "Treasury Pool",
+    path: "/internal/operations/treasury-pool",
+    description: "Configure liquidity pools, inter-rail sweep priorities, and rebalancing simulations.",
+    workflow: "liquidity-rebalancing",
+    icon: Wallet,
+    showInShellNav: true
+  },
+  {
+    label: "Netting Waterfall",
+    path: "/internal/operations/netting-waterfall",
+    description: "Operate automatic netting, settlement waterfall execution, and priority weighting.",
+    workflow: "liquidity-rebalancing",
+    icon: Workflow,
+    showInShellNav: true
+  },
+  {
+    label: "Route Management",
+    path: "/internal/operations/route-management",
+    description: "Manage route profiles and route bindings for instruction routing decisions.",
+    workflow: "liquidity-rebalancing",
+    icon: Route,
+    children: [
+      {
+        label: "Route Profiles",
+        path: "/internal/operations/route-profiles",
+        description: "Display route profiles and launch creation of weighted route decision profiles.",
+        workflow: "liquidity-rebalancing",
+        icon: Route,
+        showInShellNav: true
+      },
+      {
+        label: "Route Bindings",
+        path: "/internal/operations/route-bindings",
+        description: "Bind instruction scopes and segments to routing profiles with priority resolution.",
+        workflow: "liquidity-rebalancing",
+        icon: Route,
+        showInShellNav: true
+      }
+    ],
     showInShellNav: true
   },
   {

@@ -1,4 +1,3 @@
-import { type Session } from "@supabase/supabase-js";
 import { type ReactNode } from "react";
 import { CheckEmailScreen, RegisterScreen, SetPasswordScreen, SignInScreen } from "./onboarding/AuthScreensModule.js";
 import { OnboardingStepsModule } from "./onboarding/OnboardingStepsModule.js";
@@ -6,12 +5,11 @@ import { PendingReviewModule, RfiResponseModule } from "./onboarding/PendingRevi
 import { SubmissionConfirmedModule } from "./onboarding/SubmissionConfirmedModule.js";
 import { nextOnboardingRoute, onboardingStepNumber, routeForApplication } from "./onboarding/onboardingRouting.js";
 import { AuthGuard } from "./shared/AuthGuard.js";
+import { type BusinessJwtSession } from "./shared/useSupabaseSession.js";
 import { SovereignTreasuryScreen } from "./treasury/SovereignTreasuryScreen.js";
 import { WelcomeLandingModule } from "./welcome/WelcomeLandingModule.js";
 
 export type Navigate = (path: string) => void;
-
-type AuthSupabase = Parameters<typeof SignInScreen>[0]["supabase"];
 
 export const selfRegistrationRoutes = new Set([
   "/",
@@ -27,6 +25,7 @@ export const selfRegistrationRoutes = new Set([
   "/application-pending",
   "/rfi-response",
   "/treasury",
+  "/business/client-account",
   "/business/treasury/funding",
   "/welcome"
 ]);
@@ -34,23 +33,23 @@ export const selfRegistrationRoutes = new Set([
 export function resolveSelfRegistrationRoute({
   loading,
   navigate,
+  onAuthenticated,
   onLogout,
   path,
-  session,
-  supabase
+  session
 }: {
   loading: boolean;
   navigate: Navigate;
+  onAuthenticated: (session: BusinessJwtSession) => void;
   onLogout: () => Promise<void> | void;
   path: string;
-  session: Session | null;
-  supabase: AuthSupabase;
+  session: BusinessJwtSession | null;
 }): ReactNode {
   if (path === "/" || path === "/register") return <RegisterScreen navigate={navigate} />;
-  if (path === "/sign-in") return <SignInScreen navigate={navigate} supabase={supabase} />;
+  if (path === "/sign-in") return <SignInScreen navigate={navigate} onAuthenticated={onAuthenticated} />;
   if (path === "/auth/check-email") return <CheckEmailScreen navigate={navigate} />;
   if (path === "/auth/set-password") {
-    return <SetPasswordScreen navigate={navigate} nextOnboardingRoute={nextOnboardingRoute} session={session} supabase={supabase} />;
+    return <SetPasswordScreen navigate={navigate} nextOnboardingRoute={nextOnboardingRoute} onAuthenticated={onAuthenticated} session={session} />;
   }
   if (path === "/submission-confirmed") {
     return withAuth(
@@ -73,6 +72,19 @@ export function resolveSelfRegistrationRoute({
   }
   if (path === "/treasury") {
     return withAuth(<SovereignTreasuryScreen navigate={navigate} onLogout={onLogout} session={session} />, loading, navigate, session);
+  }
+  if (path === "/business/client-account") {
+    return withAuth(
+      <SovereignTreasuryScreen
+        initialView="open-account"
+        navigate={navigate}
+        onLogout={onLogout}
+        session={session}
+      />,
+      loading,
+      navigate,
+      session
+    );
   }
   const fundingDetailMatch = path.match(/^\/business\/treasury\/funding\/([^/]+)$/);
   if (path === "/business/treasury/funding" || fundingDetailMatch) {
@@ -115,7 +127,7 @@ export function resolveSelfRegistrationRoute({
   return <RegisterScreen navigate={navigate} />;
 }
 
-function withAuth(children: ReactNode, loading: boolean, navigate: Navigate, session: Session | null): ReactNode {
+function withAuth(children: ReactNode, loading: boolean, navigate: Navigate, session: BusinessJwtSession | null): ReactNode {
   return (
     <AuthGuard isAuthenticated={Boolean(session)} isLoading={loading} onUnauthenticated={() => navigate("/register")}>
       {children}

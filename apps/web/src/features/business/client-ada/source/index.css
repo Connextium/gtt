@@ -1,0 +1,71 @@
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
+
+.bc-ada-source-scope {
+  --font-caslon: 'Libre Caslon Text', Georgia, serif;
+  --font-franklin: 'Libre Franklin', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  background-color: #f9f9f9;
+}
+
+.bc-ada-source-scope,
+.bc-ada-source-scope input,
+.bc-ada-source-scope select,
+.bc-ada-source-scope textarea {
+  font-family: var(--font-franklin);
+  color: #1b1b1b;
+  letter-spacing: -0.01em;
+}
+
+.bc-ada-source-scope button {
+  font-family: var(--font-franklin);
+  letter-spacing: -0.01em;
+}
+
+.bc-ada-source-scope *,
+.bc-ada-source-scope *::before,
+.bc-ada-source-scope *::after {
+  border-radius: 0 !important;
+}
+
+.bc-ada-source-scope .font-caslon {
+  font-family: var(--font-caslon);
+}
+
+.bc-ada-source-scope .font-franklin {
+  font-family: var(--font-franklin);
+}
+
+.bc-ada-source-scope .font-mono {
+  font-family: var(--font-mono);
+}
+
+.bc-ada-source-scope .bc-ada-content-host {
+  width: 100%;
+  max-width: 1120px;
+  min-width: 1040px;
+  margin: 0 auto;
+  overflow-x: auto;
+}
+
+.bc-ada-source-scope .bc-ada-content-host > div,
+.bc-ada-source-scope .bc-ada-content-host .max-w-\[1520px\] {
+  min-width: 1040px;
+}
+
+.bc-ada-source-scope .bc-ada-content-host .overflow-x-auto {
+  overflow-x: visible;
+}
+
+.bc-ada-source-scope ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.bc-ada-source-scope ::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.bc-ada-source-scope ::-webkit-scrollbar-thumb {
+  background: #000000;
+}

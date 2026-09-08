@@ -1,4 +1,3 @@
-import { type Session } from "@supabase/supabase-js";
 import {
   ArrowRight,
   ArrowLeftRight,
@@ -9,34 +8,43 @@ import {
   Settings,
   Wallet
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BusinessApiKeysContent } from "../api-keys/BusinessApiKeysContent.js";
 import { BusinessFundingModule } from "../business-funding/BusinessFundingModule.js";
+import { BusinessClientAdaModule } from "../client-ada/BusinessClientAdaModule.js";
+import { TradeLedgersOpenAccountWizardView } from "../trade-ledgers/TradeLedgersOpenAccountWizardView.js";
+import { TradeLedgersTreasuryView } from "../trade-ledgers/TradeLedgersTreasuryView.js";
+import "../trade-ledgers/trade-ledgers-tailwind.css";
 import { routeForApplication } from "../onboarding/onboardingRouting.js";
 import { BusinessAvatarMenu } from "../shared/BusinessAvatarMenu.js";
 import { type MyOnboardingResponse, type OnboardingApplication } from "../onboarding/types.js";
 import { apiRequest } from "../shared/apiClient.js";
+import { type BusinessJwtSession } from "../shared/useSupabaseSession.js";
 import { SovereignAccountsModule } from "./SovereignAccountsModule.js";
 import { SovereignDashboardModule } from "./SovereignDashboardModule.js";
 import { SovereignDetailModule } from "./SovereignDetailModule.js";
 import { SovereignMoveMoneyModal } from "./SovereignMoveMoneyModal.js";
 import { SovereignSectionPlaceholderModule } from "./SovereignSectionPlaceholderModule.js";
-import { type TreasuryAdaAccount } from "./formatters.js";
+import { accountDisplayCode, parseMinorUnits, type TreasuryAdaAccount } from "./formatters.js";
 
 type Navigate = (path: string) => void;
 
 type OnboardingAdaAccount = TreasuryAdaAccount;
 
-type SovereignView = "accounts" | "trade-ledgers" | "netting" | "dashboard" | "detail" | "funding" | "analytics";
+type SovereignView = "accounts" | "trade-ledgers" | "open-account" | "api-keys" | "netting" | "dashboard" | "detail" | "funding" | "ada-registry" | "analytics";
 
 const SOVEREIGN_VIEW_QUERY_KEY = "view";
 
 const SOVEREIGN_VIEW_TO_URL_TOKEN: Record<SovereignView, string> = {
   accounts: "accounts",
   "trade-ledgers": "trade-ledgers",
+  "open-account": "open-account",
+  "api-keys": "api-keys",
   netting: "netting",
   dashboard: "treasury",
   detail: "treasury-detail",
   funding: "funding",
+  "ada-registry": "ada-registry",
   analytics: "analytics"
 };
 
@@ -50,6 +58,14 @@ function parseSovereignView(raw: string | null | undefined): SovereignView | und
     case "trade_ledgers":
     case "ledgers":
       return "trade-ledgers";
+    case "open-account":
+    case "open_account":
+    case "client-account":
+      return "open-account";
+    case "api-keys":
+    case "api_keys":
+    case "apikeys":
+      return "api-keys";
     case "netting":
       return "netting";
     case "dashboard":
@@ -63,6 +79,11 @@ function parseSovereignView(raw: string | null | undefined): SovereignView | und
     case "funding-instructions":
     case "funding_instructions":
       return "funding";
+    case "ada-registry":
+    case "ada_registry":
+    case "business-client-ada":
+    case "business_client_ada":
+      return "ada-registry";
     case "analytics":
       return "analytics";
     default:
@@ -107,7 +128,7 @@ export function SovereignTreasuryScreen({
   initialView?: SovereignView;
   navigate: Navigate;
   onLogout: () => Promise<void> | void;
-  session: Session | null;
+  session: BusinessJwtSession | null;
 }) {
   const [application, setApplication] = useState<OnboardingApplication | undefined>();
   const [adaAccounts, setAdaAccounts] = useState<OnboardingAdaAccount[]>([]);
@@ -116,7 +137,20 @@ export function SovereignTreasuryScreen({
   const [selectedAdaAccountId, setSelectedAdaAccountId] = useState("");
   const [detailReturnView, setDetailReturnView] = useState<SovereignView>("dashboard");
   const [moveMoneyOpen, setMoveMoneyOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const treasuryActive = view === "dashboard" || view === "detail" || view === "funding";
+  const tradeLedgersActive = view === "trade-ledgers" || view === "open-account";
+
+  const loadOnboardingSnapshot = useCallback(async (token: string) => {
+    const result = await apiRequest<MyOnboardingResponse<OnboardingAdaAccount>>("/onboarding/me", { token });
+    if (result.application.status !== "approved") {
+      navigate(routeForApplication(result.application));
+      return;
+    }
+    setApplication(result.application);
+    setAdaAccounts(result.adaAccounts ?? []);
+  }, [navigate]);
 
   useEffect(() => {
     const locationView = readSovereignViewFromLocation();
@@ -145,22 +179,29 @@ export function SovereignTreasuryScreen({
   }, []);
 
   useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!settingsMenuRef.current) return;
+      if (settingsMenuRef.current.contains(event.target as Node)) return;
+      setSettingsOpen(false);
+    };
+
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, []);
+
+  useEffect(() => {
     const token = session?.access_token;
     if (!token) {
+      setApplication(undefined);
+      setAdaAccounts([]);
       setAdaAccountsLoading(false);
       return;
     }
     let active = true;
     setAdaAccountsLoading(true);
-    apiRequest<MyOnboardingResponse<OnboardingAdaAccount>>("/onboarding/me", { token })
-      .then((result) => {
+    loadOnboardingSnapshot(token)
+      .then(() => {
         if (!active) return;
-        if (result.application.status !== "approved") {
-          navigate(routeForApplication(result.application));
-          return;
-        }
-        setApplication(result.application);
-        setAdaAccounts(result.adaAccounts ?? []);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -170,13 +211,27 @@ export function SovereignTreasuryScreen({
     return () => {
       active = false;
     };
-  }, [navigate, session?.access_token]);
+  }, [loadOnboardingSnapshot, session?.access_token]);
+
+  const refreshAdaAccounts = useCallback(async () => {
+    const token = session?.access_token;
+    if (!token) return;
+    setAdaAccountsLoading(true);
+    try {
+      await loadOnboardingSnapshot(token);
+    } catch {
+      // Keep existing UI state when refresh fails and allow user to retry action.
+    } finally {
+      setAdaAccountsLoading(false);
+    }
+  }, [loadOnboardingSnapshot, session?.access_token]);
 
   const email = application?.email ?? session?.user.email ?? "treasury@gtt.example";
 
   function setViewWithUrl(nextView: SovereignView) {
     setView(nextView);
     writeSovereignViewToLocation(nextView, "push");
+    setSettingsOpen(false);
   }
 
   function openAdaDetail(accountId: string, returnView: SovereignView) {
@@ -186,6 +241,33 @@ export function SovereignTreasuryScreen({
   }
 
   const selectedAdaAccount = adaAccounts.find((account) => account.id === selectedAdaAccountId) ?? adaAccounts[0];
+  const tradeLedgerAccounts = useMemo(
+    () => adaAccounts.map((account) => {
+      const assetCode = (account.assetCode ?? "USDC").toUpperCase();
+      const currency: "USDC" | "EURC" | "USD" = assetCode === "EURC"
+        ? "EURC"
+        : assetCode === "USD"
+          ? "USD"
+          : "USDC";
+      const normalizedStatus = account.status.trim().toLowerCase();
+      const status: "active" | "pending_internal_approval" | "draft" = normalizedStatus === "active"
+        ? "active"
+        : normalizedStatus.includes("pending")
+          ? "pending_internal_approval"
+          : "draft";
+
+      return {
+        id: account.id,
+        code: accountDisplayCode(account),
+        displayName: account.accountName,
+        purpose: account.usePurpose.replaceAll("_", " "),
+        currency,
+        status,
+        balance: parseMinorUnits(account.balances?.availableMinorUnits) / 1_000_000
+      };
+    }),
+    [adaAccounts]
+  );
 
   return (
     <div className="gtt-sovereign-shell">
@@ -197,7 +279,8 @@ export function SovereignTreasuryScreen({
 
         <nav className="gtt-sovereign-nav" aria-label="Business treasury navigation">
           <button className={view === "accounts" ? "active" : ""} onClick={() => setViewWithUrl("accounts")} type="button"><Building2 size={18} /> Accounts</button>
-          <button className={view === "trade-ledgers" ? "active" : ""} onClick={() => setViewWithUrl("trade-ledgers")} type="button"><FileText size={18} /> Trade Ledgers</button>
+          <button className={tradeLedgersActive ? "active" : ""} onClick={() => setViewWithUrl("trade-ledgers")} type="button"><FileText size={18} /> Trade Ledgers</button>
+          <button className={view === "ada-registry" ? "active" : ""} onClick={() => setViewWithUrl("ada-registry")} type="button"><FileText size={18} /> ADA Registry</button>
           <button className={view === "netting" ? "active" : ""} onClick={() => setViewWithUrl("netting")} type="button"><ArrowLeftRight size={18} /> Netting</button>
           <div className="gtt-sovereign-nav-group">
             <button className={treasuryActive ? "active" : ""} onClick={() => setViewWithUrl("dashboard")} type="button"><Wallet size={18} /> Treasury</button>
@@ -220,8 +303,31 @@ export function SovereignTreasuryScreen({
           </nav>
           <div className="gtt-sovereign-topbar-tools">
             <Bell size={19} />
-            <Settings size={19} />
-            <BusinessAvatarMenu email={email} onLogout={() => void onLogout()} />
+            <div className="gtt-sovereign-settings-menu" ref={settingsMenuRef}>
+              <button
+                aria-expanded={settingsOpen}
+                aria-haspopup="menu"
+                aria-label="Configuration menu"
+                className="gtt-sovereign-settings-trigger"
+                onClick={() => setSettingsOpen((current) => !current)}
+                title="Configuration"
+                type="button"
+              >
+                <Settings size={18} />
+              </button>
+              {settingsOpen ? (
+                <div className="gtt-sovereign-settings-popover" role="menu">
+                  <p>Configuration</p>
+                  <button onClick={() => setViewWithUrl("api-keys")} role="menuitem" type="button">
+                    API Key Credentials
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <BusinessAvatarMenu
+              email={email}
+              onLogout={() => void onLogout()}
+            />
           </div>
         </header>
 
@@ -233,10 +339,25 @@ export function SovereignTreasuryScreen({
               onOpenDetail={(accountId) => openAdaDetail(accountId, "accounts")}
             />
           ) : view === "trade-ledgers" ? (
-            <SovereignSectionPlaceholderModule
-              description="Trade ledger operations are loaded in-page with no sidebar refresh."
-              title="Trade Ledgers"
-            />
+            <div className="bc-account-scope bc-density-compact">
+              <TradeLedgersTreasuryView
+                accounts={tradeLedgerAccounts}
+                onInitiateTransfer={() => setMoveMoneyOpen(true)}
+                onOpenProvisionWizard={() => setViewWithUrl("open-account")}
+                transfers={[]}
+              />
+            </div>
+          ) : view === "open-account" ? (
+            <div className="bc-account-scope bc-density-compact">
+              <TradeLedgersOpenAccountWizardView
+                onBackToTradeLedgers={() => navigate("/treasury?view=trade-ledgers#trade-ledgers")}
+                onAccountCreated={() => refreshAdaAccounts()}
+                onComplete={() => navigate("/treasury?view=accounts#accounts")}
+                token={session?.access_token ?? ""}
+              />
+            </div>
+          ) : view === "api-keys" ? (
+            <BusinessApiKeysContent token={session?.access_token ?? ""} />
           ) : view === "netting" ? (
             <SovereignSectionPlaceholderModule
               description="Netting workflows are rendered in this panel while layout remains fixed."
@@ -250,6 +371,8 @@ export function SovereignTreasuryScreen({
               navigate={navigate}
               token={session?.access_token ?? ""}
             />
+          ) : view === "ada-registry" ? (
+            <BusinessClientAdaModule token={session?.access_token ?? ""} />
           ) : view === "analytics" ? (
             <SovereignSectionPlaceholderModule
               description="Analytics surfaces are rendered as in-page content under the same shell."

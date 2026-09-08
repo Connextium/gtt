@@ -49,6 +49,15 @@
   font-weight: 400;
 }
 
+.ifc5-eyebrow {
+  margin: 0;
+  color: #5e5e5e;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
 .ifc5-header-create h1,
 .ifc5-success-header h1 {
   font-size: clamp(24px, 2.5vw, 34px);
@@ -123,6 +132,33 @@
 
 .ifc5-page-create .ifc5-header-create {
   margin-top: 16px;
+}
+
+.ifc5-governance-strip {
+  border: 1px solid #d8d8d8;
+  background: #ffffff;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ifc5-governance-strip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #3f3f3f;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.ifc5-governance-strip i {
+  width: 6px;
+  height: 6px;
+  background: #111111;
+  display: inline-block;
 }
 
 .ifc5-id-box {
@@ -241,6 +277,15 @@
   font-size: 11px;
 }
 
+.ifc5-amount-readout {
+  margin-top: 4px;
+  font-family: var(--font-display-md);
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 400;
+  color: #000000;
+}
+
 .ifc5-select-wrap {
   position: relative;
 }
@@ -263,6 +308,49 @@
   margin-top: 10px;
   min-height: 72px;
   resize: vertical;
+}
+
+.ifc5-amount-presets {
+  margin-top: 10px;
+  border: 1px solid #e0e0e0;
+  background: #f7f7f7;
+  padding: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ifc5-amount-presets span {
+  color: #5e5e5e;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.ifc5-amount-presets button {
+  min-height: 24px;
+  border: 1px solid #d2d2d2;
+  background: #ffffff;
+  color: #1b1b1b;
+  font-size: 10px;
+  font-family: var(--font-data-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.ifc5-amount-presets button:hover {
+  border-color: #000000;
+}
+
+.ifc5-amount-presets button.active {
+  border-color: #000000;
+  background: #000000;
+  color: #ffffff;
 }
 
 .ifc5-footer-actions {
@@ -612,6 +700,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .ifc5-governance-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .ifc5-id-box {
     align-self: flex-start;
   }
@@ -624,6 +716,10 @@
 
   .ifc5-form-grid,
   .ifc5-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ifc5-governance-strip {
     grid-template-columns: minmax(0, 1fr);
   }
 

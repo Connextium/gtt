@@ -1,8 +1,8 @@
-import type { Session } from "@supabase/supabase-js";
 import { ArrowRight, BarChart2, Bell, Building2, CheckCircle2, Clock, Download, Gavel, Search, Settings, ShieldCheck, TrendingUp, User, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { apiRequest } from "../shared/apiClient.js";
 import { BusinessAvatarMenu } from "../shared/BusinessAvatarMenu.js";
+import { type BusinessJwtSession } from "../shared/useSupabaseSession.js";
 import type { MyOnboardingResponse, OnboardingApplication } from "../onboarding/types.js";
 import {
   accountDisplayCode,
@@ -20,7 +20,7 @@ export function WelcomeLandingModule({
 }: {
   navigate: (path: string) => void;
   onLogout: () => Promise<void> | void;
-  session: Session | null;
+  session: BusinessJwtSession | null;
 }) {
   const [application, setApplication] = useState<OnboardingApplication | undefined>();
   const [adaAccounts, setAdaAccounts] = useState<TreasuryAdaAccount[]>([]);
@@ -71,7 +71,7 @@ export function WelcomeLandingModule({
         </div>
         <nav className="gtt-welcome-nav" aria-label="Treasury dashboard navigation">
           <a className="active" href="#"><Building2 size={20} /> Accounts</a>
-          <a href="#"><Gavel size={20} /> Trade Ledgers</a>
+          <button onClick={() => navigate("/treasury?view=trade-ledgers#trade-ledgers")} type="button"><Gavel size={20} /> Trade Ledgers</button>
           <a href="#"><ArrowRight size={20} /> Netting</a>
           <button onClick={() => navigate("/treasury")} type="button"><Wallet size={20} /> Treasury</button>
           <a href="#"><BarChart2 size={20} /> Analytics</a>

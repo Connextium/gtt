@@ -1,14 +1,15 @@
-import { useEffect, useState } from "react";
-import { BusinessApp, isBusinessRoute } from "./features/business/BusinessApp.js";
-import { InternalApp, isInternalRoute } from "./internal/InternalApp.js";
+import { Suspense, lazy, useEffect, useState } from "react";
 import "./styles.css";
+
+const BusinessApp = lazy(() => import("./features/business/BusinessApp.js").then((module) => ({ default: module.BusinessApp })));
+const InternalApp = lazy(() => import("./internal/InternalApp.js").then((module) => ({ default: module.InternalApp })));
 
 export const App = () => {
   const [path, setPath] = useState(window.location.pathname);
 
   const navigate = (nextPath: string) => {
     window.history.pushState({}, "", nextPath);
-    setPath(nextPath);
+    setPath(window.location.pathname);
   };
 
   useEffect(() => {
@@ -17,13 +18,11 @@ export const App = () => {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  if (isBusinessRoute(path)) {
-    return <BusinessApp navigate={navigate} path={path} />;
-  }
+  const internalRoute = path === "/internal" || path.startsWith("/internal/");
 
-  if (isInternalRoute(path)) {
-    return <InternalApp navigate={navigate} path={path} />;
-  }
-
-  return <BusinessApp navigate={navigate} path="/" />;
+  return (
+    <Suspense fallback={<div className="gtt-app-loading">Loading application...</div>}>
+      {internalRoute ? <InternalApp navigate={navigate} path={path} /> : <BusinessApp navigate={navigate} path={path} />}
+    </Suspense>
+  );
 };

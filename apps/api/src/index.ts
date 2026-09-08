@@ -8,7 +8,7 @@ export interface ApiHealth {
 }
 
 export interface ApiRouteContract {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PATCH";
   path: string;
   domain: string;
   description: string;
@@ -45,6 +45,16 @@ export const apiRouteContracts: ApiRouteContract[] = [
     ["POST", "/onboarding/me/steps/{step}", "client-onboarding"],
     ["POST", "/onboarding/me/submit", "client-onboarding"],
     ["POST", "/onboarding/me/rfi-response", "client-onboarding"],
+    ["POST", "/business/accounts-of-digital-asset", "client-onboarding"],
+    ["GET", "/business/accounts-of-digital-asset", "client-onboarding"],
+    ["GET", "/business/accounts-of-digital-asset/{id}", "client-onboarding"],
+    ["POST", "/business/api-keys", "client-onboarding"],
+    ["GET", "/business/api-keys", "client-onboarding"],
+    ["POST", "/business/api-keys/{id}/revoke", "client-onboarding"],
+    ["POST", "/business/api-keys/{id}/rotate", "client-onboarding"],
+    ["GET", "/internal/operations/accounts-of-digital-asset/pending-approval", "client-onboarding"],
+    ["POST", "/internal/operations/accounts-of-digital-asset/{id}/approve", "client-onboarding"],
+    ["POST", "/internal/operations/accounts-of-digital-asset/{id}/reject", "client-onboarding"],
     ["GET", "/admin/business-onboarding/applications", "client-onboarding"],
     ["GET", "/admin/business-onboarding/applications/{id}", "client-onboarding"],
     ["POST", "/admin/business-onboarding/applications/{id}/approve", "client-onboarding"],
@@ -92,8 +102,22 @@ export const apiRouteContracts: ApiRouteContract[] = [
     ["GET", "/funding-reservations/{id}", "funding-reservation"],
     ["POST", "/funding-reservations/{id}/activate", "funding-reservation"],
     ["POST", "/funding-reservations/{id}/release", "funding-reservation"],
+    ["POST", "/funding-reservations/{id}/consume", "funding-reservation"],
     ["POST", "/funding-reservations/{id}/expire", "funding-reservation"],
     ["POST", "/funding-reservations/{id}/cancel", "funding-reservation"],
+    ["POST", "/internal/treasury/settlement-obligations", "settlement-obligation"],
+    ["GET", "/internal/treasury/settlement-obligations", "settlement-obligation"],
+    ["GET", "/internal/treasury/settlement-obligations/{id}", "settlement-obligation"],
+    ["POST", "/internal/treasury/settlement-obligations/{id}/fulfill", "settlement-obligation"],
+    ["POST", "/internal/treasury/settlement-obligations/{id}/cancel", "settlement-obligation"],
+    ["POST", "/internal/treasury/funding-reservations", "funding-reservation"],
+    ["GET", "/internal/treasury/funding-reservations", "funding-reservation"],
+    ["GET", "/internal/treasury/funding-reservations/{id}", "funding-reservation"],
+    ["POST", "/internal/treasury/funding-reservations/{id}/activate", "funding-reservation"],
+    ["POST", "/internal/treasury/funding-reservations/{id}/release", "funding-reservation"],
+    ["POST", "/internal/treasury/funding-reservations/{id}/consume", "funding-reservation"],
+    ["POST", "/internal/treasury/funding-reservations/{id}/expire", "funding-reservation"],
+    ["POST", "/internal/treasury/funding-reservations/{id}/cancel", "funding-reservation"],
     ["POST", "/payments/internal", "payment-execution"],
     ["POST", "/payments/external-usdc", "payment-execution"],
     ["GET", "/payments", "payment-execution"],
@@ -120,6 +144,22 @@ export const apiRouteContracts: ApiRouteContract[] = [
     ["POST", "/fiat/redemptions/{id}/submit", "payment-execution"],
     ["POST", "/fiat/redemptions/{id}/retry", "payment-execution"],
     ["POST", "/fiat/redemptions/{id}/refresh-status", "payment-execution"],
+    ["POST", "/internal/treasury/route-profiles", "payment-execution"],
+    ["GET", "/internal/treasury/route-profiles", "payment-execution"],
+    ["PATCH", "/internal/treasury/route-profiles/{id}", "payment-execution"],
+    ["DELETE", "/internal/treasury/route-profiles/{id}", "payment-execution"],
+    ["POST", "/internal/treasury/route-bindings", "payment-execution"],
+    ["GET", "/internal/treasury/route-bindings", "payment-execution"],
+    ["PATCH", "/internal/treasury/route-bindings/{id}", "payment-execution"],
+    ["DELETE", "/internal/treasury/route-bindings/{id}", "payment-execution"],
+    ["POST", "/internal/treasury/payment-instructions", "payment-execution"],
+    ["GET", "/internal/treasury/payment-instructions", "payment-execution"],
+    ["GET", "/internal/treasury/payment-instructions/{id}", "payment-execution"],
+    ["POST", "/internal/treasury/payment-instructions/{id}/route", "payment-execution"],
+    ["POST", "/internal/treasury/payment-instructions/{id}/execute", "payment-execution"],
+    ["POST", "/internal/treasury/payment-instructions/{id}/retry", "payment-execution"],
+    ["POST", "/internal/treasury/payment-instructions/{id}/cancel", "payment-execution"],
+    ["GET", "/internal/treasury/internal-ada-settlements/{id}", "payment-execution"],
     ["GET", "/liquidity-rebalancing/recommendations", "liquidity-rebalancing"],
     ["POST", "/liquidity-rebalancing/instructions", "liquidity-rebalancing"],
     ["GET", "/liquidity-rebalancing/instructions", "liquidity-rebalancing"],
@@ -172,7 +212,7 @@ export const apiRouteContracts: ApiRouteContract[] = [
     ["GET", "/release-artifacts", "hardening-release"],
     ["POST", "/release-artifacts", "hardening-release"]
   ].map(([method, path, domain]) => ({
-    method: method as "GET" | "POST",
+    method: method as "GET" | "POST" | "PATCH",
     path: path!,
     domain: domain!,
     description: `${method} ${path}`

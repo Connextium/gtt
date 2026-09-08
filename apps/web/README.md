@@ -29,8 +29,6 @@ Required browser environment variables:
 
 ```bash
 VITE_API_BASE_URL=http://localhost:4000
-VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-VITE_SUPABASE_ANON_KEY=...
 ```
 
 Flow:
@@ -38,7 +36,8 @@ Flow:
 1. `/register` submits email only to `apps/api`.
 2. `apps/api` sends Supabase Auth invitation email.
 3. Invitation link redirects to `/auth/set-password`.
-4. Password is set through Supabase Auth.
-5. Web calls `GET /onboarding/me` to create or resume the onboarding draft.
-6. User continues to `/onboarding/step-1`.
-7. Step 4 submission calls `POST /onboarding/me/submit` and redirects to `/pending`.
+4. Web submits password and JWT invitation token to `apps/api` (`POST /business/auth/set-password`).
+5. Web signs in through `apps/api` (`POST /business/auth/sign-in`) and stores JWT bearer session.
+6. Web calls `GET /onboarding/me` to create or resume the onboarding draft.
+7. User continues to `/onboarding/step-1`.
+8. Step 4 submission calls `POST /onboarding/me/submit` and redirects to `/pending`.

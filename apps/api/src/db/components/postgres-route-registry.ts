@@ -14,6 +14,10 @@ const getRoutes = [
   /^\/business\/me\/funding-instructions\/[^/]+(\/orders)?$/,
   /^\/funding-reservations$/,
   /^\/funding-reservations\/[^/]+$/,
+  /^\/internal\/treasury\/settlement-obligations$/,
+  /^\/internal\/treasury\/settlement-obligations\/[^/]+$/,
+  /^\/internal\/treasury\/funding-reservations$/,
+  /^\/internal\/treasury\/funding-reservations\/[^/]+$/,
   /^\/payments$/,
   /^\/payments\/[^/]+$/,
   /^\/fiat\/(wire-accounts|mints|redemptions)$/,
@@ -23,6 +27,10 @@ const getRoutes = [
   /^\/internal\/treasury\/settlement-advance\/[^/]+$/,
   /^\/internal\/treasury\/tenant-disbursements$/,
   /^\/internal\/treasury\/tenant-disbursements\/[^/]+$/,
+  /^\/internal\/treasury\/route-profiles$/,
+  /^\/internal\/treasury\/route-bindings$/,
+  /^\/internal\/treasury\/payment-instructions$/,
+  /^\/internal\/treasury\/payment-instructions\/[^/]+$/,
   /^\/internal\/operations\/linked-wire-accounts$/,
   /^\/internal\/operations\/linked-wire-accounts\/[^/]+$/,
   /^\/reconciliation\/breaks$/,
@@ -55,7 +63,11 @@ const postRoutes = [
   /^\/business\/me\/funding-instructions$/,
   /^\/funding-instructions\/[^/]+\/(assign-route|cancel)$/,
   /^\/funding-reservations$/,
-  /^\/funding-reservations\/[^/]+\/(activate|release|expire|cancel)$/,
+  /^\/funding-reservations\/[^/]+\/(activate|release|consume|expire|cancel)$/,
+  /^\/internal\/treasury\/settlement-obligations$/,
+  /^\/internal\/treasury\/settlement-obligations\/[^/]+\/(cancel|fulfill)$/,
+  /^\/internal\/treasury\/funding-reservations$/,
+  /^\/internal\/treasury\/funding-reservations\/[^/]+\/(activate|release|consume|expire|cancel)$/,
   /^\/payments\/(internal|external-usdc)$/,
   /^\/payments\/[^/]+\/(submit|cancel|retry|refresh-status)$/,
   /^\/fiat\/wire-accounts$/,
@@ -66,6 +78,10 @@ const postRoutes = [
   /^\/internal\/treasury\/settlement-advance\/[^/]+\/(request|cancel)$/,
   /^\/internal\/treasury\/tenant-disbursements$/,
   /^\/internal\/treasury\/tenant-disbursements\/[^/]+\/(approve|submit)$/,
+  /^\/internal\/treasury\/route-profiles$/,
+  /^\/internal\/treasury\/route-bindings$/,
+  /^\/internal\/treasury\/payment-instructions$/,
+  /^\/internal\/treasury\/payment-instructions\/[^/]+\/(route|execute|retry|cancel)$/,
   /^\/internal\/operations\/linked-wire-accounts\/[^/]+\/refresh-instructions$/,
   /^\/webhooks\/circle$/,
   /^\/internal\/webhooks\/circle\/[^/]+\/reprocess$/,
@@ -79,7 +95,16 @@ export const isPostgresRoute = (method: string, pathname: string): boolean => {
     : method === "POST" || method === "PUT"
       ? postRoutes
       : method === "PATCH"
-        ? [/^\/accounts-of-digital-asset\/[^/]+\/linked-instruments\/[^/]+$/]
+        ? [
+            /^\/accounts-of-digital-asset\/[^/]+\/linked-instruments\/[^/]+$/,
+            /^\/internal\/treasury\/route-profiles\/[^/]+$/,
+            /^\/internal\/treasury\/route-bindings\/[^/]+$/
+          ]
+        : method === "DELETE"
+          ? [
+              /^\/internal\/treasury\/route-profiles\/[^/]+$/,
+              /^\/internal\/treasury\/route-bindings\/[^/]+$/
+            ]
         : [];
   return routes.some((route) => route.test(pathname));
 };

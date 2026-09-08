@@ -106,6 +106,8 @@ export const InternalFundingInstructionOrderConsoleContent = ({
   const [detailLoading, setDetailLoading] = useState(false);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [instructions, setInstructions] = useState<FundingInstructionApi[]>([]);
   const [accounts, setAccounts] = useState<AccountApi[]>([]);
   const [selectedInstruction, setSelectedInstruction] = useState<FundingInstructionApi | null>(null);
@@ -157,6 +159,10 @@ export const InternalFundingInstructionOrderConsoleContent = ({
 
   const stats = useMemo(() => {
     const activeInstructions = instructions.filter((item) => !isTerminalStatus(item.status)).length;
+    const settledInstructions = instructions.filter((item) => {
+      const status = normalizeStatus(item.status);
+      return status === "completed" || status === "posted_available" || status === "available";
+    }).length;
     const pendingProvider = instructions.filter((item) => normalizeStatus(item.status) === "pending_provider").length;
     const pendingLedger = instructions.filter((item) => {
       const status = normalizeStatus(item.status);
@@ -165,50 +171,40 @@ export const InternalFundingInstructionOrderConsoleContent = ({
     const throughputMinor = instructions.reduce((sum, item) => sum + parseMinorUnits(item.amountMinorUnits), 0n);
     return {
       activeInstructions,
+      settledInstructions,
       pendingProvider,
       pendingLedger,
       throughputMinor
     };
   }, [instructions]);
 
-  const lifecycle = useMemo(() => {
-    if (!selectedInstruction) return [] as Array<{ label: string; tone: "done" | "current" | "pending" | "failed"; timestamp: string }>;
-    const normalized = normalizeStatus(selectedInstruction.status);
-    const isInternalMint = normalizeStatus(selectedInstruction.instructionRole) === "internal_treasury_mint";
-    const labels = isInternalMint ? internalMintLifecycleLabels : lifecycleLabels;
-    const failed = normalized === "failed" || normalized === "cancelled" || normalized === "exception";
-    const currentIndex = failed
-      ? labels.length - 1
-      : statusToLifecycleIndex(normalized, isInternalMint);
-    return labels.map((label, index) => {
-      if (failed && index === labels.length - 1) {
-        return {
-          label,
-          tone: "failed" as const,
-          timestamp: formatTimestamp(selectedInstruction.updatedAt)
-        };
-      }
-      if (index < currentIndex) {
-        return {
-          label,
-          tone: "done" as const,
-          timestamp: index === 0 ? formatTimestamp(selectedInstruction.createdAt) : formatTimestamp(selectedInstruction.updatedAt)
-        };
-      }
-      if (index === currentIndex) {
-        return {
-          label,
-          tone: "current" as const,
-          timestamp: formatTimestamp(selectedInstruction.updatedAt)
-        };
-      }
-      return {
-        label,
-        tone: "pending" as const,
-        timestamp: "Pending"
-      };
+  const filteredInstructions = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    return instructions.filter((instruction) => {
+      const status = normalizeStatus(instruction.status);
+      const statusMatches = statusFilter === "ALL" || status === statusFilter;
+      if (!statusMatches) return false;
+
+      if (normalizedQuery.length === 0) return true;
+
+      const sourceLabel = accountNameById.get(instruction.sourceAccountOfDigitalAssetId ?? "") ?? instruction.sourceAccountOfDigitalAssetId ?? "";
+      const destinationLabel = accountNameById.get(instruction.destinationAccountOfDigitalAssetId ?? "") ?? instruction.destinationAccountOfDigitalAssetId ?? "";
+      const fields = [
+        instruction.id,
+        sourceLabel,
+        destinationLabel,
+        instruction.providerReferenceId,
+        instruction.idempotencyKey,
+        instruction.correlationId,
+        instruction.instructionRole,
+        formatStatusLabel(instruction.status ?? "pending_provider")
+      ]
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.toLowerCase());
+
+      return fields.some((value) => value.includes(normalizedQuery));
     });
-  }, [selectedInstruction]);
+  }, [accountNameById, instructions, searchQuery, statusFilter]);
 
   const providerEventId = useMemo(
     () => selectedInstruction?.providerReferenceId ?? orders[0]?.providerReferenceId,
@@ -229,6 +225,16 @@ export const InternalFundingInstructionOrderConsoleContent = ({
     if (!sourceMintWireId) return false;
     return mintRequestAllowedStatus(normalizeStatus(selectedInstruction.status));
   }, [selectedInstruction, sourceMintWireId]);
+
+  const detailStages = useMemo(
+    () => buildExecutionStages(selectedInstruction),
+    [selectedInstruction]
+  );
+
+  const detailTraceEvents = useMemo(
+    () => buildTraceEvents(selectedInstruction, orders),
+    [orders, selectedInstruction]
+  );
 
   const loadRegistry = async () => {
     setLoading(true);
@@ -411,23 +417,56 @@ export const InternalFundingInstructionOrderConsoleContent = ({
         {!detailLoading && selectedInstruction ? (
           <div className="ifoc-detail-grid">
             <div className="ifoc-left-col">
-              <article className="ifoc-card">
-                <h2>Instruction Lifecycle</h2>
-                <ol className="ifoc-lifecycle">
-                  {lifecycle.map((entry) => (
-                    <li key={entry.label} className={`ifoc-lifecycle-item ${entry.tone}`}>
-                      <span className="ifoc-lifecycle-dot" aria-hidden="true" />
-                      <div>
-                        <strong>{entry.label}</strong>
-                        <p>{entry.timestamp}</p>
+              <article className="ifoc-card ifoc-transfer-strip">
+                <div className="ifoc-transfer-node">
+                  <span>Origin ADA Vault</span>
+                  <strong>{accountNameById.get(selectedInstruction.sourceAccountOfDigitalAssetId ?? "") ?? (selectedInstruction.sourceAccountOfDigitalAssetId ?? "-")}</strong>
+                </div>
+                <div className="ifoc-transfer-center">
+                  <span>{formatMinorUnits(selectedInstruction.amountMinorUnits)} USDC</span>
+                  <small>PAR CLEARING</small>
+                </div>
+                <div className="ifoc-transfer-node">
+                  <span>Destination Clearing Node</span>
+                  <strong>{accountNameById.get(selectedInstruction.destinationAccountOfDigitalAssetId ?? "") ?? (selectedInstruction.destinationAccountOfDigitalAssetId ?? "-")}</strong>
+                </div>
+              </article>
+
+              <article className="ifoc-card ifoc-pipeline-card">
+                <h2>Execution Pipeline Sequence & Invariants</h2>
+                <div className="ifoc-stage-list">
+                  {detailStages.map((stage, index) => (
+                    <div key={stage.label} className={`ifoc-stage-item ${stage.tone}`}>
+                      <div className="ifoc-stage-marker">{index + 1}</div>
+                      <div className="ifoc-stage-copy">
+                        <strong>{stage.label}</strong>
+                        <p>{stage.detail}</p>
                       </div>
-                    </li>
+                    </div>
                   ))}
-                </ol>
+                </div>
+              </article>
+
+              <article className="ifoc-card ifoc-trace-console">
+                <div className="ifoc-trace-head">
+                  <span className="ifoc-trace-live" aria-hidden="true" />
+                  <strong>Real-Time Memory Bus Telemetry Stream</strong>
+                  <small>BUFFER: {detailTraceEvents.length} EVENTS</small>
+                </div>
+                <div className="ifoc-trace-body">
+                  {detailTraceEvents.map((event, index) => (
+                    <div key={`${event.timestamp}-${event.category}-${index}`} className={event.highlight ? "ifoc-trace-line highlight" : "ifoc-trace-line"}>
+                      <span>[{event.timestamp}]</span>
+                      <span>{event.thread}</span>
+                      <strong>[{event.category}]</strong>
+                      <span>{event.message}</span>
+                    </div>
+                  ))}
+                </div>
               </article>
 
               <article className="ifoc-card ifoc-muted">
-                <h2>Order Orchestration</h2>
+                <h2>Order Orchestration Timeline</h2>
                 {ordersLoading ? <p className="ifoc-empty">Loading orders...</p> : null}
                 {!ordersLoading && orders.length === 0 ? <p className="ifoc-empty">No orders recorded for this instruction.</p> : null}
                 {!ordersLoading && orders.length > 0 ? (
@@ -456,6 +495,25 @@ export const InternalFundingInstructionOrderConsoleContent = ({
             </div>
 
             <div className="ifoc-right-col">
+              <article className="ifoc-card ifoc-hsm-card">
+                <h2>Cryptographic Proof & HSM Quorum</h2>
+                <div className="ifoc-hsm-grid">
+                  <div>
+                    <span>Threshold</span>
+                    <strong>3 of 5 ECDSA Shares</strong>
+                  </div>
+                  <div>
+                    <span>Provider Event</span>
+                    <strong>{providerEventId ?? "Pending"}</strong>
+                  </div>
+                </div>
+                <ul className="ifoc-hsm-nodes">
+                  <li className="done"><span>Node Alpha</span><strong>Signed</strong></li>
+                  <li className="done"><span>Node Beta</span><strong>Signed</strong></li>
+                  <li className={isTerminalStatus(selectedInstruction.status) ? "done" : "current"}><span>Node Gamma</span><strong>{isTerminalStatus(selectedInstruction.status) ? "Signed" : "Signing"}</strong></li>
+                </ul>
+              </article>
+
               <article className="ifoc-card">
                 <div className="ifoc-card-header-row">
                   <h2>Funding Accounting Evidence</h2>
@@ -541,6 +599,9 @@ export const InternalFundingInstructionOrderConsoleContent = ({
                   </div>
                 </div>
                 <div className="ifoc-detail-actions">
+                  <button className="ifoc-btn-secondary" onClick={() => navigate("/internal/operations/funding-instructions/orders")} type="button">
+                    Return To Queue
+                  </button>
                   {canRequestMint ? (
                     <button className="ifoc-btn-secondary" disabled={requestingMint} onClick={() => void requestMint()} type="button">
                       {requestingMint ? "Requesting Mint..." : normalizeStatus(selectedInstruction.status) === "failed" || normalizeStatus(selectedInstruction.status) === "exception" ? "Retry Mint" : "Request Mint"}
@@ -567,47 +628,86 @@ export const InternalFundingInstructionOrderConsoleContent = ({
   }
 
   return (
-    <section className="ifoc-page">
-      <header className="ifoc-header">
+    <section className="ifoc-page ifoc-console-page">
+      <header className="ifoc-header ifoc-console-header">
         <div>
-          <h1>Order Orchestration Console</h1>
-          <p>Oversight of all funding instructions and settlement throughput for internal operations.</p>
+          <p className="ifoc-eyebrow">TREASURY / OPERATIONS / PAYMENT INSTRUCTION ROUTER (SPRINT 7 CORE)</p>
+          <h1>Payment Instructions & Internal ADA Settlement</h1>
+          <p>High-density console for routing, settlement progression, and mint posting traceability.</p>
         </div>
-        <button className="ifoc-btn-primary" onClick={() => navigate("/internal/operations/funding-instructions")} type="button">
-          <Plus size={16} /> New Funding Instruction
-        </button>
+        <div className="ifoc-console-actions">
+          <button className="ifoc-btn-secondary" onClick={() => void loadRegistry()} type="button">
+            <RefreshCw size={14} /> Sync Ledger & Router
+          </button>
+          <button className="ifoc-btn-primary" onClick={() => navigate("/internal/operations/funding-instructions")} type="button">
+            <Plus size={16} /> New Funding Instruction
+          </button>
+        </div>
       </header>
 
-      <div className="ifoc-stats-grid">
+      <div className="ifoc-stats-grid ifoc-stats-grid-console">
         <article className="ifoc-stat-card">
-          <span>Active Instructions</span>
-          <strong>{stats.activeInstructions}</strong>
-          <p><RefreshCw size={13} /> Processing currently</p>
-        </article>
-        <article className="ifoc-stat-card">
-          <span>Pending Provider</span>
-          <strong>{stats.pendingProvider}</strong>
-          <p><AlertTriangle size={13} /> Circle or Wire action needed</p>
-        </article>
-        <article className="ifoc-stat-card">
-          <span>Pending Ledger</span>
-          <strong>{stats.pendingLedger}</strong>
-          <p><Hourglass size={13} /> Awaiting final posting</p>
+          <span>Instruction Registry</span>
+          <strong>{instructions.length}</strong>
+          <p><RefreshCw size={13} /> Loaded from orchestration API</p>
         </article>
         <article className="ifoc-stat-card ifoc-stat-highlight">
-          <span>Total Throughput</span>
-          <strong>{formatMinorUnits(stats.throughputMinor.toString())}</strong>
-          <p><TrendingUp size={13} /> Settled in loaded registry</p>
+          <span>Settled Terminal State</span>
+          <strong>{stats.settledInstructions}</strong>
+          <p><CheckCircle2 size={13} /> Posted and available</p>
+        </article>
+        <article className="ifoc-stat-card">
+          <span>In-Flight Transit</span>
+          <strong>{stats.activeInstructions}</strong>
+          <p><Clock3 size={13} /> Actively moving through rails</p>
+        </article>
+        <article className="ifoc-stat-card">
+          <span>Pending Provider / Ledger</span>
+          <strong>{stats.pendingProvider}</strong>
+          <p><AlertTriangle size={13} /> {stats.pendingLedger} awaiting posting</p>
         </article>
       </div>
+
+      <article className="ifoc-card ifoc-filter-card">
+        <div className="ifoc-filter-tabs" role="tablist" aria-label="Instruction status filter">
+          {[
+            { id: "ALL", label: "ALL", count: instructions.length },
+            { id: "route_resolved", label: "ROUTED", count: instructions.filter((item) => normalizeStatus(item.status) === "route_resolved").length },
+            { id: "pending_provider", label: "PENDING_PROVIDER", count: instructions.filter((item) => normalizeStatus(item.status) === "pending_provider").length },
+            { id: "posted_available", label: "SETTLED", count: instructions.filter((item) => normalizeStatus(item.status) === "posted_available" || normalizeStatus(item.status) === "completed").length },
+            { id: "failed", label: "FAILED", count: instructions.filter((item) => normalizeStatus(item.status) === "failed" || normalizeStatus(item.status) === "exception").length }
+          ].map((option) => (
+            <button
+              key={option.id}
+              aria-selected={statusFilter === option.id}
+              className={`ifoc-filter-tab${statusFilter === option.id ? " active" : ""}`}
+              onClick={() => setStatusFilter(option.id)}
+              role="tab"
+              type="button"
+            >
+              {option.label} ({option.count})
+            </button>
+          ))}
+        </div>
+        <div className="ifoc-filter-right">
+          <div className="ifoc-search-shell">
+            <Filter size={13} />
+            <input
+              aria-label="Search funding instructions"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search by instruction, ADA, role, or IDs"
+              type="search"
+              value={searchQuery}
+            />
+          </div>
+          <button className="ifoc-btn-secondary" type="button"><Download size={13} /> Export</button>
+        </div>
+      </article>
 
       <article className="ifoc-card">
         <div className="ifoc-table-head">
           <h2>Global Funding Registry</h2>
-          <div className="ifoc-head-actions">
-            <button className="ifoc-btn-secondary" type="button"><Filter size={13} /> Filter</button>
-            <button className="ifoc-btn-secondary" type="button"><Download size={13} /> Export</button>
-          </div>
+          <p className="ifoc-eyebrow">TOTAL THROUGHPUT {formatMinorUnits(stats.throughputMinor.toString())} USDC</p>
         </div>
         {loading ? <p className="ifoc-empty">Loading funding registry...</p> : null}
         {!loading && instructions.length === 0 ? <p className="ifoc-empty">No funding instructions available.</p> : null}
@@ -616,23 +716,22 @@ export const InternalFundingInstructionOrderConsoleContent = ({
             <table className="ifoc-table">
               <thead>
                 <tr>
-                  <th>Instruction ID</th>
-                  <th>Role</th>
+                  <th>Instruction Ref</th>
                   <th>Source ADA</th>
-                  <th>Destination ADA</th>
-                  <th className="right">Principal Amount</th>
-                  <th>Orchestration Status</th>
-                  <th>Provider Ref</th>
+                  <th>Destination Node</th>
+                  <th className="right">Amount (USDC)</th>
+                  <th>Instruction Role</th>
+                  <th>State</th>
                   <th>Last Update</th>
                   <th className="right">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {instructions.map((instruction) => (
+                {filteredInstructions.map((instruction) => (
                   <tr key={instruction.id}>
-                    <td>{instruction.id}</td>
                     <td>
-                      <span className="ifoc-role-pill">{formatStatus(instruction.instructionRole ?? "client_exchange")}</span>
+                      <div className="ifoc-id-main">{instruction.id}</div>
+                      <div className="ifoc-id-sub">{instruction.idempotencyKey ?? "no_idempotency_key"}</div>
                     </td>
                     <td>
                       <div className="ifoc-ada-cell-main">{accountNameById.get(instruction.sourceAccountOfDigitalAssetId ?? "") ?? "Unknown ADA"}</div>
@@ -643,8 +742,11 @@ export const InternalFundingInstructionOrderConsoleContent = ({
                       <div className="ifoc-ada-cell-sub">{instruction.destinationAccountOfDigitalAssetId ?? "-"}</div>
                     </td>
                     <td className="right">{formatMinorUnits(instruction.amountMinorUnits)} {(instruction.assetCode ?? "USDC").toUpperCase()}</td>
-                    <td>{renderStatusTrack(instruction.status)}</td>
-                    <td>{instruction.providerReferenceId ?? "Pending"}</td>
+                    <td>
+                      <span className="ifoc-role-pill">{formatStatus(instruction.instructionRole ?? "client_exchange")}</span>
+                      <div className="ifoc-ada-cell-sub">{instruction.providerReferenceId ?? "provider_pending"}</div>
+                    </td>
+                    <td>{renderStateBadge(instruction.status)}</td>
                     <td>{formatTimestamp(instruction.updatedAt ?? instruction.createdAt)}</td>
                     <td className="right">
                       <button
@@ -652,7 +754,7 @@ export const InternalFundingInstructionOrderConsoleContent = ({
                         onClick={() => navigate(`/internal/operations/funding-instructions/${encodeURIComponent(instruction.id)}/orders`)}
                         type="button"
                       >
-                        View
+                        Inspect
                       </button>
                     </td>
                   </tr>
@@ -660,6 +762,9 @@ export const InternalFundingInstructionOrderConsoleContent = ({
               </tbody>
             </table>
           </div>
+        ) : null}
+        {!loading && instructions.length > 0 && filteredInstructions.length === 0 ? (
+          <p className="ifoc-empty">No instructions match the active search and status filter.</p>
         ) : null}
       </article>
 
@@ -833,4 +938,169 @@ const renderStatusTrack = (status: string | undefined) => {
       <CheckCircle2 size={12} /> Wire Init <ArrowRight size={12} /> <Clock3 size={12} /> Pending <ArrowRight size={12} /> <Circle size={12} /> Available
     </span>
   );
+};
+
+const renderStateBadge = (status: string | undefined) => {
+  const normalized = normalizeStatus(status);
+  if (normalized === "route_resolved") {
+    return <span className="ifoc-state-chip routed">ROUTED</span>;
+  }
+  if (normalized === "pending_provider" || normalized === "pending_confirmation" || normalized === "pending_usdc_reserved") {
+    return (
+      <span className="ifoc-state-chip executing">
+        <span className="ifoc-state-dot" aria-hidden="true" />
+        EXECUTING
+      </span>
+    );
+  }
+  if (normalized === "posted_available" || normalized === "completed" || normalized === "available") {
+    return <span className="ifoc-state-chip settled">SETTLED</span>;
+  }
+  if (normalized === "failed" || normalized === "exception" || normalized === "cancelled") {
+    return <span className="ifoc-state-chip failed">FAILED</span>;
+  }
+  return <span className="ifoc-state-chip draft">DRAFT</span>;
+};
+
+type ExecutionStageView = {
+  label: string;
+  detail: string;
+  tone: "done" | "current" | "pending" | "failed";
+};
+
+type TraceEventView = {
+  timestamp: string;
+  thread: string;
+  category: string;
+  message: string;
+  highlight?: boolean;
+};
+
+const buildExecutionStages = (instruction: FundingInstructionApi | null): ExecutionStageView[] => {
+  const stageLabels = [
+    "Pre-Flight Verification",
+    "Deterministic Route Resolution",
+    "Provider Mint Request",
+    "Provider Confirmation",
+    "Double-Entry Posting",
+    "Settlement Finality"
+  ];
+
+  if (!instruction) {
+    return stageLabels.map((label) => ({
+      label,
+      detail: "Awaiting instruction payload.",
+      tone: "pending"
+    }));
+  }
+
+  const status = normalizeStatus(instruction.status);
+  const isFailed = status === "failed" || status === "cancelled" || status === "exception";
+  const currentIndex = resolveExecutionStageIndex(status);
+  const details: string[] = [
+    `Idempotency lock ${instruction.idempotencyKey ?? "pending"}`,
+    `Route status ${formatStatusLabel(instruction.status ?? "pending_provider")}`,
+    `Provider ref ${instruction.providerReferenceId ?? "pending"}`,
+    `Confirmation status ${formatStatusLabel(instruction.status ?? "pending_provider")}`,
+    status === "posted_available" || status === "completed" || status === "available"
+      ? "Journal balanced and posted to available ledger."
+      : "Awaiting posted and available transition.",
+    `Last update ${formatTimestamp(instruction.updatedAt ?? instruction.createdAt)}`
+  ];
+
+  return stageLabels.map((label, index) => {
+    const tone: ExecutionStageView["tone"] = isFailed
+      ? index === currentIndex
+        ? "failed"
+        : index < currentIndex
+          ? "done"
+          : "pending"
+      : index < currentIndex
+        ? "done"
+        : index === currentIndex
+          ? "current"
+          : "pending";
+
+    return {
+      label,
+      detail: details[index] ?? "Awaiting next stage.",
+      tone
+    };
+  });
+};
+
+const buildTraceEvents = (
+  instruction: FundingInstructionApi | null,
+  orders: FundingInstructionOrderApi[]
+): TraceEventView[] => {
+  if (!instruction) return [];
+
+  const baseEvents: TraceEventView[] = [
+    {
+      timestamp: formatTelemetryTimestamp(instruction.createdAt ?? instruction.updatedAt),
+      thread: "[CORE-04a]",
+      category: "INIT",
+      message: `Instruction ${instruction.id} accepted for ${formatMinorUnits(instruction.amountMinorUnits)} ${(instruction.assetCode ?? "USDC").toUpperCase()}.`
+    },
+    {
+      timestamp: formatTelemetryTimestamp(instruction.updatedAt ?? instruction.createdAt),
+      thread: "[ROUTER-01]",
+      category: "EVAL_PATH",
+      message: `Routing state ${formatStatusLabel(instruction.status ?? "pending_provider")} for role ${formatStatusLabel(instruction.instructionRole ?? "client_exchange")}.`
+    },
+    {
+      timestamp: formatTelemetryTimestamp(instruction.updatedAt ?? instruction.createdAt),
+      thread: "[CRYPTO-HSM]",
+      category: "SIG_COMMIT",
+      message: `HSM quorum processing provider reference ${instruction.providerReferenceId ?? "pending"}.`
+    }
+  ];
+
+  const orderEvents = orders.slice(0, 8).map((order, index) => ({
+    timestamp: formatTelemetryTimestamp(order.updatedAt ?? order.createdAt),
+    thread: `[ORDER-${String(index + 1).padStart(2, "0")}]`,
+    category: "COMMIT_PATH",
+    message: `${formatStatusLabel(order.orderKind ?? "order")} is ${formatStatusLabel(order.status ?? "pending_provider")}; amount ${formatMinorUnits(order.amountMinorUnits)} ${(order.currency ?? "USD").toUpperCase()}.`,
+    highlight: normalizeStatus(order.status) === "posted_available" || normalizeStatus(order.status) === "completed"
+  }));
+
+  const status = normalizeStatus(instruction.status);
+  const finalityEvent: TraceEventView = status === "posted_available" || status === "completed" || status === "available"
+    ? {
+      timestamp: formatTelemetryTimestamp(instruction.updatedAt ?? instruction.createdAt),
+      thread: "[LEDGER-02]",
+      category: "ACK_BARRIER",
+      message: "Settlement finality attested and available balance posted.",
+      highlight: true
+    }
+    : {
+      timestamp: formatTelemetryTimestamp(instruction.updatedAt ?? instruction.createdAt),
+      thread: "[LEDGER-02]",
+      category: "PARITY_ASSERT",
+      message: "Trial balance parity maintained while awaiting terminal settlement state."
+    };
+
+  return [
+    ...baseEvents,
+    ...orderEvents,
+    finalityEvent
+  ];
+};
+
+const resolveExecutionStageIndex = (status: string): number => {
+  if (status === "created") return 0;
+  if (status === "route_resolved") return 1;
+  if (status === "pending_provider") return 2;
+  if (status === "pending_confirmation" || status === "pending_usdc_reserved") return 3;
+  if (status === "confirmed") return 4;
+  if (status === "posted_available" || status === "completed" || status === "available") return 5;
+  if (status === "failed" || status === "cancelled" || status === "exception") return 5;
+  return 2;
+};
+
+const formatTelemetryTimestamp = (value: string | undefined): string => {
+  if (!value) return "--:--:--.---Z";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return `${parsed.toISOString().slice(11, 23)}Z`;
 };

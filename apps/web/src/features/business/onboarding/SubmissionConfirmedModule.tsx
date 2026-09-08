@@ -1,17 +1,17 @@
-import { type Session } from "@supabase/supabase-js";
 import { Check, Download, Info } from "lucide-react";
 import { useEffect, useState } from "react";
 import officeInhouse from "../../../assets/office-inhouse.jpg";
 import { type MyOnboardingResponse, type OnboardingApplication } from "./types.js";
 import { apiRequest } from "../shared/apiClient.js";
 import { BusinessAvatarMenu } from "../shared/BusinessAvatarMenu.js";
+import { type BusinessJwtSession } from "../shared/useSupabaseSession.js";
 
 type Navigate = (path: string) => void;
 
 type SubmissionConfirmedModuleProps = {
   navigate: Navigate;
   onLogout: () => void;
-  session: Session | null;
+  session: BusinessJwtSession | null;
 };
 
 export function SubmissionConfirmedModule({ navigate, onLogout, session }: SubmissionConfirmedModuleProps) {

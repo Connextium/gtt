@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type pg from "pg";
+import { createInitialState } from "../../src/data.js";
 import {
   executePostgresCommand,
   executePostgresQueryWithClient,
@@ -8,6 +9,10 @@ import {
 } from "../../src/db/postgres-route-handler.js";
 import { setPostgresPoolForTest } from "../../src/db/transaction.js";
 import { requestHash } from "../../src/events/idempotency.js";
+import {
+  handleCreateMyApiKey,
+  handleRevokeMyApiKey
+} from "../../src/modules/client-onboarding/self-registration.js";
 
 type QueryResult = { rows: Array<Record<string, unknown>> };
 
@@ -25,6 +30,45 @@ const withDatabaseUrl = async (work: () => Promise<void>): Promise<void> => {
     else process.env.GTT_PLATFORM_TENANT_ID = previousTenant;
     setPostgresPoolForTest(undefined);
   }
+};
+
+const seedApprovedBusinessContext = (
+  authUserId: string,
+  email: string,
+  businessClientId: string
+): ReturnType<typeof createInitialState> => {
+  const state = createInitialState();
+  const now = new Date().toISOString();
+  state.businessUserProfiles.push({
+    id: `profile_${authUserId}`,
+    tenantId: state.tenantId,
+    authUserId,
+    email,
+    role: "business_user",
+    status: "active",
+    createdAt: now,
+    updatedAt: now
+  });
+  state.businessOnboardingApplications.push({
+    id: `application_${authUserId}`,
+    tenantId: state.tenantId,
+    authUserId,
+    email,
+    currentStep: "step_4",
+    status: "approved",
+    submittedAt: now,
+    createdAt: now,
+    updatedAt: now
+  });
+  state.businessClients.push({
+    id: businessClientId,
+    tenantId: state.tenantId,
+    legalName: `Client ${authUserId}`,
+    country: "US",
+    onboardingStatus: "approved",
+    createdAt: now
+  });
+  return state;
 };
 
 test("business client command writes domain, audit, outbox, and idempotency in one unit", async () => {
@@ -50,6 +94,109 @@ test("business client command writes domain, audit, outbox, and idempotency in o
   assert.equal(queries.some((sql) => sql.includes("insert into audit_events")), true);
   assert.equal(queries.some((sql) => sql.includes("insert into event_outbox")), true);
   assert.equal(queries.some((sql) => sql.includes("insert into api_idempotency_records")), true);
+});
+
+test("funding instruction Postgres routes return 401 for missing-scope and revoked business API keys", async () => {
+  await withDatabaseUrl(async () => {
+    process.env.ALLOW_DEV_WITHOUT_SUPABASE = "true";
+    const state = seedApprovedBusinessContext("auth_business_route_test", "biz.route@example.com", "client_business_route_test");
+    const userHeaders = {
+      authorization: "Bearer dev-token",
+      "x-dev-auth-user-id": "auth_business_route_test",
+      "x-dev-auth-email": "biz.route@example.com"
+    };
+
+    const readOnlyKeyResult = await handleCreateMyApiKey(state, {
+      headers: userHeaders,
+      payload: { scopes: ["payment-instruction.read"] }
+    });
+    assert.equal(readOnlyKeyResult.status, 201);
+    const readOnlyPlaintext = (readOnlyKeyResult.body as { plaintextKey: string }).plaintextKey;
+
+    const revokedKeyResult = await handleCreateMyApiKey(state, {
+      headers: userHeaders,
+      payload: { scopes: ["payment-instruction.create"] }
+    });
+    assert.equal(revokedKeyResult.status, 201);
+    const revokedBody = revokedKeyResult.body as { key: { id: string }; plaintextKey: string };
+    const revokeResult = await handleRevokeMyApiKey(state, {
+      headers: userHeaders,
+      apiKeyId: revokedBody.key.id
+    });
+    assert.equal(revokeResult.status, 200);
+
+    setPostgresPoolForTest({
+      connect: async () => ({
+        query: async (sql: string) => {
+          if (sql.includes("from business_onboarding_applications application")) {
+            return {
+              rows: [
+                {
+                  id: "00000000-0000-4000-8000-000000000901",
+                  legal_name: "Client auth_business_route_test"
+                }
+              ]
+            };
+          }
+          if (sql.includes("from wire_funding_instructions instruction")) {
+            return { rows: [] };
+          }
+          return { rows: [] };
+        },
+        release: () => undefined
+      })
+    } as unknown as pg.Pool);
+
+    const validRead = await handlePostgresCommand({
+      method: "GET",
+      pathname: "/business/me/funding-instructions",
+      headers: { "x-gtt-api-key": readOnlyPlaintext },
+      body: {},
+      correlationId: "corr-valid-read"
+    });
+    assert.equal(validRead.status, 200);
+    assert.deepEqual(validRead.body, { fundingInstructions: [] });
+
+    const missingScopePost = await handlePostgresCommand({
+      method: "POST",
+      pathname: "/business/me/funding-instructions",
+      headers: { authorization: `Bearer ${readOnlyPlaintext}` },
+      body: {
+        sourceAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000301",
+        destinationAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000302",
+        amountMinorUnits: "2500000"
+      },
+      idempotencyKey: "idem-missing-create-scope",
+      correlationId: "corr-missing-create-scope"
+    });
+    assert.equal(missingScopePost.status, 401);
+    assert.deepEqual(missingScopePost.body, { error: "business_user_auth_required" });
+
+    const revokedPost = await handlePostgresCommand({
+      method: "POST",
+      pathname: "/business/me/funding-instructions",
+      headers: { "x-gtt-api-key": revokedBody.plaintextKey },
+      body: {
+        sourceAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000301",
+        destinationAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000302",
+        amountMinorUnits: "2500000"
+      },
+      idempotencyKey: "idem-revoked-key",
+      correlationId: "corr-revoked-key"
+    });
+    assert.equal(revokedPost.status, 401);
+    assert.deepEqual(revokedPost.body, { error: "business_user_auth_required" });
+
+    const invalidRead = await handlePostgresCommand({
+      method: "GET",
+      pathname: "/business/me/funding-instructions",
+      headers: { authorization: "Bearer gtt_live_invalid.notreal" },
+      body: {},
+      correlationId: "corr-invalid-read"
+    });
+    assert.equal(invalidRead.status, 401);
+    assert.deepEqual(invalidRead.body, { error: "business_user_auth_required" });
+  });
 });
 
 test("api key command stores only hash metadata and returns one-time plaintext", async () => {
@@ -2306,6 +2453,272 @@ test("sprint5: funding reservation release command updates reservation status an
   assert.equal(queries.some((sql) => sql.includes("insert into api_idempotency_records")), true);
 });
 
+test("sprint6: settlement obligation create command writes domain, obligation event, audit, and outbox", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from business_clients") && sql.includes("where id = $1 and platform_tenant_id = $2")) {
+        return { rows: [{ id: "00000000-0000-4000-8000-000000000123" }] };
+      }
+      if (sql.includes("from settlement_obligations") && sql.includes("where id = $1 and platform_tenant_id = $2") && sql.includes("limit 1")) {
+        return {
+          rows: [{
+            id: "obligation_1",
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            obligation_type: "disbursement",
+            business_client_id: "00000000-0000-4000-8000-000000000123",
+            principal_minor_units: "3000000",
+            fulfilled_minor_units: "0",
+            currency: "USD",
+            status: "draft",
+            due_at: "2026-01-03T00:00:00.000Z",
+            source_reference_id: "ref_001",
+            source_reference_type: "invoice",
+            idempotency_key: "idem-obligation-create-1",
+            created_by: null,
+            created_at: "2026-01-01T00:00:01.000Z",
+            updated_at: "2026-01-01T00:00:01.000Z"
+          }]
+        };
+      }
+      if (sql.includes("from funding_reservations") && sql.includes("settlement_obligation_id = $2")) return { rows: [] };
+      if (sql.includes("from obligation_events") && sql.includes("obligation_id = $2")) return { rows: [] };
+      if (sql.includes("from obligation_journal_links") && sql.includes("obligation_id = $2")) return { rows: [] };
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/settlement-obligations",
+      body: {
+        businessClientId: "00000000-0000-4000-8000-000000000123",
+        obligationType: "disbursement",
+        principalMinorUnits: "3000000",
+        currency: "USD",
+        dueAt: "2026-01-03T00:00:00.000Z",
+        sourceReferenceId: "ref_001",
+        sourceReferenceType: "invoice"
+      },
+      idempotencyKey: "idem-obligation-create-1",
+      correlationId: "corr-obligation-create-1"
+    },
+    "hash-obligation-create-1"
+  );
+
+  assert.equal(result.status, 201);
+  assert.equal(queries.some((sql) => sql.includes("insert into settlement_obligations")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into obligation_events")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into audit_events")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into event_outbox")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into api_idempotency_records")), true);
+});
+
+test("sprint6: obligation fulfill command consumes reservation and persists journal link", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from settlement_obligations") && sql.includes("for update")) {
+        return {
+          rows: [{
+            id: "obligation_1",
+            business_client_id: "00000000-0000-4000-8000-000000000123",
+            status: "reserved",
+            principal_minor_units: "3000000",
+            fulfilled_minor_units: "0",
+            currency: "USD"
+          }]
+        };
+      }
+      if (sql.includes("from funding_reservations") && sql.includes("where id = $1 and platform_tenant_id = $2") && sql.includes("for update")) {
+        return {
+          rows: [{
+            id: "reservation_1",
+            settlement_obligation_id: "obligation_1",
+            account_of_digital_asset_id: "00000000-0000-4000-8000-000000000777",
+            amount_minor_units: "3000000",
+            consumed_minor_units: "0",
+            status: "active"
+          }]
+        };
+      }
+      if (sql.includes("from account_of_digital_asset_balances")) {
+        return {
+          rows: [{
+            available_minor_units: "5000000",
+            reserved_minor_units: "3000000"
+          }]
+        };
+      }
+      if (sql.includes("from settlement_obligations") && sql.includes("where id = $1 and platform_tenant_id = $2") && sql.includes("limit 1")) {
+        return {
+          rows: [{
+            id: "obligation_1",
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            obligation_type: "disbursement",
+            business_client_id: "00000000-0000-4000-8000-000000000123",
+            principal_minor_units: "3000000",
+            fulfilled_minor_units: "3000000",
+            currency: "USD",
+            status: "fulfilled",
+            due_at: "2026-01-03T00:00:00.000Z",
+            source_reference_id: null,
+            source_reference_type: null,
+            idempotency_key: "idem-obligation-fulfill-1",
+            created_by: null,
+            created_at: "2026-01-01T00:00:01.000Z",
+            updated_at: "2026-01-01T00:00:02.000Z"
+          }]
+        };
+      }
+      if (sql.includes("from funding_reservations") && sql.includes("settlement_obligation_id = $2")) {
+        return {
+          rows: [{
+            id: "reservation_1",
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            settlement_obligation_id: "obligation_1",
+            account_of_digital_asset_id: "00000000-0000-4000-8000-000000000777",
+            amount_minor_units: "3000000",
+            consumed_minor_units: "3000000",
+            available_minor_units_snapshot: "8000000",
+            priority: 100,
+            status: "consumed",
+            reason_code: null,
+            status_reason: null,
+            provider_reference_id: null,
+            expires_at: null,
+            activated_at: "2026-01-01T00:00:01.000Z",
+            consumed_at: "2026-01-01T00:00:02.000Z",
+            released_at: null,
+            cancelled_at: null,
+            expired_at: null,
+            idempotency_key: "idem-funding-reservation-1",
+            created_at: "2026-01-01T00:00:01.000Z"
+          }]
+        };
+      }
+      if (sql.includes("from obligation_events") && sql.includes("obligation_id = $2")) return { rows: [] };
+      if (sql.includes("from obligation_journal_links") && sql.includes("obligation_id = $2")) {
+        return {
+          rows: [{
+            id: "journal_link_1",
+            journal_entry_id: "11111111-2222-4333-8444-555555555555",
+            journal_status: "posted",
+            created_at: "2026-01-01T00:00:02.000Z"
+          }]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/settlement-obligations/obligation_1/fulfill",
+      body: {
+        amountMinorUnits: "3000000",
+        fundingReservationId: "reservation_1",
+        journalEntryId: "11111111-2222-4333-8444-555555555555"
+      },
+      idempotencyKey: "idem-obligation-fulfill-1",
+      correlationId: "corr-obligation-fulfill-1"
+    },
+    "hash-obligation-fulfill-1"
+  );
+
+  assert.equal(result.status, 200);
+  assert.equal(queries.some((sql) => sql.includes("update account_of_digital_asset_balances")), true);
+  assert.equal(queries.some((sql) => sql.includes("update funding_reservations") && sql.includes("consumed_minor_units")), true);
+  assert.equal(queries.some((sql) => sql.includes("update settlement_obligations") && sql.includes("fulfilled_minor_units")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into obligation_journal_links")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into obligation_events")), true);
+});
+
+test("sprint6: funding reservation consume command updates consumed units and reserved balance", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from funding_reservations") && sql.includes("for update")) {
+        return {
+          rows: [{
+            id: "reservation_1",
+            settlement_obligation_id: "obligation_1",
+            account_of_digital_asset_id: "00000000-0000-4000-8000-000000000777",
+            amount_minor_units: "2500000",
+            consumed_minor_units: "0",
+            status: "active"
+          }]
+        };
+      }
+      if (sql.includes("from account_of_digital_asset_balances")) {
+        return {
+          rows: [{
+            available_minor_units: "6500000",
+            reserved_minor_units: "3500000"
+          }]
+        };
+      }
+      if (sql.includes("from funding_reservations") && sql.includes("where id = $1 and platform_tenant_id = $2")) {
+        return {
+          rows: [{
+            id: "reservation_1",
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            settlement_obligation_id: "obligation_1",
+            account_of_digital_asset_id: "00000000-0000-4000-8000-000000000777",
+            amount_minor_units: "2500000",
+            consumed_minor_units: "2500000",
+            available_minor_units_snapshot: "9000000",
+            priority: 100,
+            status: "consumed",
+            reason_code: null,
+            status_reason: null,
+            provider_reference_id: null,
+            expires_at: null,
+            activated_at: "2026-01-01T00:00:01.000Z",
+            consumed_at: "2026-01-01T00:00:02.000Z",
+            released_at: null,
+            cancelled_at: null,
+            expired_at: null,
+            idempotency_key: "idem-funding-reservation-consume-1",
+            created_at: "2026-01-01T00:00:01.000Z"
+          }]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/funding-reservations/reservation_1/consume",
+      body: {
+        amountMinorUnits: "2500000"
+      },
+      idempotencyKey: "idem-funding-reservation-consume-1",
+      correlationId: "corr-funding-reservation-consume-1"
+    },
+    "hash-funding-reservation-consume-1"
+  );
+
+  assert.equal(result.status, 200);
+  assert.equal(queries.some((sql) => sql.includes("update account_of_digital_asset_balances")), true);
+  assert.equal(queries.some((sql) => sql.includes("update funding_reservations") && sql.includes("consumed_minor_units")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into obligation_events")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into event_outbox")), true);
+});
+
 test("sprint5: internal payment command writes payment and idempotency", async () => {
   const queries: string[] = [];
   const client = {
@@ -2538,6 +2951,86 @@ test("sprint5: circle webhook dedupe returns prior processed result without dupl
   assert.deepEqual(result.body, { webhookEventId: "webhook_existing", duplicate: true, status: "processed" });
   assert.equal(queries.some((sql) => sql.includes("insert into provider_webhook_events")), false);
   assert.equal(queries.some((sql) => sql.includes("insert into treasury_journal_entries")), false);
+});
+
+test("sprint5: webhook validation event without funding identifiers is accepted without orphan break writes", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from idempotency_keys")) return { rows: [] };
+      if (sql.includes("from provider_webhook_events") && sql.includes("provider_event_id = $2")) return { rows: [] };
+      if (sql.includes("insert into reconciliation_runs")) throw new Error("orphan_break_should_not_be_registered");
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/webhooks/circle",
+      headers: { "circle-signature": "test_valid_signature" },
+      body: {
+        id: "evt_validation_noop_1",
+        type: "notification.validation"
+      },
+      idempotencyKey: "circle_webhook_evt_validation_noop_1",
+      correlationId: "corr-webhook-validation-noop"
+    },
+    "hash-webhook-validation-noop"
+  );
+
+  assert.equal(result.status, 202);
+  assert.equal(queries.some((sql) => sql.includes("insert into reconciliation_runs")), false);
+  assert.equal(queries.some((sql) => sql.includes("insert into provider_webhook_dead_letters")), false);
+});
+
+test("sprint5: stale internal treasury mint confirmation is treated as idempotent no-op", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from idempotency_keys")) return { rows: [] };
+      if (sql.includes("from provider_webhook_events") && sql.includes("provider_event_id = $2")) return { rows: [] };
+      if (sql.includes("from wire_funding_instructions") && sql.includes("select id,")) {
+        return {
+          rows: [{
+            id: "11111111-2222-4333-8444-555555555555",
+            account_of_digital_asset_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            destination_account_of_digital_asset_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            amount_minor_units: "11000000",
+            instruction_role: "internal_treasury_mint",
+            status: "posted_available"
+          }]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/webhooks/circle",
+      headers: { "circle-signature": "test_valid_signature" },
+      body: {
+        id: "evt_stale_internal_mint_1",
+        type: "usdc.mint.confirmed",
+        fundingInstructionId: "11111111-2222-4333-8444-555555555555",
+        amountMinorUnits: "11000000"
+      },
+      idempotencyKey: "circle_webhook_evt_stale_internal_mint_1",
+      correlationId: "corr-webhook-stale-internal-mint"
+    },
+    "hash-webhook-stale-internal-mint"
+  );
+
+  assert.equal(result.status, 202);
+  assert.equal(queries.some((sql) => sql.includes("insert into provider_webhook_dead_letters")), false);
 });
 
 test("sprint5: circle webhook processing failure rolls back business mutations and retains failure evidence", async () => {
@@ -2928,3 +3421,460 @@ const createLedgerFlowClient = (tenantId: string): { query: (sql: string, values
     }
   };
 };
+
+test("sprint7: route profile create command persists profile and audit evidence", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string, values: unknown[] = []): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from route_profiles") && sql.includes("profile_code = $2")) return { rows: [] };
+      if (sql.includes("from route_profiles") && sql.includes("where id = $1 and platform_tenant_id = $2")) {
+        return {
+          rows: [{
+            id: values[0],
+            platform_tenant_id: values[1],
+            profile_code: "RP_GLOBAL_USDC_V4",
+            profile_name: "Global USDC Router V4",
+            strategy_type: "weighted",
+            weight_cost: 0.35,
+            weight_latency: 0.25,
+            weight_liquidity: 0.2,
+            weight_reliability: 0.2,
+            status: "active",
+            created_by: null,
+            created_at: "2026-01-01T00:00:01.000Z",
+            updated_at: "2026-01-01T00:00:01.000Z"
+          }]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/route-profiles",
+      body: {
+        profileCode: "RP_GLOBAL_USDC_V4",
+        profileName: "Global USDC Router V4",
+        strategyType: "weighted",
+        weightCost: 0.35,
+        weightLatency: 0.25,
+        weightLiquidity: 0.2,
+        weightReliability: 0.2,
+        status: "active"
+      },
+      idempotencyKey: "idem-sprint7-route-profile-1",
+      correlationId: "corr-sprint7-route-profile-1"
+    },
+    "hash-sprint7-route-profile-1"
+  );
+
+  assert.equal(result.status, 201);
+  assert.equal(queries.some((sql) => sql.includes("insert into route_profiles")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into audit_events")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into event_outbox")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into api_idempotency_records")), true);
+});
+
+test("sprint7-1: payment instruction create allows ADA Virtual Transfer without wallet/fiat links", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string, values: unknown[] = []): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from idempotency_keys")) return { rows: [] };
+      if (sql.includes("from payment_instructions") && sql.includes("where id = $1 and platform_tenant_id = $2") && sql.includes("limit 1")) {
+        return {
+          rows: [{
+            id: values[0],
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            source_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000111",
+            destination_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000222",
+            settlement_obligation_id: null,
+            funding_reservation_id: null,
+            amount_minor_units: "2500000",
+            route_type: "unrouted",
+            instruction_type: "internal_ada_settlement",
+            currency: "USD",
+            status: "draft",
+            idempotency_key: "idem-sprint7-1-create-virtual",
+            correlation_id: "corr-sprint7-1-create-virtual",
+            created_by: null,
+            created_at: "2026-01-01T00:00:01.000Z",
+            updated_at: "2026-01-01T00:00:01.000Z",
+            routed_at: null,
+            executed_at: null,
+            failed_at: null,
+            cancelled_at: null,
+            terminal_at: null,
+            route_evidence_json: {}
+          }]
+        };
+      }
+      if (sql.includes("from routing_decisions") && sql.includes("order by decided_at desc")) return { rows: [] };
+      if (sql.includes("from internal_ada_settlements") && sql.includes("payment_instruction_id")) return { rows: [] };
+      if (sql.includes("from routing_and_settlement_events")) return { rows: [] };
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/payment-instructions",
+      body: {
+        sourceAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000111",
+        destinationAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000222",
+        amountMinorUnits: "2500000",
+        instructionType: "internal_ada_settlement"
+      },
+      idempotencyKey: "idem-sprint7-1-create-virtual",
+      correlationId: "corr-sprint7-1-create-virtual"
+    },
+    "hash-sprint7-1-create-virtual"
+  );
+
+  assert.equal(result.status, 201);
+  assert.equal(queries.some((sql) => sql.includes("insert into payment_instructions")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into audit_events")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into event_outbox")), true);
+});
+
+test("sprint7-1: payment instruction create rejects wallet externalization intent without destination wallet link", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from idempotency_keys")) return { rows: [] };
+      if (sql.includes("from linked_instruments") && sql.includes("instrument_type = 'circle_wallet'")) return { rows: [] };
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/payment-instructions",
+      body: {
+        sourceAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000111",
+        destinationAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000222",
+        amountMinorUnits: "2500000",
+        instructionType: "internal_ada_settlement",
+        externalizationIntent: "wallet"
+      },
+      idempotencyKey: "idem-sprint7-1-create-wallet-missing",
+      correlationId: "corr-sprint7-1-create-wallet-missing"
+    },
+    "hash-sprint7-1-create-wallet-missing"
+  );
+
+  assert.equal(result.status, 409);
+  assert.equal((result.body as { error?: string }).error, "verified_destination_wallet_route_required");
+  assert.equal(queries.some((sql) => sql.includes("insert into payment_instructions")), false);
+});
+
+test("sprint7-1: payment instruction create rejects unknown instruction type with deterministic policy error", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from idempotency_keys")) return { rows: [] };
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/payment-instructions",
+      body: {
+        sourceAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000111",
+        destinationAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000222",
+        amountMinorUnits: "2500000",
+        instructionType: "unmapped_custom_instruction"
+      },
+      idempotencyKey: "idem-sprint7-1-create-unmapped",
+      correlationId: "corr-sprint7-1-create-unmapped"
+    },
+    "hash-sprint7-1-create-unmapped"
+  );
+
+  assert.equal(result.status, 400);
+  assert.equal((result.body as { error?: string }).error, "instruction_type_policy_unmapped");
+  assert.equal(queries.some((sql) => sql.includes("insert into payment_instructions")), false);
+});
+
+test("sprint7-1: payment instruction create rejects mixed wallet and fiat externalization intent", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from idempotency_keys")) return { rows: [] };
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/payment-instructions",
+      body: {
+        sourceAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000111",
+        destinationAccountOfDigitalAssetId: "00000000-0000-4000-8000-000000000222",
+        amountMinorUnits: "2500000",
+        instructionType: "internal_ada_settlement",
+        externalizationIntent: "wallet,fiat"
+      },
+      idempotencyKey: "idem-sprint7-1-create-ambiguous-intent",
+      correlationId: "corr-sprint7-1-create-ambiguous-intent"
+    },
+    "hash-sprint7-1-create-ambiguous-intent"
+  );
+
+  assert.equal(result.status, 400);
+  assert.equal((result.body as { error?: string }).error, "instruction_policy_ambiguous");
+  assert.equal(queries.some((sql) => sql.includes("insert into payment_instructions")), false);
+});
+
+test("sprint7: payment instruction route command persists deterministic routing decision", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from payment_instructions") && sql.includes("for update")) {
+        return {
+          rows: [{
+            id: "payment_instruction_1",
+            source_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000111",
+            destination_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000222",
+            amount_minor_units: "2500000",
+            route_type: "unrouted",
+            instruction_type: "internal_ada_settlement",
+            currency: "USD",
+            status: "draft"
+          }]
+        };
+      }
+      if (sql.includes("from route_bindings binding") && sql.includes("join route_profiles profile")) {
+        return {
+          rows: [{
+            binding_id: "binding_1",
+            profile_id: "profile_1",
+            route_code: "ROUTE_ARC_INTERNAL",
+            binding_scope: "instruction_type",
+            match_expression: "instructionType=internal_ada_settlement|currency=USD",
+            priority: 120,
+            profile_code: "RP_GLOBAL_USDC_V4",
+            profile_name: "Global USDC Router V4",
+            strategy_type: "weighted",
+            weight_cost: 0.35,
+            weight_latency: 0.25,
+            weight_liquidity: 0.2,
+            weight_reliability: 0.2
+          }]
+        };
+      }
+      if (sql.includes("from routing_decisions") && sql.includes("for update")) return { rows: [] };
+      if (sql.includes("from payment_instructions") && sql.includes("where id = $1 and platform_tenant_id = $2") && sql.includes("limit 1")) {
+        return {
+          rows: [{
+            id: "payment_instruction_1",
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            source_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000111",
+            destination_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000222",
+            settlement_obligation_id: null,
+            funding_reservation_id: null,
+            amount_minor_units: "2500000",
+            route_type: "ROUTE_ARC_INTERNAL",
+            instruction_type: "internal_ada_settlement",
+            currency: "USD",
+            status: "routed",
+            idempotency_key: "idem-route",
+            correlation_id: "corr-route",
+            created_by: null,
+            created_at: "2026-01-01T00:00:01.000Z",
+            updated_at: "2026-01-01T00:00:02.000Z",
+            routed_at: "2026-01-01T00:00:02.000Z",
+            executed_at: null,
+            failed_at: null,
+            cancelled_at: null,
+            terminal_at: null,
+            route_evidence_json: {}
+          }]
+        };
+      }
+      if (sql.includes("from routing_decisions") && sql.includes("order by decided_at desc")) {
+        return {
+          rows: [{
+            id: "decision_1",
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            payment_instruction_id: "payment_instruction_1",
+            selected_route_code: "ROUTE_ARC_INTERNAL",
+            selected_profile_id: "profile_1",
+            decision_reason: "selected highest deterministic score",
+            candidate_scores_json: {},
+            override_applied: false,
+            override_reason: null,
+            decided_by: null,
+            decided_at: "2026-01-01T00:00:02.000Z"
+          }]
+        };
+      }
+      if (sql.includes("from internal_ada_settlements") && sql.includes("payment_instruction_id")) return { rows: [] };
+      if (sql.includes("from routing_and_settlement_events")) return { rows: [] };
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/payment-instructions/payment_instruction_1/route",
+      body: {},
+      idempotencyKey: "idem-sprint7-route-1",
+      correlationId: "corr-sprint7-route-1"
+    },
+    "hash-sprint7-route-1"
+  );
+
+  assert.equal(result.status, 200);
+  assert.equal(queries.some((sql) => sql.includes("insert into routing_decisions")), true);
+  assert.equal(queries.some((sql) => sql.includes("update payment_instructions") && sql.includes("route_type")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into routing_and_settlement_events")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into audit_events")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into event_outbox")), true);
+});
+
+test("sprint7: payment instruction execute command writes internal ADA settlement and journal linkage", async () => {
+  const queries: string[] = [];
+  const client = {
+    query: async (sql: string): Promise<QueryResult> => {
+      queries.push(sql);
+      if (sql.includes("from api_idempotency_records")) return { rows: [] };
+      if (sql.includes("from payment_instructions") && sql.includes("for update")) {
+        return {
+          rows: [{
+            id: "payment_instruction_2",
+            source_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000111",
+            destination_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000222",
+            settlement_obligation_id: null,
+            funding_reservation_id: null,
+            amount_minor_units: "3500000",
+            route_type: "ROUTE_ARC_INTERNAL",
+            instruction_type: "internal_ada_settlement",
+            currency: "USD",
+            status: "routed"
+          }]
+        };
+      }
+      if (sql.includes("from routing_decisions") && sql.includes("order by decided_at desc")) {
+        return {
+          rows: [{
+            id: "decision_2",
+            selected_route_code: "ROUTE_ARC_INTERNAL",
+            selected_profile_id: "profile_1",
+            decision_reason: "selected highest deterministic score",
+            candidate_scores_json: {},
+            override_applied: false,
+            override_reason: null,
+            decided_by: null,
+            decided_at: "2026-01-01T00:00:03.000Z"
+          }]
+        };
+      }
+      if (sql.includes("from internal_ada_settlements") && sql.includes("for update")) return { rows: [] };
+      if (sql.includes("from ledger_accounts") && sql.includes("account_code = any")) {
+        return {
+          rows: [
+            { id: "00000000-0000-4000-8000-000000010020", account_code: "10020" },
+            { id: "00000000-0000-4000-8000-000000020400", account_code: "20400" }
+          ]
+        };
+      }
+      if (sql.includes("from payment_instructions") && sql.includes("where id = $1 and platform_tenant_id = $2") && sql.includes("limit 1")) {
+        return {
+          rows: [{
+            id: "payment_instruction_2",
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            source_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000111",
+            destination_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000222",
+            settlement_obligation_id: null,
+            funding_reservation_id: null,
+            amount_minor_units: "3500000",
+            route_type: "ROUTE_ARC_INTERNAL",
+            instruction_type: "internal_ada_settlement",
+            currency: "USD",
+            status: "settled",
+            idempotency_key: "idem-exec",
+            correlation_id: "corr-exec",
+            created_by: null,
+            created_at: "2026-01-01T00:00:01.000Z",
+            updated_at: "2026-01-01T00:00:04.000Z",
+            routed_at: "2026-01-01T00:00:02.000Z",
+            executed_at: "2026-01-01T00:00:04.000Z",
+            failed_at: null,
+            cancelled_at: null,
+            terminal_at: "2026-01-01T00:00:04.000Z",
+            route_evidence_json: {}
+          }]
+        };
+      }
+      if (sql.includes("from internal_ada_settlements") && sql.includes("payment_instruction_id") && sql.includes("limit 1") && !sql.includes("for update")) {
+        return {
+          rows: [{
+            id: "settlement_2",
+            platform_tenant_id: "00000000-0000-4000-8000-000000000001",
+            payment_instruction_id: "payment_instruction_2",
+            route_code: "ROUTE_ARC_INTERNAL",
+            source_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000111",
+            destination_account_of_digital_asset_id: "00000000-0000-4000-8000-000000000222",
+            amount_minor_units: "3500000",
+            status: "settled",
+            failure_reason: null,
+            provider_reference_id: "provider_ref_2",
+            journal_entry_id: "11111111-2222-4333-8444-555555555555",
+            started_at: "2026-01-01T00:00:03.000Z",
+            settled_at: "2026-01-01T00:00:04.000Z",
+            created_at: "2026-01-01T00:00:03.000Z",
+            updated_at: "2026-01-01T00:00:04.000Z"
+          }]
+        };
+      }
+      if (sql.includes("from routing_and_settlement_events")) return { rows: [] };
+      return { rows: [] };
+    }
+  };
+
+  const result = await executePostgresCommand(
+    client as never,
+    {
+      method: "POST",
+      pathname: "/internal/treasury/payment-instructions/payment_instruction_2/execute",
+      body: {},
+      idempotencyKey: "idem-sprint7-execute-1",
+      correlationId: "corr-sprint7-execute-1"
+    },
+    "hash-sprint7-execute-1"
+  );
+
+  assert.equal(result.status, 200);
+  assert.equal(queries.some((sql) => sql.includes("insert into internal_ada_settlements")), true);
+  assert.equal(queries.some((sql) => sql.includes("update internal_ada_settlements") && sql.includes("status = 'settled'")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into treasury_journal_entries")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into treasury_journal_lines")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into routing_and_settlement_events")), true);
+  assert.equal(queries.some((sql) => sql.includes("insert into api_idempotency_records")), true);
+});

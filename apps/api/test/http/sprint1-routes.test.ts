@@ -2,11 +2,431 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createInitialState } from "../../src/data.js";
 import { handleApiRequest, routeMetadata } from "../../src/http/router.js";
+import {
+  resetBusinessAuthSessionsForTest,
+  setSupabaseBusinessAuthClientForTest
+} from "../../src/modules/client-onboarding/index.js";
+
+const withDevBusinessAuth = async (work: (headers: Record<string, string>) => Promise<void>): Promise<void> => {
+  const previousAllowDev = process.env.ALLOW_DEV_WITHOUT_SUPABASE;
+  process.env.ALLOW_DEV_WITHOUT_SUPABASE = "true";
+  const headers = {
+    authorization: "Bearer dev-token",
+    "x-dev-auth-user-id": "auth_business_user_1",
+    "x-dev-auth-email": "biz.user@example.com"
+  };
+  try {
+    await work(headers);
+  } finally {
+    if (previousAllowDev === undefined) delete process.env.ALLOW_DEV_WITHOUT_SUPABASE;
+    else process.env.ALLOW_DEV_WITHOUT_SUPABASE = previousAllowDev;
+  }
+};
+
+const seedApprovedBusinessUser = (state: ReturnType<typeof createInitialState>): void => {
+  const now = new Date().toISOString();
+  state.businessUserProfiles.push({
+    id: "profile_biz_1",
+    tenantId: state.tenantId,
+    authUserId: "auth_business_user_1",
+    email: "biz.user@example.com",
+    role: "business_user",
+    status: "active",
+    createdAt: now,
+    updatedAt: now
+  });
+  state.businessOnboardingApplications.push({
+    id: "application_biz_1",
+    tenantId: state.tenantId,
+    authUserId: "auth_business_user_1",
+    email: "biz.user@example.com",
+    currentStep: "step_4",
+    status: "approved",
+    submittedAt: now,
+    createdAt: now,
+    updatedAt: now
+  });
+  state.businessClients.push({
+    id: "client_biz_1",
+    tenantId: state.tenantId,
+    legalName: "Vanguard Digital Asset Ltd",
+    country: "US",
+    onboardingStatus: "approved",
+    createdAt: now
+  });
+};
+
+const withMockBusinessAuth = async (work: () => Promise<void>): Promise<void> => {
+  const previousSecret = process.env.BUSINESS_AUTH_JWT_SECRET;
+  const previousExpiry = process.env.BUSINESS_AUTH_JWT_EXPIRES_IN_SECONDS;
+  const previousRefreshExpiry = process.env.BUSINESS_AUTH_JWT_REFRESH_EXPIRES_IN_SECONDS;
+  process.env.BUSINESS_AUTH_JWT_SECRET = "test-business-auth-secret";
+  process.env.BUSINESS_AUTH_JWT_EXPIRES_IN_SECONDS = "3600";
+  process.env.BUSINESS_AUTH_JWT_REFRESH_EXPIRES_IN_SECONDS = "604800";
+
+  let refreshSequence = 1;
+  const authUserId = "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83";
+  const email = "ops@acme-trading.com";
+
+  setSupabaseBusinessAuthClientForTest({
+    inviteUserByEmail: async () => ({ data: { user: { id: authUserId } }, error: null }),
+    signInWithPassword: async ({ email: signInEmail, password }) => {
+      if (signInEmail !== email || password !== "S3curePass!2026") {
+        return { data: { session: null }, error: { message: "invalid login" } };
+      }
+      return {
+        data: {
+          session: {
+            access_token: "sb-access-1",
+            refresh_token: "sb-refresh-1",
+            token_type: "bearer",
+            expires_in: 3600,
+            user: {
+              id: authUserId,
+              email
+            }
+          }
+        },
+        error: null
+      };
+    },
+    refreshSession: async (refreshToken) => {
+      if (!refreshToken.startsWith("sb-refresh-")) {
+        return { data: { session: null }, error: { message: "invalid refresh token" } };
+      }
+      refreshSequence += 1;
+      return {
+        data: {
+          session: {
+            access_token: `sb-access-${refreshSequence}`,
+            refresh_token: `sb-refresh-${refreshSequence}`,
+            token_type: "bearer",
+            expires_in: 3600,
+            user: {
+              id: authUserId,
+              email
+            }
+          }
+        },
+        error: null
+      };
+    },
+    signOutSession: async () => ({ error: null }),
+    getUser: async () => ({ data: { user: { id: authUserId, email } }, error: null }),
+    updateUserById: async () => ({ error: null }),
+    resetPasswordForEmail: async () => ({ error: null })
+  });
+  resetBusinessAuthSessionsForTest();
+
+  try {
+    await work();
+  } finally {
+    resetBusinessAuthSessionsForTest();
+    setSupabaseBusinessAuthClientForTest(undefined);
+    if (previousSecret === undefined) delete process.env.BUSINESS_AUTH_JWT_SECRET;
+    else process.env.BUSINESS_AUTH_JWT_SECRET = previousSecret;
+    if (previousExpiry === undefined) delete process.env.BUSINESS_AUTH_JWT_EXPIRES_IN_SECONDS;
+    else process.env.BUSINESS_AUTH_JWT_EXPIRES_IN_SECONDS = previousExpiry;
+    if (previousRefreshExpiry === undefined) delete process.env.BUSINESS_AUTH_JWT_REFRESH_EXPIRES_IN_SECONDS;
+    else process.env.BUSINESS_AUTH_JWT_REFRESH_EXPIRES_IN_SECONDS = previousRefreshExpiry;
+  }
+};
+
+test("business auth sign-in enables protected route access and sign-out revocation", async () => {
+  await withMockBusinessAuth(async () => {
+    const state = createInitialState();
+
+    const signIn = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/business/auth/sign-in",
+      body: {
+        email: "ops@acme-trading.com",
+        password: "S3curePass!2026"
+      }
+    });
+
+    assert.equal(signIn.status, 200);
+    const signInSession = (signIn.body as { session: { access_token: string; refresh_token: string } }).session;
+    assert.equal(typeof signInSession.access_token, "string");
+    assert.equal(typeof signInSession.refresh_token, "string");
+
+    const onboarding = await handleApiRequest(state, {
+      method: "GET",
+      pathname: "/onboarding/me",
+      headers: {
+        authorization: `Bearer ${signInSession.access_token}`
+      }
+    });
+    assert.equal(onboarding.status, 200);
+
+    const signOut = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/business/auth/sign-out",
+      headers: {
+        authorization: `Bearer ${signInSession.access_token}`
+      }
+    });
+    assert.equal(signOut.status, 200);
+
+    const meAfterSignOut = await handleApiRequest(state, {
+      method: "GET",
+      pathname: "/business/auth/me",
+      headers: {
+        authorization: `Bearer ${signInSession.access_token}`
+      }
+    });
+    assert.equal(meAfterSignOut.status, 401);
+  });
+});
+
+test("business auth refresh rotates access token and invalidates prior token", async () => {
+  await withMockBusinessAuth(async () => {
+    const state = createInitialState();
+
+    const signIn = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/business/auth/sign-in",
+      body: {
+        email: "ops@acme-trading.com",
+        password: "S3curePass!2026"
+      }
+    });
+    assert.equal(signIn.status, 200);
+    const initialSession = (signIn.body as { session: { access_token: string; refresh_token: string } }).session;
+
+    const refresh = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/business/auth/refresh",
+      body: {
+        refreshToken: initialSession.refresh_token
+      }
+    });
+    assert.equal(refresh.status, 200);
+
+    const refreshedSession = (refresh.body as { session: { access_token: string; refresh_token: string } }).session;
+    assert.notEqual(refreshedSession.access_token, initialSession.access_token);
+    assert.notEqual(refreshedSession.refresh_token, initialSession.refresh_token);
+
+    const oldMe = await handleApiRequest(state, {
+      method: "GET",
+      pathname: "/business/auth/me",
+      headers: {
+        authorization: `Bearer ${initialSession.access_token}`
+      }
+    });
+    assert.equal(oldMe.status, 401);
+
+    const newMe = await handleApiRequest(state, {
+      method: "GET",
+      pathname: "/business/auth/me",
+      headers: {
+        authorization: `Bearer ${refreshedSession.access_token}`
+      }
+    });
+    assert.equal(newMe.status, 200);
+  });
+});
 
 test("route metadata keeps /webhooks/circle public for HEAD and POST", () => {
   assert.equal(routeMetadata("POST", "/webhooks/circle").public, true);
   assert.equal(routeMetadata("HEAD", "/webhooks/circle").public, true);
   assert.equal(routeMetadata("HEAD", "/webhooks/circle/").public, true);
+});
+
+test("route metadata keeps OpenAPI docs endpoints public", () => {
+  assert.equal(routeMetadata("GET", "/openapi").public, true);
+  assert.equal(routeMetadata("GET", "/openapi/business-client.json").public, true);
+  assert.equal(routeMetadata("GET", "/openapi/business-client.yaml").public, true);
+  assert.equal(routeMetadata("GET", "/openapi/gtt-service.json").public, true);
+  assert.equal(routeMetadata("GET", "/openapi/gtt-service.yaml").public, true);
+});
+
+test("OpenAPI docs endpoints return business and service contracts", async () => {
+  const state = createInitialState();
+  const index = await handleApiRequest(state, {
+    method: "GET",
+    pathname: "/openapi"
+  });
+  assert.equal(index.status, 200);
+
+  const business = await handleApiRequest(state, {
+    method: "GET",
+    pathname: "/openapi/business-client.json"
+  });
+  assert.equal(business.status, 200);
+  assert.equal((business.body as { info: { title: string } }).info.title, "Global Trade Treasury Business Client API");
+  const businessTaxonomy = (business.body as {
+    "x-gtt-transfer-taxonomy"?: { transferTypeEnum?: string[]; transferSubtypeEnum?: string[] };
+  })["x-gtt-transfer-taxonomy"];
+  assert.deepEqual(businessTaxonomy?.transferTypeEnum, ["funding_instruction", "transfer_instruction", "payment_instruction"]);
+  assert.deepEqual(businessTaxonomy?.transferSubtypeEnum, ["transfer_instruction", "payment_instruction"]);
+
+  const service = await handleApiRequest(state, {
+    method: "GET",
+    pathname: "/openapi/gtt-service.json"
+  });
+  assert.equal(service.status, 200);
+  assert.equal((service.body as { info: { title: string } }).info.title, "Global Trade Treasury Service API");
+  const serviceTaxonomy = (service.body as {
+    "x-gtt-transfer-taxonomy"?: { transferTypeEnum?: string[]; transferSubtypeEnum?: string[] };
+  })["x-gtt-transfer-taxonomy"];
+  assert.deepEqual(serviceTaxonomy?.transferTypeEnum, ["funding_instruction", "transfer_instruction", "payment_instruction"]);
+  assert.deepEqual(serviceTaxonomy?.transferSubtypeEnum, ["transfer_instruction", "payment_instruction"]);
+
+  const businessYamlAlias = await handleApiRequest(state, {
+    method: "GET",
+    pathname: "/openapi/business-client.yaml"
+  });
+  assert.equal(businessYamlAlias.status, 200);
+
+  const serviceYamlAlias = await handleApiRequest(state, {
+    method: "GET",
+    pathname: "/openapi/gtt-service.yaml"
+  });
+  assert.equal(serviceYamlAlias.status, 200);
+});
+
+test("route metadata keeps Sprint 7-2 business account and API key endpoints public", () => {
+  assert.equal(routeMetadata("GET", "/business/accounts-of-digital-asset").public, true);
+  assert.equal(routeMetadata("POST", "/business/accounts-of-digital-asset").public, true);
+  assert.equal(routeMetadata("GET", "/business/api-keys").public, true);
+  assert.equal(routeMetadata("POST", "/business/api-keys").public, true);
+});
+
+test("business account aliases create/list/get with activation decision payload", async () => {
+  await withDevBusinessAuth(async (headers) => {
+    const state = createInitialState();
+    seedApprovedBusinessUser(state);
+
+    const created = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/business/accounts-of-digital-asset",
+      headers,
+      body: {
+        accountName: "Settlement Reserve",
+        usePurpose: "settlement",
+        topology: "unlinked"
+      }
+    });
+
+    assert.equal(created.status, 201);
+    const createdBody = created.body as { account: { activationDecision: string; activationReasonCode: string; id: string } };
+    assert.equal(createdBody.account.activationDecision, "auto");
+    assert.equal(createdBody.account.activationReasonCode, "virtual_no_linked_instrument_auto_activation");
+
+    const listed = await handleApiRequest(state, {
+      method: "GET",
+      pathname: "/business/accounts-of-digital-asset",
+      headers
+    });
+    assert.equal(listed.status, 200);
+    const accounts = (listed.body as { accounts: Array<{ id: string }> }).accounts;
+    assert.equal(accounts.some((item) => item.id === createdBody.account.id), true);
+
+    const detail = await handleApiRequest(state, {
+      method: "GET",
+      pathname: `/business/accounts-of-digital-asset/${createdBody.account.id}`,
+      headers
+    });
+    assert.equal(detail.status, 200);
+  });
+});
+
+test("business API keys allow ada.open and reject forbidden wildcard scopes", async () => {
+  await withDevBusinessAuth(async (headers) => {
+    const state = createInitialState();
+    seedApprovedBusinessUser(state);
+
+    const created = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/business/api-keys",
+      headers,
+      body: {
+        scopes: ["ada.read", "ada.open", "payment-instruction.read"]
+      }
+    });
+
+    assert.equal(created.status, 201);
+    const createdBody = created.body as { key: { id: string; scopes: string[] }; plaintextKey: string };
+    assert.equal(createdBody.key.scopes.includes("ada.open"), true);
+    assert.equal(typeof createdBody.plaintextKey, "string");
+
+    const list = await handleApiRequest(state, {
+      method: "GET",
+      pathname: "/business/api-keys",
+      headers
+    });
+    assert.equal(list.status, 200);
+    const keys = (list.body as { keys: Array<{ id: string }> }).keys;
+    assert.equal(keys.some((item) => item.id === createdBody.key.id), true);
+
+    const revoked = await handleApiRequest(state, {
+      method: "POST",
+      pathname: `/business/api-keys/${createdBody.key.id}/revoke`,
+      headers,
+      body: {}
+    });
+    assert.equal(revoked.status, 200);
+
+    const forbidden = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/business/api-keys",
+      headers,
+      body: {
+        scopes: ["internal.operations.*"]
+      }
+    });
+    assert.equal(forbidden.status, 400);
+    assert.deepEqual(forbidden.body, { error: "business_scope_forbidden" });
+  });
+});
+
+test("internal approval queue lists pending_activation and approve/reject require reason fields", async () => {
+  await withDevBusinessAuth(async (headers) => {
+    const state = createInitialState();
+    seedApprovedBusinessUser(state);
+
+    const created = await handleApiRequest(state, {
+      method: "POST",
+      pathname: "/business/accounts-of-digital-asset",
+      headers,
+      body: {
+        accountName: "Fiat Linked ADA",
+        usePurpose: "settlement",
+        topology: "fiat-linked"
+      }
+    });
+    const createdBody = created.body as { account: { id: string; status: string } };
+    assert.equal(createdBody.account.status, "pending_activation");
+
+    const queue = await handleApiRequest(state, {
+      method: "GET",
+      pathname: "/internal/operations/accounts-of-digital-asset/pending-approval",
+      body: {}
+    });
+    assert.equal(queue.status, 200);
+    const queuedAccounts = (queue.body as { accounts: Array<{ id: string }> }).accounts;
+    assert.equal(queuedAccounts.some((item) => item.id === createdBody.account.id), true);
+
+    const missingReason = await handleApiRequest(state, {
+      method: "POST",
+      pathname: `/internal/operations/accounts-of-digital-asset/${createdBody.account.id}/approve`,
+      body: {}
+    });
+    assert.equal(missingReason.status, 400);
+    assert.deepEqual(missingReason.body, { error: "reason_code_required" });
+
+    const approved = await handleApiRequest(state, {
+      method: "POST",
+      pathname: `/internal/operations/accounts-of-digital-asset/${createdBody.account.id}/approve`,
+      body: {
+        reasonCode: "policy_verification_complete",
+        reasonNote: "Approved by internal operator"
+      }
+    });
+    assert.equal(approved.status, 200);
+    assert.equal((approved.body as { approvalDecision: string }).approvalDecision, "approved");
+  });
 });
 
 test("route metadata keeps internal credential reset public", () => {

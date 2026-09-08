@@ -19,19 +19,651 @@ components:
       in: header
       name: X-GTT-API-Key
       description: Use `X-GTT-API-Key: gtt_live_<key_id>.<secret>`.
-    SupabaseUserBearer:
+    BusinessUserBearer:
       type: http
       scheme: bearer
-      description: Use the Supabase Auth access token for business user onboarding endpoints.
+      description: Use first-party business-user JWT bearer token issued by `/business/auth/sign-in`.
   schemas:
     ErrorResponse:
       type: object
+      required:
+        - error
       properties:
         error:
           type: string
+        detail:
+          type: string
+      example:
+        error: "business_user_auth_required"
+        detail: "Missing or invalid bearer token."
     MoneyMinorUnits:
       type: string
       pattern: "^[0-9]+$"
+    BusinessAuthSignInRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      example:
+        email: "ops@acme-trading.com"
+        password: "S3curePass!2026"
+    BusinessAuthSetPasswordRequest:
+      type: object
+      required:
+        - password
+      properties:
+        token:
+          type: string
+          description: Optional invitation token. If omitted, bearer token from Authorization can be used.
+        password:
+          type: string
+      example:
+        token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.invitation.sample"
+        password: "N3wStrongerPass!2026"
+    BusinessAuthResetPasswordRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+      example:
+        email: "ops@acme-trading.com"
+    BusinessAuthRefreshRequest:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+      example:
+        refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh.sample"
+    BusinessJwtUser:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+      example:
+        id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83"
+        email: "ops@acme-trading.com"
+    BusinessJwtSession:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - user
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: bearer
+        expires_in:
+          type: integer
+        expires_at:
+          type: integer
+        refresh_token:
+          type: string
+        user:
+          $ref: "#/components/schemas/BusinessJwtUser"
+      example:
+        access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.access.sample"
+        token_type: "bearer"
+        expires_in: 3600
+        expires_at: 1788868800
+        refresh_token: "refresh_token_sample"
+        user:
+          id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83"
+          email: "ops@acme-trading.com"
+    BusinessAuthSessionResponse:
+      type: object
+      required:
+        - session
+      properties:
+        session:
+          $ref: "#/components/schemas/BusinessJwtSession"
+      example:
+        session:
+          access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.access.sample"
+          token_type: "bearer"
+          expires_in: 3600
+          refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh.sample"
+          user:
+            id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83"
+            email: "ops@acme-trading.com"
+    BusinessAuthMeResponse:
+      type: object
+      required:
+        - user
+      properties:
+        user:
+          type: object
+          required:
+            - authUserId
+            - email
+          properties:
+            authUserId:
+              type: string
+            email:
+              type: string
+              format: email
+      example:
+        user:
+          authUserId: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83"
+          email: "ops@acme-trading.com"
+    BusinessAuthResetPasswordResponse:
+      type: object
+      required:
+        - ok
+        - status
+        - message
+      properties:
+        ok:
+          type: boolean
+        status:
+          type: string
+          enum:
+            - password_reset_sent
+        message:
+          type: string
+      example:
+        ok: true
+        status: "password_reset_sent"
+        message: "Password reset email sent."
+    BusinessAdaBalances:
+      type: object
+      required:
+        - availableMinorUnits
+        - pendingMinorUnits
+        - reservedMinorUnits
+        - lockedMinorUnits
+        - suspenseMinorUnits
+      properties:
+        availableMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        pendingMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        reservedMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        lockedMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        suspenseMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        availableMinorUnits: "2500000"
+        pendingMinorUnits: "0"
+        reservedMinorUnits: "0"
+        lockedMinorUnits: "0"
+        suspenseMinorUnits: "0"
+        updatedAt: "2026-09-08T12:00:00.000Z"
+    BusinessAdaAccount:
+      type: object
+      required:
+        - id
+        - accountName
+        - businessClientId
+        - status
+        - usePurpose
+      properties:
+        id:
+          type: string
+        accountCode:
+          type: string
+        accountName:
+          type: string
+        businessClientId:
+          type: string
+        businessClientName:
+          type: string
+        status:
+          type: string
+        usePurpose:
+          type: string
+        assetCode:
+          type: string
+        assetRail:
+          type: string
+        activationDecision:
+          type: string
+          enum:
+            - auto
+            - approval_required
+        activationReasonCode:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        balances:
+          $ref: "#/components/schemas/BusinessAdaBalances"
+      example:
+        id: "ada_01J6T8H1MZ4JQ9A5QYDR2E7T60"
+        accountCode: "DAA-USDC-GEN-TRES"
+        accountName: "Treasury Ops"
+        businessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+        businessClientName: "Acme Trading LLC"
+        status: "active"
+        usePurpose: "general"
+        assetCode: "USDC"
+        assetRail: "circle_wallet"
+        activationDecision: "auto"
+        activationReasonCode: "virtual_no_linked_instrument_auto_activation"
+        createdAt: "2026-09-08T11:42:12.000Z"
+        balances:
+          availableMinorUnits: "2500000"
+          pendingMinorUnits: "0"
+          reservedMinorUnits: "0"
+          lockedMinorUnits: "0"
+          suspenseMinorUnits: "0"
+    BusinessAdaAccountListResponse:
+      type: object
+      required:
+        - accounts
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessAdaAccount"
+      example:
+        accounts:
+          - id: "ada_01J6T8H1MZ4JQ9A5QYDR2E7T60"
+            accountCode: "DAA-USDC-GEN-TRES"
+            accountName: "Treasury Ops"
+            businessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+            status: "active"
+            usePurpose: "general"
+            assetCode: "USDC"
+            activationDecision: "auto"
+            activationReasonCode: "virtual_no_linked_instrument_auto_activation"
+    BusinessAdaAccountResponse:
+      type: object
+      required:
+        - account
+      properties:
+        account:
+          $ref: "#/components/schemas/BusinessAdaAccount"
+      example:
+        account:
+          id: "ada_01J6T8H1MZ4JQ9A5QYDR2E7T60"
+          accountCode: "DAA-USDC-GEN-TRES"
+          accountName: "Treasury Ops"
+          businessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+          status: "active"
+          usePurpose: "general"
+          assetCode: "USDC"
+    BusinessApiKey:
+      type: object
+      required:
+        - id
+        - keyPrefix
+        - ownerBusinessClientId
+        - ownerBusinessClientName
+        - scopes
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+        keyPrefix:
+          type: string
+        ownerAuthUserId:
+          type: string
+        ownerTenantId:
+          type: string
+        ownerBusinessClientId:
+          type: string
+        ownerBusinessClientName:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum:
+            - active
+            - revoked
+        createdAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+      example:
+        id: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+        keyPrefix: "gtt_live_8a1df4e0"
+        ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+        ownerBusinessClientName: "Acme Trading LLC"
+        scopes:
+          - "ada.read"
+          - "payment-instruction.create"
+        status: "active"
+        createdAt: "2026-09-08T11:52:05.000Z"
+    BusinessApiKeyListResponse:
+      type: object
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessApiKey"
+      example:
+        keys:
+          - id: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+            keyPrefix: "gtt_live_8a1df4e0"
+            ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+            ownerBusinessClientName: "Acme Trading LLC"
+            scopes:
+              - "ada.read"
+            status: "active"
+            createdAt: "2026-09-08T11:52:05.000Z"
+    BusinessApiKeyResponse:
+      type: object
+      required:
+        - key
+      properties:
+        key:
+          $ref: "#/components/schemas/BusinessApiKey"
+      example:
+        key:
+          id: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+          keyPrefix: "gtt_live_8a1df4e0"
+          ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+          ownerBusinessClientName: "Acme Trading LLC"
+          scopes:
+            - "ada.read"
+          status: "revoked"
+          createdAt: "2026-09-08T11:52:05.000Z"
+          revokedAt: "2026-09-08T12:15:00.000Z"
+    BusinessApiKeyWithPlaintextResponse:
+      type: object
+      required:
+        - key
+        - plaintextKey
+      properties:
+        key:
+          $ref: "#/components/schemas/BusinessApiKey"
+        plaintextKey:
+          type: string
+      example:
+        key:
+          id: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+          keyPrefix: "gtt_live_8a1df4e0"
+          ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+          ownerBusinessClientName: "Acme Trading LLC"
+          scopes:
+            - "ada.read"
+            - "payment-instruction.create"
+          status: "active"
+          createdAt: "2026-09-08T11:52:05.000Z"
+        plaintextKey: "gtt_live_8a1df4e0.7c6f0b3f0f524d3ab8b7f0f4a2ce0921"
+    BusinessApiKeyRotateResponse:
+      type: object
+      required:
+        - key
+        - plaintextKey
+        - rotatedFromApiKeyId
+      properties:
+        key:
+          $ref: "#/components/schemas/BusinessApiKey"
+        plaintextKey:
+          type: string
+        rotatedFromApiKeyId:
+          type: string
+      example:
+        key:
+          id: "5e5296d8-55e6-4f5a-bb02-f1f1c7e508a1"
+          keyPrefix: "gtt_live_1726fd3b"
+          ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+          ownerBusinessClientName: "Acme Trading LLC"
+          scopes:
+            - "ada.read"
+            - "payment-instruction.create"
+          status: "active"
+          createdAt: "2026-09-08T12:20:12.000Z"
+        plaintextKey: "gtt_live_1726fd3b.b72a9e68de4f4e77b8ecb1af53dc8af2"
+        rotatedFromApiKeyId: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+    BusinessFundingInstruction:
+      type: object
+      required:
+        - id
+        - sourceAccountOfDigitalAssetId
+        - sourceAdaCode
+        - sourceAccountCode
+        - destinationAccountOfDigitalAssetId
+        - destinationAdaCode
+        - destinationAccountCode
+        - fundingType
+        - instructionRole
+        - transferKind
+        - assetCode
+        - currency
+        - amountMinorUnits
+        - pendingUsdcMinorUnits
+        - availableUsdcMinorUnits
+        - status
+      properties:
+        id:
+          type: string
+        sourceAccountOfDigitalAssetId:
+          type: string
+        sourceAdaCode:
+          type: string
+        sourceAccountCode:
+          type: string
+        destinationAccountOfDigitalAssetId:
+          type: string
+        destinationAdaCode:
+          type: string
+        destinationAccountCode:
+          type: string
+        fundingType:
+          type: string
+        instructionRole:
+          type: string
+        transferKind:
+          type: string
+        assetCode:
+          type: string
+        currency:
+          type: string
+        amountMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        pendingUsdcMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        availableUsdcMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        status:
+          type: string
+        supportReference:
+          type: string
+        postingJournalEntryId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        id: "fe2f1f74-8de8-4f89-b094-c7ca41b22875"
+        sourceAccountOfDigitalAssetId: "66c3df29-a9ed-45aa-b9af-cd9940f6f314"
+        sourceAdaCode: "DAA-USDC-OPS-SOUR"
+        sourceAccountCode: "DAA-USDC-OPS-SOUR"
+        destinationAccountOfDigitalAssetId: "2f64d70f-fcbd-4ec6-8eb5-06fae53cb5ef"
+        destinationAdaCode: "DAA-USDC-LIQ-DEST"
+        destinationAccountCode: "DAA-USDC-LIQ-DEST"
+        fundingType: "usdc_payin"
+        instructionRole: "client_exchange"
+        transferKind: "ada_to_ada_payin_underlying"
+        assetCode: "USDC"
+        currency: "USD"
+        amountMinorUnits: "1250000"
+        pendingUsdcMinorUnits: "0"
+        availableUsdcMinorUnits: "1250000"
+        status: "completed"
+        createdAt: "2026-09-08T12:30:10.000Z"
+        updatedAt: "2026-09-08T12:31:02.000Z"
+    BusinessFundingInstructionOrder:
+      type: object
+      required:
+        - id
+        - orderKind
+        - stage
+        - amountMinorUnits
+        - currency
+        - status
+      properties:
+        id:
+          type: string
+        orderKind:
+          type: string
+        stage:
+          type: string
+        dependencyOrderId:
+          type: string
+        amountMinorUnits:
+          type: string
+          pattern: "^[0-9]+$"
+        currency:
+          type: string
+        status:
+          type: string
+        completedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        id: "8c900f31-4dd8-47c7-9950-95cff5ce8194"
+        orderKind: "ada_wire_transfer"
+        stage: "fiat_received"
+        amountMinorUnits: "1250000"
+        currency: "USD"
+        status: "completed"
+        createdAt: "2026-09-08T12:30:10.000Z"
+        updatedAt: "2026-09-08T12:31:02.000Z"
+    BusinessFundingInstructionListResponse:
+      type: object
+      required:
+        - fundingInstructions
+      properties:
+        fundingInstructions:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessFundingInstruction"
+      example:
+        fundingInstructions:
+          - id: "fe2f1f74-8de8-4f89-b094-c7ca41b22875"
+            sourceAccountOfDigitalAssetId: "66c3df29-a9ed-45aa-b9af-cd9940f6f314"
+            sourceAdaCode: "DAA-USDC-OPS-SOUR"
+            sourceAccountCode: "DAA-USDC-OPS-SOUR"
+            destinationAccountOfDigitalAssetId: "2f64d70f-fcbd-4ec6-8eb5-06fae53cb5ef"
+            destinationAdaCode: "DAA-USDC-LIQ-DEST"
+            destinationAccountCode: "DAA-USDC-LIQ-DEST"
+            fundingType: "usdc_payin"
+            instructionRole: "client_exchange"
+            transferKind: "ada_to_ada_payin_underlying"
+            assetCode: "USDC"
+            currency: "USD"
+            amountMinorUnits: "1250000"
+            pendingUsdcMinorUnits: "0"
+            availableUsdcMinorUnits: "1250000"
+            status: "completed"
+    BusinessFundingInstructionDetailResponse:
+      type: object
+      required:
+        - fundingInstruction
+        - orders
+      properties:
+        fundingInstruction:
+          $ref: "#/components/schemas/BusinessFundingInstruction"
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessFundingInstructionOrder"
+      example:
+        fundingInstruction:
+          id: "fe2f1f74-8de8-4f89-b094-c7ca41b22875"
+          sourceAccountOfDigitalAssetId: "66c3df29-a9ed-45aa-b9af-cd9940f6f314"
+          sourceAdaCode: "DAA-USDC-OPS-SOUR"
+          sourceAccountCode: "DAA-USDC-OPS-SOUR"
+          destinationAccountOfDigitalAssetId: "2f64d70f-fcbd-4ec6-8eb5-06fae53cb5ef"
+          destinationAdaCode: "DAA-USDC-LIQ-DEST"
+          destinationAccountCode: "DAA-USDC-LIQ-DEST"
+          fundingType: "usdc_payin"
+          instructionRole: "client_exchange"
+          transferKind: "ada_to_ada_payin_underlying"
+          assetCode: "USDC"
+          currency: "USD"
+          amountMinorUnits: "1250000"
+          pendingUsdcMinorUnits: "0"
+          availableUsdcMinorUnits: "1250000"
+          status: "completed"
+        orders:
+          - id: "8c900f31-4dd8-47c7-9950-95cff5ce8194"
+            orderKind: "ada_wire_transfer"
+            stage: "fiat_received"
+            amountMinorUnits: "1250000"
+            currency: "USD"
+            status: "completed"
+    BusinessFundingInstructionOrdersResponse:
+      type: object
+      required:
+        - fundingInstructionId
+        - orders
+      properties:
+        fundingInstructionId:
+          type: string
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessFundingInstructionOrder"
+      example:
+        fundingInstructionId: "fe2f1f74-8de8-4f89-b094-c7ca41b22875"
+        orders:
+          - id: "8c900f31-4dd8-47c7-9950-95cff5ce8194"
+            orderKind: "ada_wire_transfer"
+            stage: "fiat_received"
+            amountMinorUnits: "1250000"
+            currency: "USD"
+            status: "completed"
+    BasicOkResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+      example:
+        ok: true
 paths:
   /health:
     get:
@@ -69,17 +701,309 @@ paths:
       responses:
         "200":
           description: Accept email-only self-registration and dispatch Supabase Auth invitation.
+  /business/auth/sign-in:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessAuthSignInRequest"
+      responses:
+        "200":
+          description: Authenticate business user via Supabase and return first-party JWT bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessAuthSessionResponse"
+              examples:
+                success:
+                  value:
+                    session:
+                      access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.access.sample"
+                      token_type: "bearer"
+                      expires_in: 3600
+                      user:
+                        id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83"
+                        email: "ops@acme-trading.com"
+        "401":
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_credentials:
+                  value:
+                    error: "invalid_credentials"
+                    detail: "Email or password is incorrect."
+        "503":
+          description: Business auth is not fully configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                supabase_admin_not_configured:
+                  value:
+                    error: "supabase_admin_not_configured"
+                    detail: "SUPABASE_SERVICE_ROLE_KEY is not configured."
+                business_auth_not_configured:
+                  value:
+                    error: "business_auth_not_configured"
+                    detail: "BUSINESS_AUTH_JWT_SECRET is not configured."
+  /business/auth/set-password:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessAuthSetPasswordRequest"
+      responses:
+        "200":
+          description: Set password and return first-party JWT bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessAuthSessionResponse"
+              examples:
+                success:
+                  value:
+                    session:
+                      access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.access.sample"
+                      token_type: "bearer"
+                      expires_in: 3600
+                      user:
+                        id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83"
+                        email: "ops@acme-trading.com"
+        "401":
+          description: Missing or invalid invitation/session token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
+        "503":
+          description: Business auth is not fully configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                supabase_admin_not_configured:
+                  value:
+                    error: "supabase_admin_not_configured"
+                    detail: "SUPABASE_SERVICE_ROLE_KEY is not configured."
+                business_auth_not_configured:
+                  value:
+                    error: "business_auth_not_configured"
+                    detail: "BUSINESS_AUTH_JWT_SECRET is not configured."
+  /business/auth/reset-password:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessAuthResetPasswordRequest"
+      responses:
+        "200":
+          description: Password reset email requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessAuthResetPasswordResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+                    status: "password_reset_sent"
+                    message: "Password reset email sent."
+        "400":
+          description: Invalid email.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_email:
+                  value:
+                    error: "invalid_email"
+                    detail: "Email format is invalid."
+  /business/auth/refresh:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessAuthRefreshRequest"
+      responses:
+        "200":
+          description: Exchange refresh token for a rotated first-party session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessAuthSessionResponse"
+              examples:
+                success:
+                  value:
+                    session:
+                      access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.access.next.sample"
+                      token_type: "bearer"
+                      expires_in: 3600
+                      refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh.next.sample"
+                      user:
+                        id: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83"
+                        email: "ops@acme-trading.com"
+        "401":
+          description: Missing or invalid refresh token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
+        "503":
+          description: Auth provider admin client or business JWT signing secret is not configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                supabase_admin_not_configured:
+                  value:
+                    error: "supabase_admin_not_configured"
+                    detail: "SUPABASE_SERVICE_ROLE_KEY is not configured."
+                business_auth_not_configured:
+                  value:
+                    error: "business_auth_not_configured"
+                    detail: "BUSINESS_AUTH_JWT_SECRET is not configured."
+  /business/auth/me:
+    get:
+      security:
+        - BusinessUserBearer: []
+      responses:
+        "200":
+          description: Resolve authenticated business user identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessAuthMeResponse"
+              examples:
+                success:
+                  value:
+                    user:
+                      authUserId: "9f7b9f57-0af0-4f1a-b1eb-31c7ec9f2c83"
+                      email: "ops@acme-trading.com"
+        "401":
+          description: Missing or invalid business-user JWT bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
+  /business/auth/sign-out:
+    post:
+      security:
+        - BusinessUserBearer: []
+      responses:
+        "200":
+          description: Session revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BasicOkResponse"
+              examples:
+                success:
+                  value:
+                    ok: true
+        "401":
+          description: Missing or invalid business-user JWT bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
+        "502":
+          description: Auth-provider session revocation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                sign_out_failed:
+                  value:
+                    error: "sign_out_failed"
+                    detail: "Auth provider rejected session revocation request."
+        "503":
+          description: Auth provider admin client is not configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                supabase_admin_not_configured:
+                  value:
+                    error: "supabase_admin_not_configured"
+                    detail: "SUPABASE_SERVICE_ROLE_KEY is not configured."
   /onboarding/me:
     get:
       security:
-        - SupabaseUserBearer: []
+        - BusinessUserBearer: []
       responses:
         "200":
           description: Get or create authenticated business user's onboarding profile and draft application.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                success:
+                  value:
+                    profile:
+                      onboardingProfileId: "onb_01J6TWVY5N0E8J9Y3V0WRPZ0BQ"
+                      status: "draft"
+                      businessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+                    application:
+                      applicationStatus: "draft"
+                      currentStep: "business_profile"
+        "401":
+          description: Missing or invalid business auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
   /onboarding/me/steps/{stepKey}:
     patch:
       security:
-        - SupabaseUserBearer: []
+        - BusinessUserBearer: []
       parameters:
         - name: stepKey
           in: path
@@ -89,13 +1013,509 @@ paths:
       responses:
         "200":
           description: Save authenticated business user's onboarding step payload.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                success:
+                  value:
+                    ok: true
+                    stepKey: "business_profile"
+                    savedAt: "2026-09-08T12:45:00.000Z"
+        "401":
+          description: Missing or invalid business auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
   /onboarding/me/submit:
     post:
       security:
-        - SupabaseUserBearer: []
+        - BusinessUserBearer: []
       responses:
         "200":
           description: Submit authenticated business user's onboarding application to pending review.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                success:
+                  value:
+                    ok: true
+                    status: "submitted"
+                    submittedAt: "2026-09-08T12:50:00.000Z"
+        "401":
+          description: Missing or invalid business auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
+  /business/accounts-of-digital-asset:
+    get:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      responses:
+        "200":
+          description: Owned ADA accounts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessAdaAccountListResponse"
+              examples:
+                success:
+                  value:
+                    accounts:
+                      - id: "ada_01J6T8H1MZ4JQ9A5QYDR2E7T60"
+                        accountCode: "DAA-USDC-GEN-TRES"
+                        accountName: "Treasury Ops"
+                        businessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+                        status: "active"
+                        usePurpose: "general"
+                        assetCode: "USDC"
+        "400":
+          description: Business not approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_client_not_approved:
+                  value:
+                    error: "business_client_not_approved"
+                    detail: "Business client status must be approved before this operation."
+    post:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      responses:
+        "201":
+          description: ADA account created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessAdaAccountResponse"
+              examples:
+                success:
+                  value:
+                    account:
+                      id: "ada_01J6T8H1MZ4JQ9A5QYDR2E7T60"
+                      accountCode: "DAA-USDC-GEN-TRES"
+                      accountName: "Treasury Ops"
+                      businessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+                      status: "active"
+                      usePurpose: "general"
+                      assetCode: "USDC"
+  /business/accounts-of-digital-asset/{id}:
+    get:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ADA account detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessAdaAccountResponse"
+              examples:
+                success:
+                  value:
+                    account:
+                      id: "ada_01J6T8H1MZ4JQ9A5QYDR2E7T60"
+                      accountCode: "DAA-USDC-GEN-TRES"
+                      accountName: "Treasury Ops"
+                      businessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+                      status: "active"
+                      usePurpose: "general"
+                      assetCode: "USDC"
+        "404":
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                account_not_found:
+                  value:
+                    error: "account_not_found"
+                    detail: "Requested account does not exist for this business client."
+  /business/api-keys:
+    get:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      responses:
+        "200":
+          description: List of key metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessApiKeyListResponse"
+              examples:
+                success:
+                  value:
+                    keys:
+                      - id: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+                        keyPrefix: "gtt_live_8a1df4e0"
+                        ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+                        ownerBusinessClientName: "Acme Trading LLC"
+                        scopes:
+                          - "ada.read"
+                        status: "active"
+                        createdAt: "2026-09-08T11:52:05.000Z"
+    post:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      responses:
+        "201":
+          description: Created, includes one-time plaintext key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessApiKeyWithPlaintextResponse"
+              examples:
+                success:
+                  value:
+                    key:
+                      id: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+                      keyPrefix: "gtt_live_8a1df4e0"
+                      ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+                      ownerBusinessClientName: "Acme Trading LLC"
+                      scopes:
+                        - "ada.read"
+                        - "payment-instruction.create"
+                      status: "active"
+                      createdAt: "2026-09-08T11:52:05.000Z"
+                    plaintextKey: "gtt_live_8a1df4e0.7c6f0b3f0f524d3ab8b7f0f4a2ce0921"
+        "400":
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_scope:
+                  value:
+                    error: "invalid_scope"
+                    detail: "One or more requested scopes are not allowed."
+  /business/api-keys/{id}/revoke:
+    post:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessApiKeyResponse"
+              examples:
+                success:
+                  value:
+                    key:
+                      id: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+                      keyPrefix: "gtt_live_8a1df4e0"
+                      ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+                      ownerBusinessClientName: "Acme Trading LLC"
+                      scopes:
+                        - "ada.read"
+                      status: "revoked"
+                      createdAt: "2026-09-08T11:52:05.000Z"
+                      revokedAt: "2026-09-08T12:15:00.000Z"
+        "404":
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                api_key_not_found:
+                  value:
+                    error: "api_key_not_found"
+                    detail: "API key was not found for this business client."
+  /business/api-keys/{id}/rotate:
+    post:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Rotated with one-time plaintext key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessApiKeyRotateResponse"
+              examples:
+                success:
+                  value:
+                    key:
+                      id: "5e5296d8-55e6-4f5a-bb02-f1f1c7e508a1"
+                      keyPrefix: "gtt_live_1726fd3b"
+                      ownerBusinessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
+                      ownerBusinessClientName: "Acme Trading LLC"
+                      scopes:
+                        - "ada.read"
+                        - "payment-instruction.create"
+                      status: "active"
+                      createdAt: "2026-09-08T12:20:12.000Z"
+                    plaintextKey: "gtt_live_1726fd3b.b72a9e68de4f4e77b8ecb1af53dc8af2"
+                    rotatedFromApiKeyId: "2f3c17d4-2b41-4cf1-aab4-d68263cc8ccd"
+        "404":
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                api_key_not_found:
+                  value:
+                    error: "api_key_not_found"
+                    detail: "API key was not found for this business client."
+  /business/me/funding-instructions:
+    get:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      responses:
+        "200":
+          description: Funding instruction list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessFundingInstructionListResponse"
+              examples:
+                success:
+                  value:
+                    fundingInstructions:
+                      - id: "fe2f1f74-8de8-4f89-b094-c7ca41b22875"
+                        sourceAccountOfDigitalAssetId: "66c3df29-a9ed-45aa-b9af-cd9940f6f314"
+                        sourceAdaCode: "DAA-USDC-OPS-SOUR"
+                        sourceAccountCode: "DAA-USDC-OPS-SOUR"
+                        destinationAccountOfDigitalAssetId: "2f64d70f-fcbd-4ec6-8eb5-06fae53cb5ef"
+                        destinationAdaCode: "DAA-USDC-LIQ-DEST"
+                        destinationAccountCode: "DAA-USDC-LIQ-DEST"
+                        fundingType: "usdc_payin"
+                        instructionRole: "client_exchange"
+                        transferKind: "ada_to_ada_payin_underlying"
+                        assetCode: "USDC"
+                        currency: "USD"
+                        amountMinorUnits: "1250000"
+                        pendingUsdcMinorUnits: "0"
+                        availableUsdcMinorUnits: "1250000"
+                        status: "completed"
+        "401":
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
+    post:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      responses:
+        "201":
+          description: Funding instruction created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessFundingInstructionDetailResponse"
+              examples:
+                success:
+                  value:
+                    fundingInstruction:
+                      id: "fe2f1f74-8de8-4f89-b094-c7ca41b22875"
+                      sourceAccountOfDigitalAssetId: "66c3df29-a9ed-45aa-b9af-cd9940f6f314"
+                      sourceAdaCode: "DAA-USDC-OPS-SOUR"
+                      sourceAccountCode: "DAA-USDC-OPS-SOUR"
+                      destinationAccountOfDigitalAssetId: "2f64d70f-fcbd-4ec6-8eb5-06fae53cb5ef"
+                      destinationAdaCode: "DAA-USDC-LIQ-DEST"
+                      destinationAccountCode: "DAA-USDC-LIQ-DEST"
+                      fundingType: "usdc_payin"
+                      instructionRole: "client_exchange"
+                      transferKind: "ada_to_ada_payin_underlying"
+                      assetCode: "USDC"
+                      currency: "USD"
+                      amountMinorUnits: "1250000"
+                      pendingUsdcMinorUnits: "0"
+                      availableUsdcMinorUnits: "1250000"
+                      status: "completed"
+                    orders:
+                      - id: "8c900f31-4dd8-47c7-9950-95cff5ce8194"
+                        orderKind: "ada_wire_transfer"
+                        stage: "fiat_received"
+                        amountMinorUnits: "1250000"
+                        currency: "USD"
+                        status: "completed"
+        "400":
+          description: Validation or policy failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                amount_must_be_positive:
+                  value:
+                    error: "amount_must_be_positive"
+                    detail: "amountMinorUnits must be a positive integer string."
+        "401":
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                business_user_auth_required:
+                  value:
+                    error: "business_user_auth_required"
+                    detail: "Missing or invalid bearer token."
+  /business/me/funding-instructions/{id}:
+    get:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Funding instruction detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessFundingInstructionDetailResponse"
+              examples:
+                success:
+                  value:
+                    fundingInstruction:
+                      id: "fe2f1f74-8de8-4f89-b094-c7ca41b22875"
+                      sourceAccountOfDigitalAssetId: "66c3df29-a9ed-45aa-b9af-cd9940f6f314"
+                      sourceAdaCode: "DAA-USDC-OPS-SOUR"
+                      sourceAccountCode: "DAA-USDC-OPS-SOUR"
+                      destinationAccountOfDigitalAssetId: "2f64d70f-fcbd-4ec6-8eb5-06fae53cb5ef"
+                      destinationAdaCode: "DAA-USDC-LIQ-DEST"
+                      destinationAccountCode: "DAA-USDC-LIQ-DEST"
+                      fundingType: "usdc_payin"
+                      instructionRole: "client_exchange"
+                      transferKind: "ada_to_ada_payin_underlying"
+                      assetCode: "USDC"
+                      currency: "USD"
+                      amountMinorUnits: "1250000"
+                      pendingUsdcMinorUnits: "0"
+                      availableUsdcMinorUnits: "1250000"
+                      status: "completed"
+                    orders:
+                      - id: "8c900f31-4dd8-47c7-9950-95cff5ce8194"
+                        orderKind: "ada_wire_transfer"
+                        stage: "fiat_received"
+                        amountMinorUnits: "1250000"
+                        currency: "USD"
+                        status: "completed"
+        "404":
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                funding_instruction_not_found:
+                  value:
+                    error: "funding_instruction_not_found"
+                    detail: "Funding instruction not found for this business client."
+  /business/me/funding-instructions/{id}/orders:
+    get:
+      security:
+        - BusinessUserBearer: []
+        - ApiKeyBearer: []
+        - ApiKeyHeader: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Funding order timeline.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessFundingInstructionOrdersResponse"
+              examples:
+                success:
+                  value:
+                    fundingInstructionId: "fe2f1f74-8de8-4f89-b094-c7ca41b22875"
+                    orders:
+                      - id: "8c900f31-4dd8-47c7-9950-95cff5ce8194"
+                        orderKind: "ada_wire_transfer"
+                        stage: "fiat_received"
+                        amountMinorUnits: "1250000"
+                        currency: "USD"
+                        status: "completed"
+        "404":
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                funding_instruction_not_found:
+                  value:
+                    error: "funding_instruction_not_found"
+                    detail: "Funding instruction not found for this business client."
   /api-keys:
     get:
       responses:

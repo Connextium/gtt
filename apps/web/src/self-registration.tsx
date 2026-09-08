@@ -1,31 +1,29 @@
-import { createClient } from "@supabase/supabase-js";
 import { resolveSelfRegistrationRoute, selfRegistrationRoutes, type Navigate } from "./features/business/selfRegistrationRouteConfig.js";
-import { useSupabaseSession } from "./features/business/shared/useSupabaseSession.js";
+import { apiRequest } from "./features/business/shared/apiClient.js";
+import { useBusinessAuthSession } from "./features/business/shared/useSupabaseSession.js";
 
 export { selfRegistrationRoutes };
 
-const supabase = (() => {
-  const url = import.meta.env.VITE_SUPABASE_URL;
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) return undefined;
-  return createClient(url, anonKey);
-})();
-
-async function logoutBusinessUser(navigate: Navigate) {
-  await supabase?.auth.signOut();
+async function logoutBusinessUser(navigate: Navigate, clearSession: () => void) {
+  try {
+    await apiRequest("/business/auth/sign-out", { method: "POST" });
+  } catch {
+    // Sign-out is stateless server-side; clear local session even if this request fails.
+  }
+  clearSession();
   navigate("/sign-in");
 }
 
 export function SelfRegistrationRouter({ path, navigate }: { path: string; navigate: Navigate }) {
-  const { loading, session } = useSupabaseSession(supabase);
+  const { loading, session, setSession, clearSession } = useBusinessAuthSession();
 
   return resolveSelfRegistrationRoute({
     loading,
     navigate,
-    onLogout: () => logoutBusinessUser(navigate),
+    onAuthenticated: setSession,
+    onLogout: () => logoutBusinessUser(navigate, clearSession),
     path,
-    session,
-    supabase
+    session
   });
 }
 

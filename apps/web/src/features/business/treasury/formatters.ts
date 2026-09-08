@@ -55,6 +55,10 @@ export const accountDisplayCode = (account: TreasuryAdaAccount): string => {
   return `DAA-${assetSeed}-${purposeSeed}-${nameSeed}`;
 };
 
-export const readableStatus = (value: string): string => value.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+export const readableStatus = (value: string): string => {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "_");
+  if (normalized === "pending_activation" || normalized === "pending_internal_approval") return "Pending Internal Approval";
+  return normalized.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+};
 
 export const readableUsePurpose = (value: string): string => value.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());

@@ -35,7 +35,7 @@ import {
 import { mintFromFiatWireAccountService } from "../services/fiat-wire-mint-service.js";
 import { activateTenantService } from "../services/tenant-activation-service.js";
 import { createClientFundingService } from "../services/client-funding-service.js";
-import { authenticateBusinessUser } from "../modules/client-onboarding/index.js";
+import { authenticateBusinessUserOrApiKey } from "../modules/client-onboarding/index.js";
 import { createClientFundingRepository } from "./repositories/client-funding-repository.js";
 import type { PostgresQueryClient, PostgresRouteInput } from "./postgres-route-types.js";
 import { withPostgresTransaction, type PostgresClient } from "./transaction.js";
@@ -144,7 +144,8 @@ export const executePostgresQueryWithClient = async (
   await ensureTenant(client, tenantId);
   const clientFundingMatch = input.pathname.match(/^\/business\/me\/funding-instructions(?:\/([^/]+))?(?:\/(orders))?$/);
   if (clientFundingMatch) {
-    const user = await authenticateBusinessUser(input.headers ?? {});
+    const requiredScopes = input.method === "GET" ? ["payment-instruction.read"] : ["payment-instruction.create"];
+    const user = await authenticateBusinessUserOrApiKey(input.headers ?? {}, requiredScopes);
     if (!user) return { status: 401, body: { error: "business_user_auth_required" } };
     const service = clientFunding(client);
     const instructionId = clientFundingMatch[1] ? decodeURIComponent(clientFundingMatch[1]) : undefined;
@@ -199,10 +200,16 @@ export const executePostgresQueryWithClient = async (
       return journal ? { status: 200, body: { journal } } : { status: 404, body: { error: "journal_not_found" } };
     }
     if (input.pathname === "/funding-instructions") return { status: 200, body: { fundingInstructions: await listFundingInstructions(client, tenantId) } };
-    if (input.pathname === "/funding-reservations") return { status: 200, body: { reservations: await listFundingReservations(client, tenantId) } };
+    if (input.pathname === "/funding-reservations" || input.pathname === "/internal/treasury/funding-reservations") {
+      return { status: 200, body: { reservations: await listFundingReservations(client, tenantId) } };
+    }
+    if (input.pathname === "/internal/treasury/settlement-obligations") {
+      return { status: 200, body: { obligations: await listSettlementObligations(client, tenantId, input.query ?? {}) } };
+    }
     const fundingInstructionMatch = input.pathname.match(/^\/funding-instructions\/([^/]+)$/);
     const fundingInstructionOrdersMatch = input.pathname.match(/^\/funding-instructions\/([^/]+)\/orders$/);
-    const fundingReservationMatch = input.pathname.match(/^\/funding-reservations\/([^/]+)$/);
+    const fundingReservationMatch = input.pathname.match(/^\/(?:internal\/treasury\/)?funding-reservations\/([^/]+)$/);
+    const settlementObligationMatch = input.pathname.match(/^\/internal\/treasury\/settlement-obligations\/([^/]+)$/);
     if (input.pathname === "/payments") return { status: 200, body: { payments: await listPayments(client, tenantId) } };
     const paymentMatch = input.pathname.match(/^\/payments\/([^/]+)$/);
     if (fundingInstructionMatch) {
@@ -218,6 +225,10 @@ export const executePostgresQueryWithClient = async (
           orders: await listFundingInstructionOrders(client, tenantId, fundingInstructionId)
         }
       };
+    }
+    if (settlementObligationMatch) {
+      const obligation = await getSettlementObligationDetail(client, tenantId, decodeURIComponent(settlementObligationMatch[1]!));
+      return obligation ? { status: 200, body: { obligation } } : { status: 404, body: { error: "obligation_not_found" } };
     }
     if (fundingReservationMatch) {
       const reservation = await getFundingReservation(client, tenantId, decodeURIComponent(fundingReservationMatch[1]!));
@@ -242,10 +253,33 @@ export const executePostgresQueryWithClient = async (
     if (input.pathname === "/internal/treasury/tenant-disbursements") {
       return { status: 200, body: { disbursements: await listTenantDisbursements(client, tenantId) } };
     }
+    if (input.pathname === "/internal/treasury/route-profiles") {
+      return { status: 200, body: { profiles: await listRouteProfiles(client, tenantId, input.query ?? {}) } };
+    }
+    if (input.pathname === "/internal/treasury/route-bindings") {
+      return { status: 200, body: { bindings: await listRouteBindings(client, tenantId, input.query ?? {}) } };
+    }
+    if (input.pathname === "/internal/treasury/payment-instructions") {
+      return {
+        status: 200,
+        body: { paymentInstructions: await listInternalTreasuryPaymentInstructions(client, tenantId, input.query ?? {}) }
+      };
+    }
     const tenantDisbursementMatch = input.pathname.match(/^\/internal\/treasury\/tenant-disbursements\/([^/]+)$/);
+    const internalTreasuryPaymentInstructionMatch = input.pathname.match(/^\/internal\/treasury\/payment-instructions\/([^/]+)$/);
     if (tenantDisbursementMatch) {
       const disbursement = await getTenantDisbursement(client, tenantId, decodeURIComponent(tenantDisbursementMatch[1]!));
       return disbursement ? { status: 200, body: { disbursement } } : { status: 404, body: { error: "tenant_disbursement_not_found" } };
+    }
+    if (internalTreasuryPaymentInstructionMatch) {
+      const paymentInstruction = await getInternalTreasuryPaymentInstructionDetail(
+        client,
+        tenantId,
+        decodeURIComponent(internalTreasuryPaymentInstructionMatch[1]!)
+      );
+      return paymentInstruction
+        ? { status: 200, body: { paymentInstruction } }
+        : { status: 404, body: { error: "payment_instruction_not_found" } };
     }
     if (input.pathname === "/internal/operations/linked-wire-accounts") {
       return { status: 200, body: { linkedWireAccounts: await listLinkedWireAccounts(client, tenantId) } };
@@ -297,7 +331,7 @@ export const executePostgresCommand = async (
   const tenantId = defaultTenantId();
   await ensureTenant(client, tenantId);
   if (input.pathname === "/business/me/funding-instructions") {
-    const user = await authenticateBusinessUser(input.headers ?? {});
+    const user = await authenticateBusinessUserOrApiKey(input.headers ?? {}, ["payment-instruction.create"]);
     if (!user) return { status: 401, body: { error: "business_user_auth_required" } };
     const scopedInput = {
       ...input,
@@ -326,8 +360,9 @@ export const executePostgresCommand = async (
     const linkedInstrumentMatch = input.pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/linked-instruments$/);
     const linkedInstrumentPatchMatch = input.pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/linked-instruments\/([^/]+)$/);
     const linkedInstrumentActionMatch = input.pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/linked-instruments\/([^/]+)\/(verify|disable)$/);
+    const settlementObligationActionMatch = input.pathname.match(/^\/internal\/treasury\/settlement-obligations\/([^/]+)\/(cancel|fulfill)$/);
     const fundingInstructionActionMatch = input.pathname.match(/^\/funding-instructions\/([^/]+)\/(assign-route|cancel)$/);
-    const fundingReservationActionMatch = input.pathname.match(/^\/funding-reservations\/([^/]+)\/(activate|release|expire|cancel)$/);
+    const fundingReservationActionMatch = input.pathname.match(/^\/(?:internal\/treasury\/)?funding-reservations\/([^/]+)\/(activate|release|consume|expire|cancel)$/);
     const paymentActionMatch = input.pathname.match(/^\/payments\/([^/]+)\/(submit|cancel|retry|refresh-status)$/);
     const fiatRedemptionActionMatch = input.pathname.match(/^\/fiat\/redemptions\/([^/]+)\/(submit|retry|refresh-status)$/);
     const fundingRouteCreateMatch = input.pathname.match(/^\/accounts-of-digital-asset\/([^/]+)\/funding-routes$/);
@@ -335,6 +370,11 @@ export const executePostgresCommand = async (
     const wireMintMatch = input.pathname.match(/^\/fiat\/wire-accounts\/([^/]+)\/mint$/);
     const settlementAdvanceActionMatch = input.pathname.match(/^\/internal\/treasury\/settlement-advance\/([^/]+)\/(request|cancel)$/);
     const tenantDisbursementActionMatch = input.pathname.match(/^\/internal\/treasury\/tenant-disbursements\/([^/]+)\/(approve|submit)$/);
+    const routeProfilePatchMatch = input.pathname.match(/^\/internal\/treasury\/route-profiles\/([^/]+)$/);
+    const routeBindingPatchMatch = input.pathname.match(/^\/internal\/treasury\/route-bindings\/([^/]+)$/);
+    const internalTreasuryPaymentInstructionActionMatch = input.pathname.match(
+      /^\/internal\/treasury\/payment-instructions\/([^/]+)\/(route|execute|retry|cancel)$/
+    );
     const linkedWireRefreshMatch = input.pathname.match(/^\/internal\/operations\/linked-wire-accounts\/([^/]+)\/refresh-instructions$/);
     const webhookReprocessMatch = input.pathname.match(/^\/internal\/webhooks\/circle\/([^/]+)\/reprocess$/);
     const reconciliationBreakResolveMatch = input.pathname.match(/^\/reconciliation\/breaks\/([^/]+)\/resolve$/);
@@ -368,8 +408,10 @@ export const executePostgresCommand = async (
       );
     } else if (input.pathname === "/funding-instructions") {
       response = await createFundingInstruction(client, tenantId, input);
-    } else if (input.pathname === "/funding-reservations") {
+    } else if (input.pathname === "/funding-reservations" || input.pathname === "/internal/treasury/funding-reservations") {
       response = await createFundingReservation(client, tenantId, input);
+    } else if (input.pathname === "/internal/treasury/settlement-obligations") {
+      response = await createSettlementObligation(client, tenantId, input);
     } else if (input.pathname === "/payments/internal") {
       response = await createInternalPayment(client, tenantId, input);
     } else if (input.pathname === "/payments/external-usdc") {
@@ -392,6 +434,28 @@ export const executePostgresCommand = async (
       );
     } else if (input.pathname === "/internal/treasury/tenant-disbursements") {
       response = await createTenantDisbursement(client, tenantId, input);
+    } else if (input.pathname === "/internal/treasury/route-profiles") {
+      response = await createRouteProfile(client, tenantId, input);
+    } else if (routeProfilePatchMatch && input.method === "PATCH") {
+      response = await patchRouteProfile(client, tenantId, input, decodeURIComponent(routeProfilePatchMatch[1]!));
+    } else if (routeProfilePatchMatch && input.method === "DELETE") {
+      response = await deleteRouteProfile(client, tenantId, input, decodeURIComponent(routeProfilePatchMatch[1]!));
+    } else if (input.pathname === "/internal/treasury/route-bindings") {
+      response = await createRouteBinding(client, tenantId, input);
+    } else if (routeBindingPatchMatch && input.method === "PATCH") {
+      response = await patchRouteBinding(client, tenantId, input, decodeURIComponent(routeBindingPatchMatch[1]!));
+    } else if (routeBindingPatchMatch && input.method === "DELETE") {
+      response = await deleteRouteBinding(client, tenantId, input, decodeURIComponent(routeBindingPatchMatch[1]!));
+    } else if (input.pathname === "/internal/treasury/payment-instructions") {
+      response = await createInternalTreasuryPaymentInstruction(client, tenantId, input);
+    } else if (internalTreasuryPaymentInstructionActionMatch) {
+      response = await transitionInternalTreasuryPaymentInstruction(
+        client,
+        tenantId,
+        input,
+        decodeURIComponent(internalTreasuryPaymentInstructionActionMatch[1]!),
+        internalTreasuryPaymentInstructionActionMatch[2]!
+      );
     } else if (tenantDisbursementActionMatch) {
       response = await transitionTenantDisbursement(
         client,
@@ -422,6 +486,14 @@ export const executePostgresCommand = async (
         input,
         decodeURIComponent(fundingReservationActionMatch[1]!),
         fundingReservationActionMatch[2]!
+      );
+    } else if (settlementObligationActionMatch) {
+      response = await transitionSettlementObligation(
+        client,
+        tenantId,
+        input,
+        decodeURIComponent(settlementObligationActionMatch[1]!),
+        settlementObligationActionMatch[2]!
       );
     } else if (paymentActionMatch) {
       response = await transitionPayment(
@@ -1693,6 +1765,8 @@ const createFundingReservation = async (
   const settlementObligationId = stringBody(input.body, "settlementObligationId");
   const accountOfDigitalAssetId = stringBody(input.body, "accountOfDigitalAssetId");
   const amountMinorUnits = asBigInt(stringBody(input.body, "amountMinorUnits", "0"));
+  const expiresAt = optionalStringBody(input.body, "expiresAt");
+  const reasonCode = optionalStringBody(input.body, "reasonCode");
 
   if (!settlementObligationId || !accountOfDigitalAssetId) {
     return { status: 400, body: { error: "settlement_obligation_and_account_required" } };
@@ -1700,12 +1774,19 @@ const createFundingReservation = async (
   if (amountMinorUnits <= 0n) return { status: 400, body: { error: "amount_must_be_positive" } };
 
   const obligationResult = await client.query(
-    `select id
+    `select id, status
        from settlement_obligations
-      where id = $1 and platform_tenant_id = $2`,
+      where id = $1 and platform_tenant_id = $2
+      for update`,
     [settlementObligationId, tenantId]
   );
-  if (!obligationResult.rows[0]) return { status: 404, body: { error: "obligation_not_found" } };
+  const obligationRow = obligationResult.rows[0] as Record<string, unknown> | undefined;
+  if (!obligationRow) return { status: 404, body: { error: "obligation_not_found" } };
+
+  const obligationStatus = normalizeLifecycleStatus(obligationRow.status);
+  if (["fulfilled", "cancelled", "failed", "expired"].includes(obligationStatus)) {
+    return { status: 409, body: { error: "obligation_not_reservable", status: obligationStatus } };
+  }
 
   const account = await getAccount(client, tenantId, accountOfDigitalAssetId);
   if (!account) return { status: 404, body: { error: "account_not_found" } };
@@ -1731,9 +1812,20 @@ const createFundingReservation = async (
   const reservationId = randomUUID();
   await client.query(
     `insert into funding_reservations
-      (id, platform_tenant_id, settlement_obligation_id, account_of_digital_asset_id, amount_minor_units, consumed_minor_units, priority, status, activated_at, created_at, updated_at)
-     values ($1, $2, $3, $4, $5, 0, 100, 'active', now(), now(), now())`,
-    [reservationId, tenantId, settlementObligationId, accountOfDigitalAssetId, amountMinorUnits.toString()]
+      (id, platform_tenant_id, settlement_obligation_id, account_of_digital_asset_id, amount_minor_units, consumed_minor_units, priority, status, available_minor_units_snapshot, reason_code, expires_at, activated_at, idempotency_key, created_by, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, 0, 100, 'active', $6, $7, $8, now(), $9, $10, now(), now())`,
+    [
+      reservationId,
+      tenantId,
+      settlementObligationId,
+      accountOfDigitalAssetId,
+      amountMinorUnits.toString(),
+      availableMinorUnits.toString(),
+      reasonCode ?? null,
+      expiresAt ?? null,
+      input.idempotencyKey,
+      asUuidOrNull(input.actorUserId)
+    ]
   );
   await client.query(
     `update account_of_digital_asset_balances
@@ -1744,6 +1836,31 @@ const createFundingReservation = async (
             updated_at = now()
       where platform_tenant_id = $1 and account_of_digital_asset_id = $2`,
     [tenantId, accountOfDigitalAssetId, (availableMinorUnits - amountMinorUnits).toString(), (reservedMinorUnits + amountMinorUnits).toString()]
+  );
+
+  if (obligationStatus === "draft") {
+    await client.query(
+      `update settlement_obligations
+          set status = 'reserved', updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [settlementObligationId, tenantId]
+    );
+  }
+
+  await recordObligationEvent(
+    client,
+    tenantId,
+    settlementObligationId,
+    reservationId,
+    "funding_reservation.activated",
+    asUuidOrNull(input.actorUserId),
+    {
+      reservationId,
+      amountMinorUnits: amountMinorUnits.toString(),
+      status: "active",
+      reasonCode: reasonCode ?? null,
+      expiresAt: expiresAt ?? null
+    }
   );
 
   await writeAuditAndOutbox(client, tenantId, input, "funding_reservation.activated", {
@@ -1784,11 +1901,13 @@ const transitionFundingReservation = async (
   const reservationRow = reservationResult.rows[0] as Record<string, unknown> | undefined;
   if (!reservationRow) return { status: 404, body: { error: "reservation_not_found" } };
 
-  const currentStatus = String(reservationRow.status ?? "");
+  const currentStatus = normalizeLifecycleStatus(reservationRow.status);
   const nextStatus = action === "activate"
     ? "active"
     : action === "release"
       ? "released"
+      : action === "consume"
+        ? "consumed"
       : action === "expire"
         ? "expired"
         : "cancelled";
@@ -1797,6 +1916,123 @@ const transitionFundingReservation = async (
   const amountMinorUnits = asBigInt(reservationRow.amount_minor_units);
   const consumedMinorUnits = asBigInt(reservationRow.consumed_minor_units);
   const releasableMinorUnits = amountMinorUnits > consumedMinorUnits ? amountMinorUnits - consumedMinorUnits : 0n;
+  const reasonCode = optionalStringBody(input.body, "reasonCode");
+
+  if (action === "consume") {
+    if (currentStatus !== "active") {
+      if (currentStatus === "consumed") {
+        return {
+          status: 200,
+          body: { reservation: await getFundingReservation(client, tenantId, reservationId) }
+        };
+      }
+      return { status: 409, body: { error: "reservation_consume_invalid_state", status: currentStatus } };
+    }
+
+    const requestedConsume = asBigInt(stringBody(input.body, "amountMinorUnits", releasableMinorUnits.toString()));
+    if (requestedConsume <= 0n) {
+      return { status: 400, body: { error: "consume_amount_must_be_positive" } };
+    }
+    if (requestedConsume > releasableMinorUnits) {
+      return { status: 409, body: { error: "consume_amount_exceeds_releasable_balance" } };
+    }
+
+    const balanceResult = await client.query(
+      `select available_minor_units, reserved_minor_units
+         from account_of_digital_asset_balances
+        where platform_tenant_id = $1 and account_of_digital_asset_id = $2
+        order by updated_at desc
+        limit 1
+        for update`,
+      [tenantId, accountOfDigitalAssetId]
+    );
+    const balanceRow = balanceResult.rows[0] as Record<string, unknown> | undefined;
+    if (!balanceRow) return { status: 400, body: { error: "account_balance_not_found" } };
+
+    const availableMinorUnits = asBigInt(balanceRow.available_minor_units);
+    const reservedMinorUnits = asBigInt(balanceRow.reserved_minor_units);
+    const remainingReserved = reservedMinorUnits >= requestedConsume ? reservedMinorUnits - requestedConsume : 0n;
+    const nextConsumedMinorUnits = consumedMinorUnits + requestedConsume;
+    const consumedFully = nextConsumedMinorUnits >= amountMinorUnits;
+
+    await client.query(
+      `update account_of_digital_asset_balances
+          set available_minor_units = $3,
+              reserved_minor_units = $4,
+              version = version + 1,
+              projected_at = now(),
+              updated_at = now()
+        where platform_tenant_id = $1 and account_of_digital_asset_id = $2`,
+      [tenantId, accountOfDigitalAssetId, availableMinorUnits.toString(), remainingReserved.toString()]
+    );
+
+    await client.query(
+      `update funding_reservations
+          set consumed_minor_units = $3,
+              status = $4,
+              consumed_at = case when $4 = 'consumed' then now() else consumed_at end,
+              status_reason = coalesce($5, status_reason),
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [reservationId, tenantId, nextConsumedMinorUnits.toString(), consumedFully ? "consumed" : "active", reasonCode ?? null]
+    );
+
+    await recordObligationEvent(
+      client,
+      tenantId,
+      String(reservationRow.settlement_obligation_id),
+      reservationId,
+      "funding_reservation.consumed",
+      asUuidOrNull(input.actorUserId),
+      {
+        reservationId,
+        consumedMinorUnits: requestedConsume.toString(),
+        totalConsumedMinorUnits: nextConsumedMinorUnits.toString(),
+        amountMinorUnits: amountMinorUnits.toString(),
+        toStatus: consumedFully ? "consumed" : "active"
+      }
+    );
+
+    await writeAuditAndOutbox(client, tenantId, input, "funding_reservation.consumed", {
+      reservationId,
+      settlementObligationId: String(reservationRow.settlement_obligation_id),
+      accountOfDigitalAssetId,
+      consumedMinorUnits: requestedConsume.toString(),
+      totalConsumedMinorUnits: nextConsumedMinorUnits.toString(),
+      toStatus: consumedFully ? "consumed" : "active"
+    });
+
+    return {
+      status: 200,
+      body: {
+        reservation: await getFundingReservation(client, tenantId, reservationId)
+      }
+    };
+  }
+
+  if (action === "activate") {
+    if (currentStatus === "active") {
+      return {
+        status: 200,
+        body: {
+          reservation: await getFundingReservation(client, tenantId, reservationId)
+        }
+      };
+    }
+    if (isTerminalReservationStatus(currentStatus)) {
+      return { status: 409, body: { error: "reservation_reactivation_not_allowed", status: currentStatus } };
+    }
+  } else if (currentStatus !== "active") {
+    if (currentStatus === nextStatus) {
+      return {
+        status: 200,
+        body: {
+          reservation: await getFundingReservation(client, tenantId, reservationId)
+        }
+      };
+    }
+    return { status: 409, body: { error: "reservation_transition_invalid_state", status: currentStatus } };
+  }
 
   if (currentStatus !== nextStatus) {
     const balanceResult = await client.query(
@@ -1849,12 +2085,28 @@ const transitionFundingReservation = async (
     `update funding_reservations
         set status = $3,
             ${timestampColumn} = now(),
+            status_reason = coalesce($4, status_reason),
             updated_at = now()
       where id = $1 and platform_tenant_id = $2`,
-    [reservationId, tenantId, nextStatus]
+    [reservationId, tenantId, nextStatus, reasonCode ?? null]
   );
 
   const eventType = action === "release" ? "funding_reservation.released" : `funding_reservation.${nextStatus}`;
+  await recordObligationEvent(
+    client,
+    tenantId,
+    String(reservationRow.settlement_obligation_id),
+    reservationId,
+    eventType,
+    asUuidOrNull(input.actorUserId),
+    {
+      reservationId,
+      accountOfDigitalAssetId,
+      fromStatus: currentStatus,
+      toStatus: nextStatus,
+      reasonCode: reasonCode ?? null
+    }
+  );
   await writeAuditAndOutbox(client, tenantId, input, eventType, {
     reservationId,
     settlementObligationId: String(reservationRow.settlement_obligation_id),
@@ -1867,6 +2119,292 @@ const transitionFundingReservation = async (
     status: 200,
     body: {
       reservation: await getFundingReservation(client, tenantId, reservationId)
+    }
+  };
+};
+
+const createSettlementObligation = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput
+): Promise<JsonResponse> => {
+  const requestedBusinessClientId = optionalStringBody(input.body, "businessClientId");
+  const businessClientId = requestedBusinessClientId && isUuid(requestedBusinessClientId)
+    ? requestedBusinessClientId
+    : await ensureTenantPseudoBusinessClient(client, tenantId, input);
+
+  if (requestedBusinessClientId && isUuid(requestedBusinessClientId)) {
+    const businessClient = await client.query(
+      `select id
+         from business_clients
+        where id = $1 and platform_tenant_id = $2
+        limit 1`,
+      [requestedBusinessClientId, tenantId]
+    );
+    if (!businessClient.rows[0]) return { status: 404, body: { error: "business_client_not_found" } };
+  }
+
+  const obligationType = stringBody(input.body, "obligationType", "disbursement").trim().toLowerCase();
+  const principalMinorUnits = asBigInt(stringBody(input.body, "principalMinorUnits", stringBody(input.body, "amountMinorUnits", "0")));
+  if (principalMinorUnits <= 0n) return { status: 400, body: { error: "principal_must_be_positive" } };
+
+  const status = normalizeLifecycleStatus(optionalStringBody(input.body, "status") ?? "draft");
+  if (!(["draft", "reserved"].includes(status))) {
+    return { status: 400, body: { error: "invalid_initial_obligation_status" } };
+  }
+
+  const dueAtInput = optionalStringBody(input.body, "dueAt") ?? optionalStringBody(input.body, "dueDate");
+  const dueAt = dueAtInput ? new Date(dueAtInput) : new Date(Date.now() + 24 * 60 * 60 * 1000);
+  if (Number.isNaN(dueAt.getTime())) return { status: 400, body: { error: "due_at_invalid" } };
+
+  const sourceReferenceId = optionalStringBody(input.body, "sourceReferenceId");
+  const sourceReferenceType = optionalStringBody(input.body, "sourceReferenceType");
+  const currency = stringBody(input.body, "currency", "USD").toUpperCase();
+  const obligationId = randomUUID();
+  const actorUserId = asUuidOrNull(input.actorUserId);
+
+  await client.query(
+    `insert into settlement_obligations
+      (id, platform_tenant_id, obligation_type, buyer_business_client_id, supplier_business_client_id, business_client_id,
+       amount_minor_units, principal_minor_units, fulfilled_minor_units, disputed_minor_units,
+       currency, status, due_date, due_at, external_reference, source_reference_id, source_reference_type,
+       idempotency_key, created_by, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, $4, $6, $6, 0, 0, $7, $8, $9, $10, $11, $11, $12, $13, $14, now(), now())`,
+    [
+      obligationId,
+      tenantId,
+      obligationType,
+      businessClientId,
+      businessClientId,
+      principalMinorUnits.toString(),
+      currency,
+      status,
+      dueAt.toISOString().slice(0, 10),
+      dueAt.toISOString(),
+      sourceReferenceId ?? null,
+      sourceReferenceType ?? null,
+      input.idempotencyKey,
+      actorUserId
+    ]
+  );
+
+  await recordObligationEvent(
+    client,
+    tenantId,
+    obligationId,
+    undefined,
+    "settlement_obligation.created",
+    actorUserId,
+    {
+      obligationId,
+      obligationType,
+      businessClientId,
+      principalMinorUnits: principalMinorUnits.toString(),
+      currency,
+      status,
+      dueAt: dueAt.toISOString(),
+      sourceReferenceId: sourceReferenceId ?? null,
+      sourceReferenceType: sourceReferenceType ?? null
+    }
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "settlement_obligation.created", {
+    obligationId,
+    businessClientId,
+    principalMinorUnits: principalMinorUnits.toString(),
+    status
+  });
+
+  const obligation = await getSettlementObligationDetail(client, tenantId, obligationId);
+  if (!obligation) return { status: 500, body: { error: "obligation_create_failed" } };
+
+  return {
+    status: 201,
+    body: { obligation }
+  };
+};
+
+const transitionSettlementObligation = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  obligationId: string,
+  action: string
+): Promise<JsonResponse> => {
+  const obligationResult = await client.query(
+    `select id,
+            business_client_id,
+            status,
+            principal_minor_units,
+            fulfilled_minor_units,
+            currency
+       from settlement_obligations
+      where id = $1 and platform_tenant_id = $2
+      for update`,
+    [obligationId, tenantId]
+  );
+  const obligationRow = obligationResult.rows[0] as Record<string, unknown> | undefined;
+  if (!obligationRow) return { status: 404, body: { error: "obligation_not_found" } };
+
+  const currentStatus = normalizeLifecycleStatus(obligationRow.status);
+  const actorUserId = asUuidOrNull(input.actorUserId);
+
+  if (action === "cancel") {
+    if (currentStatus === "cancelled") {
+      return {
+        status: 200,
+        body: { obligation: await getSettlementObligationDetail(client, tenantId, obligationId) }
+      };
+    }
+    if (isTerminalObligationStatus(currentStatus)) {
+      return { status: 409, body: { error: "obligation_cancel_invalid_state", status: currentStatus } };
+    }
+
+    const activeReservationsResult = await client.query(
+      `select count(*)::int as active_count
+         from funding_reservations
+        where platform_tenant_id = $1
+          and settlement_obligation_id = $2
+          and status = 'active'`,
+      [tenantId, obligationId]
+    );
+    const activeReservations = Number(activeReservationsResult.rows[0]?.active_count ?? 0);
+    if (activeReservations > 0) {
+      return { status: 409, body: { error: "obligation_has_active_reservations" } };
+    }
+
+    await client.query(
+      `update settlement_obligations
+          set status = 'cancelled',
+              cancelled_at = now(),
+              cancelled_reason = coalesce($3, cancelled_reason),
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [obligationId, tenantId, optionalStringBody(input.body, "reason") ?? optionalStringBody(input.body, "reasonCode") ?? null]
+    );
+
+    await recordObligationEvent(
+      client,
+      tenantId,
+      obligationId,
+      undefined,
+      "settlement_obligation.cancelled",
+      actorUserId,
+      {
+        obligationId,
+        fromStatus: currentStatus,
+        toStatus: "cancelled",
+        reason: optionalStringBody(input.body, "reason") ?? optionalStringBody(input.body, "reasonCode") ?? null
+      }
+    );
+
+    await writeAuditAndOutbox(client, tenantId, input, "settlement_obligation.cancelled", {
+      obligationId,
+      fromStatus: currentStatus,
+      toStatus: "cancelled"
+    });
+
+    return {
+      status: 200,
+      body: { obligation: await getSettlementObligationDetail(client, tenantId, obligationId) }
+    };
+  }
+
+  if (["cancelled", "failed", "expired"].includes(currentStatus)) {
+    return { status: 409, body: { error: "obligation_fulfill_invalid_state", status: currentStatus } };
+  }
+
+  const principalMinorUnits = asBigInt(obligationRow.principal_minor_units);
+  const fulfilledMinorUnits = asBigInt(obligationRow.fulfilled_minor_units);
+  const remainingMinorUnits = principalMinorUnits > fulfilledMinorUnits ? principalMinorUnits - fulfilledMinorUnits : 0n;
+  if (remainingMinorUnits <= 0n) {
+    return {
+      status: 200,
+      body: { obligation: await getSettlementObligationDetail(client, tenantId, obligationId) }
+    };
+  }
+
+  const requestedFulfillMinorUnits = asBigInt(stringBody(input.body, "amountMinorUnits", remainingMinorUnits.toString()));
+  if (requestedFulfillMinorUnits <= 0n) return { status: 400, body: { error: "fulfill_amount_must_be_positive" } };
+  if (requestedFulfillMinorUnits > remainingMinorUnits) {
+    return { status: 409, body: { error: "obligation_over_fulfillment_not_allowed" } };
+  }
+
+  const fundingReservationId = optionalStringBody(input.body, "fundingReservationId");
+  if (fundingReservationId) {
+    const consumeResult = await transitionFundingReservation(
+      client,
+      tenantId,
+      {
+        ...input,
+        body: {
+          ...input.body,
+          amountMinorUnits: requestedFulfillMinorUnits.toString()
+        }
+      },
+      fundingReservationId,
+      "consume"
+    );
+    if (consumeResult.status >= 400) return consumeResult;
+  }
+
+  const nextFulfilledMinorUnits = fulfilledMinorUnits + requestedFulfillMinorUnits;
+  const nextStatus = nextFulfilledMinorUnits >= principalMinorUnits ? "fulfilled" : "partially_fulfilled";
+
+  await client.query(
+    `update settlement_obligations
+        set fulfilled_minor_units = $3,
+            status = $4,
+            fulfilled_at = case when $4 = 'fulfilled' then now() else fulfilled_at end,
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [obligationId, tenantId, nextFulfilledMinorUnits.toString(), nextStatus]
+  );
+
+  const journalEntryId = optionalStringBody(input.body, "journalEntryId");
+  if (journalEntryId && isUuid(journalEntryId)) {
+    await client.query(
+      `insert into obligation_journal_links
+        (id, platform_tenant_id, obligation_id, journal_entry_id, journal_status, created_at)
+       values ($1, $2, $3, $4, 'posted', now())
+       on conflict (platform_tenant_id, obligation_id, journal_entry_id) do nothing`,
+      [randomUUID(), tenantId, obligationId, journalEntryId]
+    );
+  }
+
+  await recordObligationEvent(
+    client,
+    tenantId,
+    obligationId,
+    fundingReservationId,
+    "settlement_obligation.fulfilled",
+    actorUserId,
+    {
+      obligationId,
+      fulfilledMinorUnits: requestedFulfillMinorUnits.toString(),
+      totalFulfilledMinorUnits: nextFulfilledMinorUnits.toString(),
+      principalMinorUnits: principalMinorUnits.toString(),
+      toStatus: nextStatus,
+      fundingReservationId: fundingReservationId ?? null,
+      journalEntryId: journalEntryId ?? null,
+      currency: String(obligationRow.currency ?? "USD")
+    }
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "settlement_obligation.fulfilled", {
+    obligationId,
+    fulfilledMinorUnits: requestedFulfillMinorUnits.toString(),
+    totalFulfilledMinorUnits: nextFulfilledMinorUnits.toString(),
+    principalMinorUnits: principalMinorUnits.toString(),
+    toStatus: nextStatus,
+    fundingReservationId: fundingReservationId ?? null,
+    journalEntryId: journalEntryId ?? null
+  });
+
+  return {
+    status: 200,
+    body: {
+      obligation: await getSettlementObligationDetail(client, tenantId, obligationId)
     }
   };
 };
@@ -2063,6 +2601,1574 @@ const transitionPayment = async (
 
   const payment = await getPayment(client, tenantId, paymentId);
   return { status: 200, body: { payment } };
+};
+
+const listRouteProfiles = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  query: Record<string, string>
+): Promise<unknown[]> => {
+  const statusFilter = stringQuery(query, "status");
+  const result = await client.query(
+    `select id,
+            platform_tenant_id,
+            profile_code,
+            profile_name,
+            strategy_type,
+            weight_cost,
+            weight_latency,
+            weight_liquidity,
+            weight_reliability,
+            status,
+            created_by,
+            created_at,
+            updated_at
+       from route_profiles
+      where platform_tenant_id = $1
+        and ($2::text is null or status = $2)
+      order by updated_at desc, created_at desc
+      limit 200`,
+    [tenantId, statusFilter ? normalizeLifecycleStatus(statusFilter) : null]
+  );
+  return result.rows.map((row) => mapRouteProfileRow(row as Record<string, unknown>));
+};
+
+const getRouteProfile = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  profileId: string
+): Promise<unknown | undefined> => {
+  const result = await client.query(
+    `select id,
+            platform_tenant_id,
+            profile_code,
+            profile_name,
+            strategy_type,
+            weight_cost,
+            weight_latency,
+            weight_liquidity,
+            weight_reliability,
+            status,
+            created_by,
+            created_at,
+            updated_at
+       from route_profiles
+      where id = $1 and platform_tenant_id = $2
+      limit 1`,
+    [profileId, tenantId]
+  );
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  return row ? mapRouteProfileRow(row) : undefined;
+};
+
+const createRouteProfile = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput
+): Promise<JsonResponse> => {
+  const profileCodeRaw = stringBody(input.body, "profileCode", stringBody(input.body, "profileName", "")).trim();
+  if (!profileCodeRaw) return { status: 400, body: { error: "profile_code_required" } };
+  const profileCode = profileCodeRaw.replace(/\s+/g, "_").toUpperCase();
+  const profileName = stringBody(input.body, "profileName", profileCode);
+  const strategyType = normalizeLifecycleStatus(optionalStringBody(input.body, "strategyType") ?? "weighted");
+  if (!isRouteStrategyType(strategyType)) return { status: 400, body: { error: "invalid_route_strategy_type" } };
+  const status = normalizeLifecycleStatus(optionalStringBody(input.body, "status") ?? "active");
+  if (!isRouteProfileStatus(status)) return { status: 400, body: { error: "invalid_route_profile_status" } };
+
+  const exists = await client.query(
+    `select id
+       from route_profiles
+      where platform_tenant_id = $1 and profile_code = $2
+      limit 1`,
+    [tenantId, profileCode]
+  );
+  if (exists.rows[0]) return { status: 409, body: { error: "route_profile_code_exists" } };
+
+  const profileId = randomUUID();
+  await client.query(
+    `insert into route_profiles
+      (id, platform_tenant_id, profile_code, profile_name, strategy_type,
+       weight_cost, weight_latency, weight_liquidity, weight_reliability,
+       status, created_by, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())`,
+    [
+      profileId,
+      tenantId,
+      profileCode,
+      profileName,
+      strategyType,
+      decimalBody(input.body, "weightCost", 0.25),
+      decimalBody(input.body, "weightLatency", 0.25),
+      decimalBody(input.body, "weightLiquidity", 0.25),
+      decimalBody(input.body, "weightReliability", 0.25),
+      status,
+      asUuidOrNull(input.actorUserId)
+    ]
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "routing.route_profile.created", {
+    profileId,
+    profileCode,
+    strategyType,
+    status
+  });
+
+  return { status: 201, body: { profile: await getRouteProfile(client, tenantId, profileId) } };
+};
+
+const patchRouteProfile = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  profileId: string
+): Promise<JsonResponse> => {
+  const result = await client.query(
+    `select id,
+            profile_name,
+            strategy_type,
+            weight_cost,
+            weight_latency,
+            weight_liquidity,
+            weight_reliability,
+            status
+       from route_profiles
+      where id = $1 and platform_tenant_id = $2
+      for update`,
+    [profileId, tenantId]
+  );
+  const current = result.rows[0] as Record<string, unknown> | undefined;
+  if (!current) return { status: 404, body: { error: "route_profile_not_found" } };
+
+  const nextStrategyType = normalizeLifecycleStatus(
+    optionalStringBody(input.body, "strategyType") ?? String(current.strategy_type ?? "weighted")
+  );
+  if (!isRouteStrategyType(nextStrategyType)) return { status: 400, body: { error: "invalid_route_strategy_type" } };
+
+  const nextStatus = normalizeLifecycleStatus(
+    optionalStringBody(input.body, "status") ?? String(current.status ?? "active")
+  );
+  if (!isRouteProfileStatus(nextStatus)) return { status: 400, body: { error: "invalid_route_profile_status" } };
+
+  const nextProfileName = optionalStringBody(input.body, "profileName") ?? String(current.profile_name ?? "Route Profile");
+  const weightCostFallback = decimalValue(current.weight_cost, 0.25);
+  const weightLatencyFallback = decimalValue(current.weight_latency, 0.25);
+  const weightLiquidityFallback = decimalValue(current.weight_liquidity, 0.25);
+  const weightReliabilityFallback = decimalValue(current.weight_reliability, 0.25);
+
+  await client.query(
+    `update route_profiles
+        set profile_name = $3,
+            strategy_type = $4,
+            weight_cost = $5,
+            weight_latency = $6,
+            weight_liquidity = $7,
+            weight_reliability = $8,
+            status = $9,
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [
+      profileId,
+      tenantId,
+      nextProfileName,
+      nextStrategyType,
+      decimalBody(input.body, "weightCost", weightCostFallback),
+      decimalBody(input.body, "weightLatency", weightLatencyFallback),
+      decimalBody(input.body, "weightLiquidity", weightLiquidityFallback),
+      decimalBody(input.body, "weightReliability", weightReliabilityFallback),
+      nextStatus
+    ]
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "routing.route_profile.updated", {
+    profileId,
+    strategyType: nextStrategyType,
+    status: nextStatus
+  });
+
+  return { status: 200, body: { profile: await getRouteProfile(client, tenantId, profileId) } };
+};
+
+const deleteRouteProfile = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  profileId: string
+): Promise<JsonResponse> => {
+  const profileResult = await client.query(
+    `select id, profile_code
+       from route_profiles
+      where id = $1 and platform_tenant_id = $2
+      for update`,
+    [profileId, tenantId]
+  );
+  const profile = profileResult.rows[0] as Record<string, unknown> | undefined;
+  if (!profile) return { status: 404, body: { error: "route_profile_not_found" } };
+
+  const bindingCountResult = await client.query(
+    `select count(*)::int as binding_count
+       from route_bindings
+      where platform_tenant_id = $1 and profile_id = $2`,
+    [tenantId, profileId]
+  );
+  const bindingCount = integerValue((bindingCountResult.rows[0] as Record<string, unknown> | undefined)?.binding_count, 0);
+  if (bindingCount > 0) {
+    return {
+      status: 409,
+      body: {
+        error: "route_profile_has_bindings",
+        detail: "Detach route bindings before deleting this route profile."
+      }
+    };
+  }
+
+  await client.query(
+    `delete from route_profiles
+      where id = $1 and platform_tenant_id = $2`,
+    [profileId, tenantId]
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "routing.route_profile.deleted", {
+    profileId,
+    profileCode: String(profile.profile_code ?? "")
+  });
+
+  return {
+    status: 200,
+    body: {
+      deleted: true,
+      profileId,
+      profileCode: String(profile.profile_code ?? "")
+    }
+  };
+};
+
+const listRouteBindings = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  query: Record<string, string>
+): Promise<unknown[]> => {
+  const activeFilter = parseQueryBoolean(stringQuery(query, "active"));
+  const result = await client.query(
+    `select binding.id,
+            binding.platform_tenant_id,
+            binding.profile_id,
+            binding.route_code,
+            binding.binding_scope,
+            binding.match_expression,
+            binding.priority,
+            binding.active,
+            binding.created_by,
+            binding.created_at,
+            binding.updated_at,
+            profile.profile_code,
+            profile.profile_name,
+            profile.strategy_type,
+            profile.status as profile_status
+       from route_bindings binding
+       join route_profiles profile
+         on profile.id = binding.profile_id
+        and profile.platform_tenant_id = binding.platform_tenant_id
+      where binding.platform_tenant_id = $1
+        and ($2::boolean is null or binding.active = $2)
+      order by binding.priority desc, binding.created_at desc
+      limit 200`,
+    [tenantId, activeFilter]
+  );
+  return result.rows.map((row) => mapRouteBindingRow(row as Record<string, unknown>));
+};
+
+const getRouteBinding = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  bindingId: string
+): Promise<unknown | undefined> => {
+  const result = await client.query(
+    `select binding.id,
+            binding.platform_tenant_id,
+            binding.profile_id,
+            binding.route_code,
+            binding.binding_scope,
+            binding.match_expression,
+            binding.priority,
+            binding.active,
+            binding.created_by,
+            binding.created_at,
+            binding.updated_at,
+            profile.profile_code,
+            profile.profile_name,
+            profile.strategy_type,
+            profile.status as profile_status
+       from route_bindings binding
+       join route_profiles profile
+         on profile.id = binding.profile_id
+        and profile.platform_tenant_id = binding.platform_tenant_id
+      where binding.id = $1 and binding.platform_tenant_id = $2
+      limit 1`,
+    [bindingId, tenantId]
+  );
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  return row ? mapRouteBindingRow(row) : undefined;
+};
+
+const createRouteBinding = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput
+): Promise<JsonResponse> => {
+  const profileId = stringBody(input.body, "profileId");
+  if (!isUuid(profileId)) return { status: 400, body: { error: "profile_id_required" } };
+  const profile = await client.query(
+    `select id
+       from route_profiles
+      where id = $1 and platform_tenant_id = $2
+      limit 1`,
+    [profileId, tenantId]
+  );
+  if (!profile.rows[0]) return { status: 404, body: { error: "route_profile_not_found" } };
+
+  const routeCodeRaw = stringBody(input.body, "routeCode", "").trim();
+  if (!routeCodeRaw) return { status: 400, body: { error: "route_code_required" } };
+  const routeCode = routeCodeRaw.replace(/\s+/g, "_").toUpperCase();
+  const bindingScope = normalizeLifecycleStatus(optionalStringBody(input.body, "bindingScope") ?? "default");
+  if (!isRouteBindingScope(bindingScope)) return { status: 400, body: { error: "invalid_route_binding_scope" } };
+
+  const exists = await client.query(
+    `select id
+       from route_bindings
+      where platform_tenant_id = $1 and route_code = $2
+      limit 1`,
+    [tenantId, routeCode]
+  );
+  if (exists.rows[0]) return { status: 409, body: { error: "route_binding_code_exists" } };
+
+  const bindingId = randomUUID();
+  await client.query(
+    `insert into route_bindings
+      (id, platform_tenant_id, profile_id, route_code, binding_scope, match_expression, priority, active, created_by, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now())`,
+    [
+      bindingId,
+      tenantId,
+      profileId,
+      routeCode,
+      bindingScope,
+      stringBody(input.body, "matchExpression", "*"),
+      integerBody(input.body, "priority", 100),
+      booleanBody(input.body, "active", true),
+      asUuidOrNull(input.actorUserId)
+    ]
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "routing.route_binding.created", {
+    bindingId,
+    profileId,
+    routeCode,
+    bindingScope
+  });
+
+  return { status: 201, body: { binding: await getRouteBinding(client, tenantId, bindingId) } };
+};
+
+const patchRouteBinding = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  bindingId: string
+): Promise<JsonResponse> => {
+  const bindingResult = await client.query(
+    `select id, profile_id, binding_scope, match_expression, priority, active
+       from route_bindings
+      where id = $1 and platform_tenant_id = $2
+      for update`,
+    [bindingId, tenantId]
+  );
+  const current = bindingResult.rows[0] as Record<string, unknown> | undefined;
+  if (!current) return { status: 404, body: { error: "route_binding_not_found" } };
+
+  const nextProfileId = optionalStringBody(input.body, "profileId") ?? String(current.profile_id);
+  if (!isUuid(nextProfileId)) return { status: 400, body: { error: "profile_id_required" } };
+  if (nextProfileId !== String(current.profile_id)) {
+    const profile = await client.query(
+      `select id from route_profiles where id = $1 and platform_tenant_id = $2 limit 1`,
+      [nextProfileId, tenantId]
+    );
+    if (!profile.rows[0]) return { status: 404, body: { error: "route_profile_not_found" } };
+  }
+
+  const nextBindingScope = normalizeLifecycleStatus(
+    optionalStringBody(input.body, "bindingScope") ?? String(current.binding_scope ?? "default")
+  );
+  if (!isRouteBindingScope(nextBindingScope)) return { status: 400, body: { error: "invalid_route_binding_scope" } };
+
+  await client.query(
+    `update route_bindings
+        set profile_id = $3,
+            binding_scope = $4,
+            match_expression = $5,
+            priority = $6,
+            active = $7,
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [
+      bindingId,
+      tenantId,
+      nextProfileId,
+      nextBindingScope,
+      optionalStringBody(input.body, "matchExpression") ?? String(current.match_expression ?? "*"),
+      integerBody(input.body, "priority", integerValue(current.priority, 100)),
+      booleanBody(input.body, "active", current.active === true)
+    ]
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "routing.route_binding.updated", {
+    bindingId,
+    profileId: nextProfileId,
+    bindingScope: nextBindingScope
+  });
+
+  return { status: 200, body: { binding: await getRouteBinding(client, tenantId, bindingId) } };
+};
+
+const deleteRouteBinding = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  bindingId: string
+): Promise<JsonResponse> => {
+  const result = await client.query(
+    `select id, route_code, profile_id
+       from route_bindings
+      where id = $1 and platform_tenant_id = $2
+      for update`,
+    [bindingId, tenantId]
+  );
+  const current = result.rows[0] as Record<string, unknown> | undefined;
+  if (!current) return { status: 404, body: { error: "route_binding_not_found" } };
+
+  await client.query(
+    `delete from route_bindings
+      where id = $1 and platform_tenant_id = $2`,
+    [bindingId, tenantId]
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "routing.route_binding.deleted", {
+    bindingId,
+    profileId: String(current.profile_id ?? ""),
+    routeCode: String(current.route_code ?? "")
+  });
+
+  return {
+    status: 200,
+    body: {
+      deleted: true,
+      bindingId,
+      routeCode: String(current.route_code ?? "")
+    }
+  };
+};
+
+const createInternalTreasuryPaymentInstruction = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput
+): Promise<JsonResponse> => {
+  const sourceAccountOfDigitalAssetId = stringBody(input.body, "sourceAccountOfDigitalAssetId", "");
+  const destinationAccountOfDigitalAssetId = stringBody(
+    input.body,
+    "destinationAccountOfDigitalAssetId",
+    sourceAccountOfDigitalAssetId
+  );
+  if (!isUuid(sourceAccountOfDigitalAssetId) || !isUuid(destinationAccountOfDigitalAssetId)) {
+    return { status: 400, body: { error: "source_and_destination_account_ids_must_be_uuid" } };
+  }
+
+  const amountMinorUnits = asBigInt(stringBody(input.body, "amountMinorUnits", "0"));
+  if (amountMinorUnits <= 0n) return { status: 400, body: { error: "amount_must_be_positive" } };
+
+  const settlementObligationIdRaw = optionalStringBody(input.body, "settlementObligationId");
+  const fundingReservationIdRaw = optionalStringBody(input.body, "fundingReservationId");
+  if (settlementObligationIdRaw && !isUuid(settlementObligationIdRaw)) {
+    return { status: 400, body: { error: "settlement_obligation_id_invalid" } };
+  }
+  if (fundingReservationIdRaw && !isUuid(fundingReservationIdRaw)) {
+    return { status: 400, body: { error: "funding_reservation_id_invalid" } };
+  }
+
+  const paymentInstructionId = randomUUID();
+  const instructionType = normalizeLifecycleStatus(optionalStringBody(input.body, "instructionType") ?? "internal_ada_settlement");
+  const currency = stringBody(input.body, "currency", "USD").toUpperCase();
+  const routeCode = stringBody(input.body, "routeCode", "unrouted");
+  const policyResolution = resolveInternalTreasuryInstructionPolicy(
+    instructionType,
+    optionalStringBody(input.body, "externalizationIntent")
+  );
+  if (policyResolution.error) {
+    return {
+      status: 400,
+      body: {
+        error: policyResolution.error,
+        detail: policyResolution.errorDetail
+      }
+    };
+  }
+
+  const evaluatedChecks: Array<{ key: string; passed: boolean }> = [];
+  if (policyResolution.requiresSourceFiatLink) {
+    const hasSourceFiat = await hasVerifiedFiatLinkedInstrument(client, tenantId, sourceAccountOfDigitalAssetId);
+    evaluatedChecks.push({ key: "verified_source_fiat_route_required", passed: hasSourceFiat });
+    if (!hasSourceFiat) {
+      return {
+        status: 409,
+        body: {
+          error: "verified_source_fiat_route_required",
+          policyClass: "fiat-required",
+          reasonCodes: ["verified_source_fiat_route_required"],
+          failedChecks: ["verified_source_fiat_route_required"]
+        }
+      };
+    }
+  }
+
+  if (policyResolution.requiresDestinationFiatLink) {
+    const hasDestinationFiat = await hasVerifiedFiatLinkedInstrument(client, tenantId, destinationAccountOfDigitalAssetId);
+    evaluatedChecks.push({ key: "verified_destination_fiat_route_required", passed: hasDestinationFiat });
+    if (!hasDestinationFiat) {
+      return {
+        status: 409,
+        body: {
+          error: "verified_destination_fiat_route_required",
+          policyClass: "fiat-required",
+          reasonCodes: ["verified_destination_fiat_route_required"],
+          failedChecks: ["verified_destination_fiat_route_required"]
+        }
+      };
+    }
+  }
+
+  if (policyResolution.requiresDestinationWalletLink) {
+    const hasDestinationWallet = await hasVerifiedWalletLinkedInstrument(client, tenantId, destinationAccountOfDigitalAssetId);
+    evaluatedChecks.push({ key: "verified_destination_wallet_route_required", passed: hasDestinationWallet });
+    if (!hasDestinationWallet) {
+      return {
+        status: 409,
+        body: {
+          error: "verified_destination_wallet_route_required",
+          policyClass: "wallet-required",
+          reasonCodes: ["verified_destination_wallet_route_required"],
+          failedChecks: ["verified_destination_wallet_route_required"]
+        }
+      };
+    }
+  }
+
+  const policyEvidence = {
+    policyVersion: "sprint7-1",
+    resolvedPolicyClass: policyResolution.resolvedPolicyClass,
+    externalizationIntent: policyResolution.externalizationIntent,
+    evaluatedChecks,
+    validationOutcome: "pass",
+    legPlan: policyResolution.legPlan
+  };
+
+  await client.query(
+    `insert into payment_instructions
+      (id, platform_tenant_id, source_account_of_digital_asset_id, destination_account_of_digital_asset_id,
+       settlement_obligation_id, funding_reservation_id, amount_minor_units, route_type,
+       instruction_type, currency, status, idempotency_key, correlation_id, created_by,
+       created_at, updated_at, route_evidence_json)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'draft', $11, $12, $13, now(), now(), $14::jsonb)`,
+    [
+      paymentInstructionId,
+      tenantId,
+      sourceAccountOfDigitalAssetId,
+      destinationAccountOfDigitalAssetId,
+      asUuidOrNull(settlementObligationIdRaw),
+      asUuidOrNull(fundingReservationIdRaw),
+      amountMinorUnits.toString(),
+      routeCode,
+      instructionType,
+      currency,
+      input.idempotencyKey,
+      input.correlationId,
+      asUuidOrNull(input.actorUserId),
+      JSON.stringify(policyEvidence)
+    ]
+  );
+
+  await recordRoutingAndSettlementEvent(
+    client,
+    tenantId,
+    paymentInstructionId,
+    undefined,
+    "payment_instruction.created",
+    asUuidOrNull(input.actorUserId),
+    {
+      paymentInstructionId,
+      instructionType,
+      routeCode,
+      resolvedPolicyClass: policyResolution.resolvedPolicyClass,
+      externalizationIntent: policyResolution.externalizationIntent,
+      legPlan: policyResolution.legPlan,
+      amountMinorUnits: amountMinorUnits.toString(),
+      currency
+    }
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "payment_instruction.created", {
+    paymentInstructionId,
+    instructionType,
+    routeCode,
+    resolvedPolicyClass: policyResolution.resolvedPolicyClass,
+    externalizationIntent: policyResolution.externalizationIntent,
+    legPlan: policyResolution.legPlan,
+    amountMinorUnits: amountMinorUnits.toString(),
+    currency
+  });
+
+  const paymentInstruction = await getInternalTreasuryPaymentInstructionDetail(client, tenantId, paymentInstructionId);
+  return { status: 201, body: { paymentInstruction } };
+};
+
+type InternalTreasuryPolicyClass = "virtual-only" | "wallet-required" | "fiat-required";
+type InternalTreasuryExternalizationIntent = "none" | "wallet" | "fiat";
+
+const normalizePolicyToken = (value: string | undefined): string =>
+  normalizeLifecycleStatus(value ?? "").replaceAll("-", "_");
+
+const parseExternalizationIntent = (input: string | undefined): {
+  intent?: InternalTreasuryExternalizationIntent;
+  error?: string;
+  errorDetail?: string;
+} => {
+  const normalized = normalizePolicyToken(input);
+  if (!normalized || normalized === "none" || normalized === "virtual_only" || normalized === "ada_transfer_only") {
+    return { intent: "none" };
+  }
+
+  const separators = /[|,]/;
+  if (separators.test(normalized)) {
+    const tokens = normalized
+      .split(separators)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0);
+    const hasWallet = tokens.some((token) => ["wallet", "wallet_externalization", "wallet_externalize"].includes(token));
+    const hasFiat = tokens.some((token) => ["fiat", "fiat_externalization", "fiat_externalize"].includes(token));
+    if (hasWallet && hasFiat) {
+      return {
+        error: "instruction_policy_ambiguous",
+        errorDetail: "Mixed wallet and fiat externalization in one instruction is not supported."
+      };
+    }
+  }
+
+  if (["wallet", "wallet_externalization", "wallet_externalize", "wallet_payout"].includes(normalized)) {
+    return { intent: "wallet" };
+  }
+  if (["fiat", "fiat_externalization", "fiat_externalize", "fiat_payout"].includes(normalized)) {
+    return { intent: "fiat" };
+  }
+  if (["both", "mixed", "wallet_and_fiat"].includes(normalized)) {
+    return {
+      error: "instruction_policy_ambiguous",
+      errorDetail: "Specify exactly one externalization intent: wallet or fiat."
+    };
+  }
+
+  return {
+    error: "externalization_intent_invalid",
+    errorDetail: "Allowed values are none, wallet, fiat."
+  };
+};
+
+const resolveInternalTreasuryInstructionPolicy = (
+  instructionType: string,
+  externalizationIntentInput: string | undefined
+): {
+  resolvedPolicyClass?: InternalTreasuryPolicyClass;
+  externalizationIntent?: InternalTreasuryExternalizationIntent;
+  requiresSourceFiatLink: boolean;
+  requiresDestinationFiatLink: boolean;
+  requiresDestinationWalletLink: boolean;
+  legPlan?: Array<{ leg: number; legType: string; policyClass: InternalTreasuryPolicyClass }>;
+  error?: string;
+  errorDetail?: string;
+} => {
+  const normalizedInstructionType = normalizePolicyToken(instructionType);
+  const externalization = parseExternalizationIntent(externalizationIntentInput);
+  if (externalization.error) {
+    return {
+      requiresSourceFiatLink: false,
+      requiresDestinationFiatLink: false,
+      requiresDestinationWalletLink: false,
+      error: externalization.error,
+      errorDetail: externalization.errorDetail
+    };
+  }
+
+  const intent = externalization.intent ?? "none";
+  const fiatInTypes = new Set(["fiat_in", "on_ramp", "fiat_on_ramp"]);
+  const fiatOutTypes = new Set(["fiat_out", "off_ramp", "fiat_off_ramp"]);
+  const walletTypes = new Set(["mint", "burn"]);
+  const virtualTypes = new Set(["internal_ada_settlement", "virtual_transfer", "ada_virtual_transfer", "ada_to_ada_internal"]);
+
+  if (fiatInTypes.has(normalizedInstructionType)) {
+    return {
+      resolvedPolicyClass: "fiat-required",
+      externalizationIntent: "none",
+      requiresSourceFiatLink: true,
+      requiresDestinationFiatLink: false,
+      requiresDestinationWalletLink: false,
+      legPlan: [{ leg: 1, legType: "fiat_in", policyClass: "fiat-required" }]
+    };
+  }
+
+  if (fiatOutTypes.has(normalizedInstructionType)) {
+    return {
+      resolvedPolicyClass: "fiat-required",
+      externalizationIntent: "none",
+      requiresSourceFiatLink: false,
+      requiresDestinationFiatLink: true,
+      requiresDestinationWalletLink: false,
+      legPlan: [{ leg: 1, legType: "fiat_out", policyClass: "fiat-required" }]
+    };
+  }
+
+  if (walletTypes.has(normalizedInstructionType)) {
+    return {
+      resolvedPolicyClass: "wallet-required",
+      externalizationIntent: "none",
+      requiresSourceFiatLink: false,
+      requiresDestinationFiatLink: false,
+      requiresDestinationWalletLink: true,
+      legPlan: [{ leg: 1, legType: normalizedInstructionType, policyClass: "wallet-required" }]
+    };
+  }
+
+  if (virtualTypes.has(normalizedInstructionType)) {
+    const baseLeg = { leg: 1, legType: "ada_virtual_transfer", policyClass: "virtual-only" as InternalTreasuryPolicyClass };
+    if (intent === "wallet") {
+      return {
+        resolvedPolicyClass: "virtual-only",
+        externalizationIntent: "wallet",
+        requiresSourceFiatLink: false,
+        requiresDestinationFiatLink: false,
+        requiresDestinationWalletLink: true,
+        legPlan: [baseLeg, { leg: 2, legType: "wallet_externalization", policyClass: "wallet-required" }]
+      };
+    }
+    if (intent === "fiat") {
+      return {
+        resolvedPolicyClass: "virtual-only",
+        externalizationIntent: "fiat",
+        requiresSourceFiatLink: false,
+        requiresDestinationFiatLink: true,
+        requiresDestinationWalletLink: false,
+        legPlan: [baseLeg, { leg: 2, legType: "fiat_externalization", policyClass: "fiat-required" }]
+      };
+    }
+    return {
+      resolvedPolicyClass: "virtual-only",
+      externalizationIntent: "none",
+      requiresSourceFiatLink: false,
+      requiresDestinationFiatLink: false,
+      requiresDestinationWalletLink: false,
+      legPlan: [baseLeg]
+    };
+  }
+
+  return {
+    requiresSourceFiatLink: false,
+    requiresDestinationFiatLink: false,
+    requiresDestinationWalletLink: false,
+    error: "instruction_type_policy_unmapped",
+    errorDetail: "Instruction type is not mapped to a policy class."
+  };
+};
+
+const hasVerifiedFiatLinkedInstrument = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  accountOfDigitalAssetId: string
+): Promise<boolean> => {
+  const result = await client.query(
+    `select id
+       from linked_instruments
+      where platform_tenant_id = $1
+        and account_of_digital_asset_id = $2
+        and rail_type = 'fiat'
+        and status = 'active'
+        and verification_status = 'verified'
+        and purpose in ('minting', 'bidirectional')
+      limit 1`,
+    [tenantId, accountOfDigitalAssetId]
+  );
+  return Boolean(result.rows[0]);
+};
+
+const hasVerifiedWalletLinkedInstrument = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  accountOfDigitalAssetId: string
+): Promise<boolean> => {
+  const result = await client.query(
+    `select id
+       from linked_instruments
+      where platform_tenant_id = $1
+        and account_of_digital_asset_id = $2
+        and instrument_type = 'circle_wallet'
+        and status = 'active'
+        and verification_status = 'verified'
+      limit 1`,
+    [tenantId, accountOfDigitalAssetId]
+  );
+  return Boolean(result.rows[0]);
+};
+
+const transitionInternalTreasuryPaymentInstruction = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  paymentInstructionId: string,
+  action: string
+): Promise<JsonResponse> => {
+  if (action === "route") {
+    return routeInternalTreasuryPaymentInstruction(client, tenantId, input, paymentInstructionId);
+  }
+  if (action === "execute" || action === "retry") {
+    return executeInternalTreasuryPaymentInstruction(client, tenantId, input, paymentInstructionId, action === "retry");
+  }
+  if (action === "cancel") {
+    return cancelInternalTreasuryPaymentInstruction(client, tenantId, input, paymentInstructionId);
+  }
+  return { status: 400, body: { error: "unsupported_payment_instruction_action" } };
+};
+
+const routeInternalTreasuryPaymentInstruction = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  paymentInstructionId: string
+): Promise<JsonResponse> => {
+  const instructionResult = await client.query(
+    `select pi.id,
+            pi.source_account_of_digital_asset_id,
+            pi.destination_account_of_digital_asset_id,
+            pi.amount_minor_units,
+            pi.route_type,
+            pi.instruction_type,
+            pi.currency,
+            pi.status,
+            source_account.use_purpose as source_use_purpose,
+            destination_account.use_purpose as destination_use_purpose,
+            source_account.metadata as source_metadata,
+            destination_account.metadata as destination_metadata,
+            exists(
+              select 1
+                from linked_instruments linked
+               where linked.platform_tenant_id = pi.platform_tenant_id
+                 and linked.account_of_digital_asset_id = pi.source_account_of_digital_asset_id
+                 and linked.instrument_type = 'circle_wallet'
+                 and linked.status = 'active'
+                 and linked.verification_status = 'verified'
+            ) as source_has_verified_wallet_link,
+            exists(
+              select 1
+                from linked_instruments linked
+               where linked.platform_tenant_id = pi.platform_tenant_id
+                 and linked.account_of_digital_asset_id = pi.source_account_of_digital_asset_id
+                 and linked.rail_type = 'fiat'
+                 and linked.status = 'active'
+                 and linked.verification_status = 'verified'
+                 and linked.purpose in ('minting', 'bidirectional')
+            ) as source_has_verified_fiat_link,
+            exists(
+              select 1
+                from linked_instruments linked
+               where linked.platform_tenant_id = pi.platform_tenant_id
+                 and linked.account_of_digital_asset_id = pi.destination_account_of_digital_asset_id
+                 and linked.instrument_type = 'circle_wallet'
+                 and linked.status = 'active'
+                 and linked.verification_status = 'verified'
+            ) as destination_has_verified_wallet_link,
+            exists(
+              select 1
+                from linked_instruments linked
+               where linked.platform_tenant_id = pi.platform_tenant_id
+                 and linked.account_of_digital_asset_id = pi.destination_account_of_digital_asset_id
+                 and linked.rail_type = 'fiat'
+                 and linked.status = 'active'
+                 and linked.verification_status = 'verified'
+                 and linked.purpose in ('minting', 'bidirectional')
+            ) as destination_has_verified_fiat_link
+       from payment_instructions pi
+  left join accounts_of_digital_asset source_account
+         on source_account.id = pi.source_account_of_digital_asset_id
+        and source_account.platform_tenant_id = pi.platform_tenant_id
+  left join accounts_of_digital_asset destination_account
+         on destination_account.id = pi.destination_account_of_digital_asset_id
+        and destination_account.platform_tenant_id = pi.platform_tenant_id
+      where pi.id = $1 and pi.platform_tenant_id = $2
+      for update of pi`,
+    [paymentInstructionId, tenantId]
+  );
+  const instructionRow = instructionResult.rows[0] as Record<string, unknown> | undefined;
+  if (!instructionRow) return { status: 404, body: { error: "payment_instruction_not_found" } };
+
+  const currentStatus = normalizeLifecycleStatus(instructionRow.status);
+  if (["cancelled", "settled"].includes(currentStatus)) {
+    return { status: 409, body: { error: "payment_instruction_not_routable", status: currentStatus } };
+  }
+
+  const forceReroute = booleanBody(input.body, "forceReroute", false);
+  if (!forceReroute && ["routed", "pending_execution", "executing"].includes(currentStatus)) {
+    const paymentInstruction = await getInternalTreasuryPaymentInstructionDetail(client, tenantId, paymentInstructionId);
+    return { status: 200, body: { paymentInstruction } };
+  }
+
+  const bindingsResult = await client.query(
+    `select binding.id as binding_id,
+            binding.profile_id,
+            binding.route_code,
+            binding.binding_scope,
+            binding.match_expression,
+            binding.priority,
+            profile.profile_code,
+            profile.profile_name,
+            profile.strategy_type,
+            profile.weight_cost,
+            profile.weight_latency,
+            profile.weight_liquidity,
+            profile.weight_reliability
+       from route_bindings binding
+       join route_profiles profile
+         on profile.id = binding.profile_id
+        and profile.platform_tenant_id = binding.platform_tenant_id
+      where binding.platform_tenant_id = $1
+        and binding.active = true
+        and profile.status = 'active'`,
+    [tenantId]
+  );
+
+  const sourceMetadata =
+    instructionRow.source_metadata && typeof instructionRow.source_metadata === "object" && !Array.isArray(instructionRow.source_metadata)
+      ? instructionRow.source_metadata as Record<string, unknown>
+      : {};
+  const destinationMetadata =
+    instructionRow.destination_metadata && typeof instructionRow.destination_metadata === "object" && !Array.isArray(instructionRow.destination_metadata)
+      ? instructionRow.destination_metadata as Record<string, unknown>
+      : {};
+  const sourceHasVerifiedWalletLink = booleanValue(instructionRow.source_has_verified_wallet_link);
+  const sourceHasVerifiedFiatLink = booleanValue(instructionRow.source_has_verified_fiat_link);
+  const destinationHasVerifiedWalletLink = booleanValue(instructionRow.destination_has_verified_wallet_link);
+  const destinationHasVerifiedFiatLink = booleanValue(instructionRow.destination_has_verified_fiat_link);
+
+  const instructionContext = {
+    instructionType: normalizeLifecycleStatus(instructionRow.instruction_type ?? "internal_ada_settlement"),
+    currency: String(instructionRow.currency ?? "USD").toUpperCase(),
+    sourceAccountOfDigitalAssetId: String(instructionRow.source_account_of_digital_asset_id ?? ""),
+    destinationAccountOfDigitalAssetId: String(instructionRow.destination_account_of_digital_asset_id ?? ""),
+    amountMinorUnits: asBigInt(instructionRow.amount_minor_units),
+    sourceUsePurpose: toMatchText(instructionRow.source_use_purpose),
+    destinationUsePurpose: toMatchText(instructionRow.destination_use_purpose),
+    sourceRegion: metadataMatchText(sourceMetadata, ["region", "country", "jurisdiction", "market"]),
+    destinationRegion: metadataMatchText(destinationMetadata, ["region", "country", "jurisdiction", "market"]),
+    sourceExternalReference: metadataMatchText(sourceMetadata, ["external_reference", "externalReference", "reference"]),
+    destinationExternalReference: metadataMatchText(destinationMetadata, ["external_reference", "externalReference", "reference"]),
+    sourceHasVerifiedWalletLink,
+    sourceHasVerifiedFiatLink,
+    destinationHasVerifiedWalletLink,
+    destinationHasVerifiedFiatLink,
+    sourceLinkedInstrumentClass: resolveLinkedInstrumentClass(sourceHasVerifiedWalletLink, sourceHasVerifiedFiatLink),
+    destinationLinkedInstrumentClass: resolveLinkedInstrumentClass(destinationHasVerifiedWalletLink, destinationHasVerifiedFiatLink)
+  };
+
+  const candidates = bindingsResult.rows
+    .map((row) => {
+      const binding = row as Record<string, unknown>;
+      const matches = routeBindingMatches(
+        String(binding.binding_scope ?? "default"),
+        String(binding.match_expression ?? "*"),
+        instructionContext
+      );
+      if (!matches) return undefined;
+      const score = computeRouteCandidateScore(binding, instructionContext.amountMinorUnits);
+      return {
+        bindingId: String(binding.binding_id),
+        profileId: String(binding.profile_id),
+        routeCode: String(binding.route_code),
+        bindingScope: normalizeLifecycleStatus(binding.binding_scope),
+        matchExpression: String(binding.match_expression ?? "*"),
+        priority: integerValue(binding.priority, 100),
+        profileCode: String(binding.profile_code ?? ""),
+        profileName: String(binding.profile_name ?? ""),
+        strategyType: normalizeLifecycleStatus(binding.strategy_type),
+        score,
+        scoreInputs: {
+          weightCost: decimalValue(binding.weight_cost, 0.25),
+          weightLatency: decimalValue(binding.weight_latency, 0.25),
+          weightLiquidity: decimalValue(binding.weight_liquidity, 0.25),
+          weightReliability: decimalValue(binding.weight_reliability, 0.25)
+        }
+      };
+    })
+    .filter((candidate): candidate is {
+      bindingId: string;
+      profileId: string;
+      routeCode: string;
+      bindingScope: string;
+      matchExpression: string;
+      priority: number;
+      profileCode: string;
+      profileName: string;
+      strategyType: string;
+      score: number;
+      scoreInputs: { weightCost: number; weightLatency: number; weightLiquidity: number; weightReliability: number };
+    } => Boolean(candidate))
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      if (right.priority !== left.priority) return right.priority - left.priority;
+      if (left.profileCode !== right.profileCode) return left.profileCode.localeCompare(right.profileCode);
+      if (left.routeCode !== right.routeCode) return left.routeCode.localeCompare(right.routeCode);
+      return left.bindingId.localeCompare(right.bindingId);
+    });
+
+  if (!candidates.length) {
+    return { status: 409, body: { error: "route_candidates_not_found" } };
+  }
+
+  const overrideRouteCode = optionalStringBody(input.body, "overrideRouteCode")?.trim().toUpperCase();
+  const overrideReason = optionalStringBody(input.body, "overrideReason");
+  const selected = overrideRouteCode
+    ? candidates.find((candidate) => candidate.routeCode === overrideRouteCode)
+    : candidates[0];
+  if (!selected) return { status: 400, body: { error: "override_route_code_not_eligible" } };
+
+  const selectedLegRequirement = deriveBindingLegRequirement(selected.matchExpression, instructionContext);
+  if (selectedLegRequirement.requiresMultiLegs && !selectedLegRequirement.resolvedSecondLegType) {
+    return {
+      status: 409,
+      body: {
+        error: "multi_leg_route_requirement_not_satisfied",
+        detail: "Selected binding requires linked instrument-based multi-leg execution, but no eligible linked instrument was found.",
+        routeCode: selected.routeCode,
+        bindingId: selected.bindingId,
+        requiredLinkedInstrument: selectedLegRequirement.requiredLinkedInstrument ?? "wallet_or_fiat"
+      }
+    };
+  }
+
+  const selectedLegPlan = selectedLegRequirement.requiresMultiLegs && selectedLegRequirement.resolvedSecondLegType
+    ? [
+      { leg: 1, legType: "ada_virtual_transfer", policyClass: "virtual-only" as InternalTreasuryPolicyClass },
+      {
+        leg: 2,
+        legType: selectedLegRequirement.resolvedSecondLegType,
+        policyClass: selectedLegRequirement.requiredPolicyClass ?? "virtual-only"
+      }
+    ]
+    : [{ leg: 1, legType: instructionContext.instructionType, policyClass: "virtual-only" as InternalTreasuryPolicyClass }];
+
+  const decisionReason = overrideRouteCode
+    ? `manual override selected ${selected.routeCode}`
+    : "selected highest deterministic score";
+  const candidateScoresJson = {
+    evaluatedAt: new Date().toISOString(),
+    instructionContext: {
+      instructionType: instructionContext.instructionType,
+      currency: instructionContext.currency,
+      amountMinorUnits: instructionContext.amountMinorUnits.toString(),
+      sourceLinkedInstrumentClass: instructionContext.sourceLinkedInstrumentClass,
+      destinationLinkedInstrumentClass: instructionContext.destinationLinkedInstrumentClass,
+      sourceHasVerifiedWalletLink: instructionContext.sourceHasVerifiedWalletLink,
+      sourceHasVerifiedFiatLink: instructionContext.sourceHasVerifiedFiatLink,
+      destinationHasVerifiedWalletLink: instructionContext.destinationHasVerifiedWalletLink,
+      destinationHasVerifiedFiatLink: instructionContext.destinationHasVerifiedFiatLink
+    },
+    candidates,
+    selected: {
+      bindingId: selected.bindingId,
+      profileId: selected.profileId,
+      routeCode: selected.routeCode,
+      score: selected.score,
+      requiresMultiLegs: selectedLegRequirement.requiresMultiLegs,
+      requiredLinkedInstrument: selectedLegRequirement.requiredLinkedInstrument ?? null,
+      resolvedSecondLegType: selectedLegRequirement.resolvedSecondLegType ?? null,
+      selectedLegPlan
+    },
+    multiLegRequired: selectedLegRequirement.requiresMultiLegs,
+    selectedLegPlan
+  };
+
+  const existingDecisionResult = await client.query(
+    `select id
+       from routing_decisions
+      where payment_instruction_id = $1 and platform_tenant_id = $2
+      limit 1
+      for update`,
+    [paymentInstructionId, tenantId]
+  );
+  const existingDecisionId = existingDecisionResult.rows[0]?.id as string | undefined;
+  const decisionId = existingDecisionId ?? randomUUID();
+  if (existingDecisionId) {
+    await client.query(
+      `update routing_decisions
+          set selected_route_code = $3,
+              selected_profile_id = $4,
+              decision_reason = $5,
+              candidate_scores_json = $6::jsonb,
+              override_applied = $7,
+              override_reason = $8,
+              decided_by = $9,
+              decided_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [
+        decisionId,
+        tenantId,
+        selected.routeCode,
+        selected.profileId,
+        decisionReason,
+        JSON.stringify(candidateScoresJson),
+        Boolean(overrideRouteCode),
+        overrideReason ?? null,
+        asUuidOrNull(input.actorUserId)
+      ]
+    );
+  } else {
+    await client.query(
+      `insert into routing_decisions
+        (id, platform_tenant_id, payment_instruction_id, selected_route_code, selected_profile_id,
+         decision_reason, candidate_scores_json, override_applied, override_reason, decided_by, decided_at)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, now())`,
+      [
+        decisionId,
+        tenantId,
+        paymentInstructionId,
+        selected.routeCode,
+        selected.profileId,
+        decisionReason,
+        JSON.stringify(candidateScoresJson),
+        Boolean(overrideRouteCode),
+        overrideReason ?? null,
+        asUuidOrNull(input.actorUserId)
+      ]
+    );
+  }
+
+  await client.query(
+    `update payment_instructions
+        set route_type = $3,
+            status = 'routed',
+            routed_at = now(),
+            updated_at = now(),
+            route_evidence_json = $4::jsonb
+      where id = $1 and platform_tenant_id = $2`,
+    [paymentInstructionId, tenantId, selected.routeCode, JSON.stringify(candidateScoresJson)]
+  );
+
+  await recordRoutingAndSettlementEvent(
+    client,
+    tenantId,
+    paymentInstructionId,
+    undefined,
+    "payment_instruction.routed",
+    asUuidOrNull(input.actorUserId),
+    {
+      decisionId,
+      selectedRouteCode: selected.routeCode,
+      selectedProfileId: selected.profileId,
+      overrideApplied: Boolean(overrideRouteCode),
+      overrideReason: overrideReason ?? null
+    }
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "payment_instruction.routed", {
+    paymentInstructionId,
+    decisionId,
+    selectedRouteCode: selected.routeCode,
+    selectedProfileId: selected.profileId,
+    overrideApplied: Boolean(overrideRouteCode)
+  });
+
+  const paymentInstruction = await getInternalTreasuryPaymentInstructionDetail(client, tenantId, paymentInstructionId);
+  return { status: 200, body: { paymentInstruction } };
+};
+
+const executeInternalTreasuryPaymentInstruction = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  paymentInstructionId: string,
+  isRetry: boolean
+): Promise<JsonResponse> => {
+  const journalEntryIdInput = optionalStringBody(input.body, "journalEntryId");
+  if (journalEntryIdInput && !isUuid(journalEntryIdInput)) {
+    return { status: 400, body: { error: "journal_entry_id_invalid" } };
+  }
+
+  const instructionResult = await client.query(
+    `select id,
+            source_account_of_digital_asset_id,
+            destination_account_of_digital_asset_id,
+            settlement_obligation_id,
+            funding_reservation_id,
+            amount_minor_units,
+            route_type,
+            instruction_type,
+            currency,
+            status
+       from payment_instructions
+      where id = $1 and platform_tenant_id = $2
+      for update`,
+    [paymentInstructionId, tenantId]
+  );
+  const instructionRow = instructionResult.rows[0] as Record<string, unknown> | undefined;
+  if (!instructionRow) return { status: 404, body: { error: "payment_instruction_not_found" } };
+
+  const currentStatus = normalizeLifecycleStatus(instructionRow.status);
+  if (currentStatus === "cancelled") return { status: 409, body: { error: "payment_instruction_cancelled" } };
+  if (currentStatus === "settled") {
+    const paymentInstruction = await getInternalTreasuryPaymentInstructionDetail(client, tenantId, paymentInstructionId);
+    return { status: 200, body: { paymentInstruction } };
+  }
+  if (!isRetry && !["routed", "pending_execution", "executing", "failed"].includes(currentStatus)) {
+    return { status: 409, body: { error: "payment_instruction_not_executable", status: currentStatus } };
+  }
+
+  const decisionResult = await client.query(
+    `select id, selected_route_code, selected_profile_id, override_applied, override_reason, decision_reason, candidate_scores_json, decided_by, decided_at
+       from routing_decisions
+      where payment_instruction_id = $1 and platform_tenant_id = $2
+      order by decided_at desc
+      limit 1`,
+    [paymentInstructionId, tenantId]
+  );
+  const decisionRow = decisionResult.rows[0] as Record<string, unknown> | undefined;
+  const resolvedRouteCode = String(decisionRow?.selected_route_code ?? instructionRow.route_type ?? "");
+  if (!resolvedRouteCode || resolvedRouteCode === "unrouted") {
+    return { status: 409, body: { error: "route_decision_required" } };
+  }
+
+  const settlementResult = await client.query(
+    `select id,
+            status,
+            journal_entry_id,
+            failure_reason
+       from internal_ada_settlements
+      where payment_instruction_id = $1 and platform_tenant_id = $2
+      limit 1
+      for update`,
+    [paymentInstructionId, tenantId]
+  );
+  const currentSettlement = settlementResult.rows[0] as Record<string, unknown> | undefined;
+  const currentSettlementStatus = normalizeLifecycleStatus(currentSettlement?.status);
+  if (isRetry && currentSettlement && currentSettlementStatus !== "failed") {
+    return { status: 409, body: { error: "settlement_retry_invalid_state", status: currentSettlementStatus } };
+  }
+
+  const settlementId = String(currentSettlement?.id ?? randomUUID());
+  if (!currentSettlement) {
+    await client.query(
+      `insert into internal_ada_settlements
+        (id, platform_tenant_id, payment_instruction_id, route_code, source_account_of_digital_asset_id,
+         destination_account_of_digital_asset_id, amount_minor_units, status, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, 'pending', now(), now())`,
+      [
+        settlementId,
+        tenantId,
+        paymentInstructionId,
+        resolvedRouteCode,
+        String(instructionRow.source_account_of_digital_asset_id),
+        String(instructionRow.destination_account_of_digital_asset_id),
+        asBigInt(instructionRow.amount_minor_units).toString()
+      ]
+    );
+  }
+
+  await client.query(
+    `update payment_instructions
+        set status = 'executing',
+            failed_at = null,
+            updated_at = now(),
+            terminal_at = null
+      where id = $1 and platform_tenant_id = $2`,
+    [paymentInstructionId, tenantId]
+  );
+  await client.query(
+    `update internal_ada_settlements
+        set status = 'executing',
+            failure_reason = null,
+            started_at = coalesce(started_at, now()),
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [settlementId, tenantId]
+  );
+
+  await recordRoutingAndSettlementEvent(
+    client,
+    tenantId,
+    paymentInstructionId,
+    settlementId,
+    "internal_ada_settlement.executing",
+    asUuidOrNull(input.actorUserId),
+    {
+      paymentInstructionId,
+      settlementId,
+      routeCode: resolvedRouteCode,
+      retry: isRetry
+    }
+  );
+
+  try {
+    const fundingReservationId = asUuidOrNull(String(instructionRow.funding_reservation_id ?? ""));
+    const amountMinorUnits = asBigInt(instructionRow.amount_minor_units);
+    if (fundingReservationId) {
+      const consumeResult = await transitionFundingReservation(
+        client,
+        tenantId,
+        {
+          ...input,
+          body: {
+            ...input.body,
+            amountMinorUnits: amountMinorUnits.toString(),
+            reasonCode: optionalStringBody(input.body, "reasonCode") ?? "settlement_execution"
+          }
+        },
+        fundingReservationId,
+        "consume"
+      );
+      if (consumeResult.status >= 400) {
+        await markInternalTreasuryPaymentInstructionFailed(
+          client,
+          tenantId,
+          paymentInstructionId,
+          settlementId,
+          "funding_reservation_consume_failed"
+        );
+        return {
+          status: consumeResult.status,
+          body: {
+            error: "funding_reservation_consume_failed",
+            details: consumeResult.body
+          }
+        };
+      }
+    }
+
+    const journalEntryId = journalEntryIdInput
+      ?? await postFundingJournal(client, tenantId, input, {
+        sourceEventId: settlementId,
+        accountingEventType: "internal_ada_settlement.settled",
+        description: `Internal ADA settlement ${paymentInstructionId}`,
+        lines: [
+          {
+            accountOfDigitalAssetId: String(instructionRow.source_account_of_digital_asset_id),
+            ledgerAccountCode: "10020",
+            assetCode: "USDC",
+            debitMinorUnits: amountMinorUnits.toString(),
+            creditMinorUnits: "0"
+          },
+          {
+            accountOfDigitalAssetId: String(instructionRow.destination_account_of_digital_asset_id),
+            ledgerAccountCode: "20400",
+            assetCode: "USDC",
+            debitMinorUnits: "0",
+            creditMinorUnits: amountMinorUnits.toString()
+          }
+        ]
+      });
+
+    const providerReferenceId = optionalStringBody(input.body, "providerReferenceId") ?? randomUUID();
+    await client.query(
+      `update internal_ada_settlements
+          set status = 'settled',
+              failure_reason = null,
+              provider_reference_id = $3,
+              journal_entry_id = $4,
+              settled_at = now(),
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [settlementId, tenantId, providerReferenceId, journalEntryId]
+    );
+
+    await client.query(
+      `update payment_instructions
+          set status = 'settled',
+              executed_at = now(),
+              failed_at = null,
+              terminal_at = now(),
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [paymentInstructionId, tenantId]
+    );
+
+    await recordRoutingAndSettlementEvent(
+      client,
+      tenantId,
+      paymentInstructionId,
+      settlementId,
+      "internal_ada_settlement.settled",
+      asUuidOrNull(input.actorUserId),
+      {
+        paymentInstructionId,
+        settlementId,
+        routeCode: resolvedRouteCode,
+        providerReferenceId,
+        journalEntryId,
+        amountMinorUnits: amountMinorUnits.toString(),
+        currency: String(instructionRow.currency ?? "USD").toUpperCase()
+      }
+    );
+
+    await writeAuditAndOutbox(client, tenantId, input, "payment_instruction.settled", {
+      paymentInstructionId,
+      settlementId,
+      routeCode: resolvedRouteCode,
+      providerReferenceId,
+      journalEntryId,
+      amountMinorUnits: amountMinorUnits.toString(),
+      currency: String(instructionRow.currency ?? "USD").toUpperCase(),
+      retry: isRetry
+    });
+  } catch (error) {
+    const failureReason = error instanceof Error ? error.message : "internal_ada_settlement_failed";
+    await markInternalTreasuryPaymentInstructionFailed(client, tenantId, paymentInstructionId, settlementId, failureReason);
+
+    await recordRoutingAndSettlementEvent(
+      client,
+      tenantId,
+      paymentInstructionId,
+      settlementId,
+      "internal_ada_settlement.failed",
+      asUuidOrNull(input.actorUserId),
+      {
+        paymentInstructionId,
+        settlementId,
+        routeCode: resolvedRouteCode,
+        failureReason
+      }
+    );
+
+    await writeAuditAndOutbox(client, tenantId, input, "payment_instruction.failed", {
+      paymentInstructionId,
+      settlementId,
+      routeCode: resolvedRouteCode,
+      failureReason,
+      retry: isRetry
+    });
+
+    return { status: 409, body: { error: "internal_ada_settlement_failed", detail: failureReason } };
+  }
+
+  const paymentInstruction = await getInternalTreasuryPaymentInstructionDetail(client, tenantId, paymentInstructionId);
+  return { status: 200, body: { paymentInstruction } };
+};
+
+const cancelInternalTreasuryPaymentInstruction = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  input: PostgresCommandInput,
+  paymentInstructionId: string
+): Promise<JsonResponse> => {
+  const instructionResult = await client.query(
+    `select id, status
+       from payment_instructions
+      where id = $1 and platform_tenant_id = $2
+      for update`,
+    [paymentInstructionId, tenantId]
+  );
+  const instruction = instructionResult.rows[0] as Record<string, unknown> | undefined;
+  if (!instruction) return { status: 404, body: { error: "payment_instruction_not_found" } };
+
+  const currentStatus = normalizeLifecycleStatus(instruction.status);
+  if (currentStatus === "settled") {
+    return { status: 409, body: { error: "payment_instruction_cancel_not_allowed", status: currentStatus } };
+  }
+  if (currentStatus === "executing") {
+    return { status: 409, body: { error: "payment_instruction_cancel_not_allowed", status: currentStatus } };
+  }
+  if (currentStatus === "cancelled") {
+    const paymentInstruction = await getInternalTreasuryPaymentInstructionDetail(client, tenantId, paymentInstructionId);
+    return { status: 200, body: { paymentInstruction } };
+  }
+
+  const settlementResult = await client.query(
+    `select id, status
+       from internal_ada_settlements
+      where payment_instruction_id = $1 and platform_tenant_id = $2
+      limit 1
+      for update`,
+    [paymentInstructionId, tenantId]
+  );
+  const settlement = settlementResult.rows[0] as Record<string, unknown> | undefined;
+
+  await client.query(
+    `update payment_instructions
+        set status = 'cancelled',
+            cancelled_at = now(),
+            terminal_at = now(),
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [paymentInstructionId, tenantId]
+  );
+
+  if (settlement && !["settled", "cancelled"].includes(normalizeLifecycleStatus(settlement.status))) {
+    await client.query(
+      `update internal_ada_settlements
+          set status = 'cancelled',
+              updated_at = now()
+        where id = $1 and platform_tenant_id = $2`,
+      [String(settlement.id), tenantId]
+    );
+  }
+
+  await recordRoutingAndSettlementEvent(
+    client,
+    tenantId,
+    paymentInstructionId,
+    settlement ? String(settlement.id) : undefined,
+    "payment_instruction.cancelled",
+    asUuidOrNull(input.actorUserId),
+    {
+      paymentInstructionId,
+      settlementId: settlement ? String(settlement.id) : undefined,
+      fromStatus: currentStatus
+    }
+  );
+
+  await writeAuditAndOutbox(client, tenantId, input, "payment_instruction.cancelled", {
+    paymentInstructionId,
+    settlementId: settlement ? String(settlement.id) : undefined,
+    fromStatus: currentStatus
+  });
+
+  const paymentInstruction = await getInternalTreasuryPaymentInstructionDetail(client, tenantId, paymentInstructionId);
+  return { status: 200, body: { paymentInstruction } };
+};
+
+const markInternalTreasuryPaymentInstructionFailed = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  paymentInstructionId: string,
+  settlementId: string,
+  failureReason: string
+): Promise<void> => {
+  await client.query(
+    `update internal_ada_settlements
+        set status = 'failed',
+            failure_reason = $3,
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [settlementId, tenantId, failureReason]
+  );
+  await client.query(
+    `update payment_instructions
+        set status = 'failed',
+            failed_at = now(),
+            terminal_at = now(),
+            updated_at = now()
+      where id = $1 and platform_tenant_id = $2`,
+    [paymentInstructionId, tenantId]
+  );
 };
 
 const createFiatRedemption = async (
@@ -2589,13 +4695,23 @@ export const processFundingInstructionWebhookEvent = async (
   webhookEventId: string,
   event: NormalizedCircleWebhookEvent
 ): Promise<void> => {
+  const eventAmountMinorUnits = asBigInt(event.amountMinorUnits);
   const instruction = await resolveFundingInstructionForWebhook(client, tenantId, event);
   if (!instruction) {
-    await registerOrphanWebhookBreak(client, tenantId, webhookEventId, event, undefined);
+    const shouldRegisterOrphanBreak = Boolean(
+      event.fundingInstructionId
+      || event.providerReferenceId
+      || event.accountOfDigitalAssetId
+      || event.sourceAccountOfDigitalAssetId
+      || event.destinationAccountOfDigitalAssetId
+      || eventAmountMinorUnits > 0n
+    );
+    if (shouldRegisterOrphanBreak) {
+      await registerOrphanWebhookBreak(client, tenantId, webhookEventId, event, undefined);
+    }
     return;
   }
 
-  const eventAmountMinorUnits = asBigInt(event.amountMinorUnits);
   const instructionAmountMinorUnits = asBigInt(instruction.amount_minor_units);
   const amountMinorUnits = eventAmountMinorUnits > 0n
     ? eventAmountMinorUnits
@@ -2762,7 +4878,7 @@ export const processFundingInstructionWebhookEvent = async (
   if (!shouldFinalize) return;
 
   if (instructionRole === "internal_treasury_mint" && String(instruction.status ?? "") !== "pending_confirmation") {
-    throw new Error(`funding_instruction_not_pending_confirmation:${String(instruction.status ?? "unknown")}`);
+    return;
   }
 
   if (instructionRole === "internal_treasury_mint") {
@@ -3941,7 +6057,20 @@ const listFundingReservations = async (
             settlement_obligation_id,
             account_of_digital_asset_id,
             amount_minor_units,
+            consumed_minor_units,
+            available_minor_units_snapshot,
+            priority,
             status,
+            reason_code,
+            status_reason,
+            provider_reference_id,
+            expires_at,
+            activated_at,
+            consumed_at,
+            released_at,
+            cancelled_at,
+            expired_at,
+            idempotency_key,
             created_at
        from funding_reservations
       where platform_tenant_id = $1
@@ -3963,7 +6092,20 @@ const getFundingReservation = async (
             settlement_obligation_id,
             account_of_digital_asset_id,
             amount_minor_units,
+            consumed_minor_units,
+            available_minor_units_snapshot,
+            priority,
             status,
+            reason_code,
+            status_reason,
+            provider_reference_id,
+            expires_at,
+            activated_at,
+            consumed_at,
+            released_at,
+            cancelled_at,
+            expired_at,
+            idempotency_key,
             created_at
        from funding_reservations
       where id = $1 and platform_tenant_id = $2`,
@@ -3971,6 +6113,148 @@ const getFundingReservation = async (
   );
   const row = result.rows[0];
   return row ? mapFundingReservationRow(row) : undefined;
+};
+
+const listSettlementObligations = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  query: Record<string, string | undefined>
+): Promise<unknown[]> => {
+  const status = optionalStringBody(query, "status");
+  const businessClientId = optionalStringBody(query, "businessClientId");
+  const dueFrom = optionalStringBody(query, "dueFrom");
+  const dueTo = optionalStringBody(query, "dueTo");
+
+  const result = await client.query(
+    `select id,
+            platform_tenant_id,
+            obligation_type,
+            coalesce(business_client_id, supplier_business_client_id, buyer_business_client_id) as business_client_id,
+            principal_minor_units,
+            fulfilled_minor_units,
+            currency,
+            status,
+            due_at,
+            source_reference_id,
+            source_reference_type,
+            idempotency_key,
+            created_by,
+            created_at,
+            updated_at
+       from settlement_obligations
+      where platform_tenant_id = $1
+        and ($2::text is null or status = $2)
+        and ($3::uuid is null or coalesce(business_client_id, supplier_business_client_id, buyer_business_client_id) = $3::uuid)
+        and ($4::timestamptz is null or due_at >= $4::timestamptz)
+        and ($5::timestamptz is null or due_at <= $5::timestamptz)
+      order by created_at desc
+      limit 200`,
+    [tenantId, status, asUuidOrNull(businessClientId), dueFrom ?? null, dueTo ?? null]
+  );
+
+  return result.rows.map((row) => mapSettlementObligationRow(row as Record<string, unknown>));
+};
+
+const getSettlementObligationDetail = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  obligationId: string
+): Promise<unknown | undefined> => {
+  const obligationResult = await client.query(
+    `select id,
+            platform_tenant_id,
+            obligation_type,
+            coalesce(business_client_id, supplier_business_client_id, buyer_business_client_id) as business_client_id,
+            principal_minor_units,
+            fulfilled_minor_units,
+            currency,
+            status,
+            due_at,
+            source_reference_id,
+            source_reference_type,
+            idempotency_key,
+            created_by,
+            created_at,
+            updated_at
+       from settlement_obligations
+      where id = $1 and platform_tenant_id = $2
+      limit 1`,
+    [obligationId, tenantId]
+  );
+  const obligationRow = obligationResult.rows[0] as Record<string, unknown> | undefined;
+  if (!obligationRow) return undefined;
+
+  const reservationsResult = await client.query(
+    `select id,
+            platform_tenant_id,
+            settlement_obligation_id,
+            account_of_digital_asset_id,
+            amount_minor_units,
+            consumed_minor_units,
+            available_minor_units_snapshot,
+            priority,
+            status,
+            reason_code,
+            status_reason,
+            provider_reference_id,
+            expires_at,
+            activated_at,
+            consumed_at,
+            released_at,
+            cancelled_at,
+            expired_at,
+            idempotency_key,
+            created_at
+       from funding_reservations
+      where platform_tenant_id = $1 and settlement_obligation_id = $2
+      order by created_at desc`,
+    [tenantId, obligationId]
+  );
+
+  const eventsResult = await client.query(
+    `select id,
+            event_type,
+            reservation_id,
+            actor_user_id,
+            event_payload_json,
+            occurred_at
+       from obligation_events
+      where platform_tenant_id = $1 and obligation_id = $2
+      order by occurred_at desc
+      limit 200`,
+    [tenantId, obligationId]
+  );
+
+  const journalLinksResult = await client.query(
+    `select id,
+            journal_entry_id,
+            journal_status,
+            created_at
+       from obligation_journal_links
+      where platform_tenant_id = $1 and obligation_id = $2
+      order by created_at desc`,
+    [tenantId, obligationId]
+  );
+
+  const obligation = mapSettlementObligationRow(obligationRow) as Record<string, unknown>;
+  return {
+    ...obligation,
+    reservations: reservationsResult.rows.map((row) => mapFundingReservationRow(row as Record<string, unknown>)),
+    events: eventsResult.rows.map((row) => ({
+      id: row.id,
+      eventType: row.event_type,
+      reservationId: row.reservation_id ?? undefined,
+      actorUserId: row.actor_user_id ?? undefined,
+      payload: row.event_payload_json ?? {},
+      occurredAt: toIsoString(row.occurred_at)
+    })),
+    journalLinks: journalLinksResult.rows.map((row) => ({
+      id: row.id,
+      journalEntryId: row.journal_entry_id,
+      journalStatus: row.journal_status,
+      createdAt: toIsoString(row.created_at)
+    }))
+  };
 };
 
 const listPayments = async (
@@ -4021,6 +6305,206 @@ const listPayments = async (
   return [...internal.rows, ...external.rows]
     .map(mapPaymentRow)
     .sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
+};
+
+const listInternalTreasuryPaymentInstructions = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  query: Record<string, string>
+): Promise<unknown[]> => {
+  const statusFilter = stringQuery(query, "status");
+  const instructionTypeFilter = stringQuery(query, "instructionType");
+  const result = await client.query(
+    `select id,
+            platform_tenant_id,
+            source_account_of_digital_asset_id,
+            destination_account_of_digital_asset_id,
+            settlement_obligation_id,
+            funding_reservation_id,
+            amount_minor_units,
+            route_type,
+            instruction_type,
+            currency,
+            status,
+            idempotency_key,
+            correlation_id,
+            created_by,
+            created_at,
+            updated_at,
+            routed_at,
+            executed_at,
+            failed_at,
+            cancelled_at,
+            terminal_at,
+            route_evidence_json
+       from payment_instructions
+      where platform_tenant_id = $1
+        and ($2::text is null or status = $2)
+        and ($3::text is null or instruction_type = $3)
+      order by created_at desc
+      limit 200`,
+    [
+      tenantId,
+      statusFilter ? normalizeLifecycleStatus(statusFilter) : null,
+      instructionTypeFilter ? normalizeLifecycleStatus(instructionTypeFilter) : null
+    ]
+  );
+  return result.rows.map((row) => mapInternalTreasuryPaymentInstructionRow(row as Record<string, unknown>));
+};
+
+const getInternalTreasuryPaymentInstructionDetail = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  paymentInstructionId: string
+): Promise<unknown | undefined> => {
+  const instructionResult = await client.query(
+    `select id,
+            platform_tenant_id,
+            source_account_of_digital_asset_id,
+            destination_account_of_digital_asset_id,
+            settlement_obligation_id,
+            funding_reservation_id,
+            amount_minor_units,
+            route_type,
+            instruction_type,
+            currency,
+            status,
+            idempotency_key,
+            correlation_id,
+            created_by,
+            created_at,
+            updated_at,
+            routed_at,
+            executed_at,
+            failed_at,
+            cancelled_at,
+            terminal_at,
+            route_evidence_json
+       from payment_instructions
+      where id = $1 and platform_tenant_id = $2
+      limit 1`,
+    [paymentInstructionId, tenantId]
+  );
+  const instructionRow = instructionResult.rows[0] as Record<string, unknown> | undefined;
+  if (!instructionRow) return undefined;
+
+  const decisionResult = await client.query(
+    `select id,
+            platform_tenant_id,
+            payment_instruction_id,
+            selected_route_code,
+            selected_profile_id,
+            decision_reason,
+            candidate_scores_json,
+            override_applied,
+            override_reason,
+            decided_by,
+            decided_at
+       from routing_decisions
+      where platform_tenant_id = $1 and payment_instruction_id = $2
+      order by decided_at desc
+      limit 1`,
+    [tenantId, paymentInstructionId]
+  );
+
+  const settlementResult = await client.query(
+    `select id,
+            platform_tenant_id,
+            payment_instruction_id,
+            route_code,
+            source_account_of_digital_asset_id,
+            destination_account_of_digital_asset_id,
+            amount_minor_units,
+            status,
+            failure_reason,
+            provider_reference_id,
+            journal_entry_id,
+            started_at,
+            settled_at,
+            created_at,
+            updated_at
+       from internal_ada_settlements
+      where platform_tenant_id = $1 and payment_instruction_id = $2
+      order by created_at desc
+      limit 1`,
+    [tenantId, paymentInstructionId]
+  );
+
+  const eventsResult = await client.query(
+    `select id,
+            payment_instruction_id,
+            settlement_id,
+            event_type,
+            event_payload_json,
+            actor_user_id,
+            occurred_at
+       from routing_and_settlement_events
+      where platform_tenant_id = $1 and payment_instruction_id = $2
+      order by occurred_at desc
+      limit 200`,
+    [tenantId, paymentInstructionId]
+  );
+
+  return {
+    ...mapInternalTreasuryPaymentInstructionRow(instructionRow),
+    routingDecision: decisionResult.rows[0]
+      ? mapRoutingDecisionRow(decisionResult.rows[0] as Record<string, unknown>)
+      : undefined,
+    settlement: settlementResult.rows[0]
+      ? mapInternalAdaSettlementRow(settlementResult.rows[0] as Record<string, unknown>)
+      : undefined,
+    events: eventsResult.rows.map((row) => mapRoutingAndSettlementEventRow(row as Record<string, unknown>))
+  };
+};
+
+const getInternalAdaSettlementDetail = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  settlementId: string
+): Promise<unknown | undefined> => {
+  const settlementResult = await client.query(
+    `select id,
+            platform_tenant_id,
+            payment_instruction_id,
+            route_code,
+            source_account_of_digital_asset_id,
+            destination_account_of_digital_asset_id,
+            amount_minor_units,
+            status,
+            failure_reason,
+            provider_reference_id,
+            journal_entry_id,
+            started_at,
+            settled_at,
+            created_at,
+            updated_at
+       from internal_ada_settlements
+      where id = $1 and platform_tenant_id = $2
+      limit 1`,
+    [settlementId, tenantId]
+  );
+  const settlementRow = settlementResult.rows[0] as Record<string, unknown> | undefined;
+  if (!settlementRow) return undefined;
+
+  const eventsResult = await client.query(
+    `select id,
+            payment_instruction_id,
+            settlement_id,
+            event_type,
+            event_payload_json,
+            actor_user_id,
+            occurred_at
+       from routing_and_settlement_events
+      where platform_tenant_id = $1 and settlement_id = $2
+      order by occurred_at desc
+      limit 200`,
+    [tenantId, settlementId]
+  );
+
+  return {
+    ...mapInternalAdaSettlementRow(settlementRow),
+    events: eventsResult.rows.map((row) => mapRoutingAndSettlementEventRow(row as Record<string, unknown>))
+  };
 };
 
 const getPayment = async (
@@ -4950,6 +7434,18 @@ const validateAccountActivationGates = async (
   }
 
   if (account.onboarding_status !== "approved") return "business_client_not_approved";
+  const totalInstrumentResult = await client.query(
+    `select count(*)::int as total_count
+       from linked_instruments
+      where account_of_digital_asset_id = $1
+        and coalesce(platform_tenant_id, $2) = $2`,
+    [accountId, tenantId]
+  );
+  const totalCount = Number(totalInstrumentResult.rows[0]?.total_count ?? 0);
+
+  // Bootstrap path: account may be activated before any linked instrument is attached.
+  if (totalCount === 0) return undefined;
+
   const instrumentResult = await client.query(
     `select count(*)::int as verified_count
        from linked_instruments
@@ -5252,6 +7748,30 @@ const mapFundingInstructionRow = (row: Record<string, unknown>): unknown => ({
   updatedAt: toIsoString(row.updated_at)
 });
 
+const mapSettlementObligationRow = (row: Record<string, unknown>): unknown => {
+  const principalMinorUnits = asBigInt(row.principal_minor_units ?? row.amount_minor_units);
+  const fulfilledMinorUnits = asBigInt(row.fulfilled_minor_units);
+  const remainingMinorUnits = principalMinorUnits > fulfilledMinorUnits ? principalMinorUnits - fulfilledMinorUnits : 0n;
+  return {
+    id: row.id,
+    tenantId: row.platform_tenant_id,
+    businessClientId: row.business_client_id ?? row.supplier_business_client_id ?? row.buyer_business_client_id ?? undefined,
+    obligationType: row.obligation_type,
+    principalMinorUnits: principalMinorUnits.toString(),
+    fulfilledMinorUnits: fulfilledMinorUnits.toString(),
+    remainingMinorUnits: remainingMinorUnits.toString(),
+    currency: row.currency ?? "USD",
+    status: normalizeLifecycleStatus(row.status),
+    sourceReferenceId: row.source_reference_id ?? undefined,
+    sourceReferenceType: row.source_reference_type ?? undefined,
+    idempotencyKey: row.idempotency_key ?? undefined,
+    createdBy: row.created_by ?? undefined,
+    dueAt: toIsoString(row.due_at),
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at)
+  };
+};
+
 const mapFundingInstructionOrderRow = (row: Record<string, unknown>): Record<string, unknown> => ({
   id: row.id,
   fundingInstructionId: row.funding_instruction_id,
@@ -5276,8 +7796,129 @@ const mapFundingReservationRow = (row: Record<string, unknown>): unknown => ({
   settlementObligationId: row.settlement_obligation_id,
   accountOfDigitalAssetId: row.account_of_digital_asset_id,
   amountMinorUnits: String(row.amount_minor_units ?? 0),
-  status: row.status,
+  consumedMinorUnits: String(row.consumed_minor_units ?? 0),
+  remainingMinorUnits: (() => {
+    const amountMinorUnits = asBigInt(row.amount_minor_units);
+    const consumedMinorUnits = asBigInt(row.consumed_minor_units);
+    return (amountMinorUnits > consumedMinorUnits ? amountMinorUnits - consumedMinorUnits : 0n).toString();
+  })(),
+  availableMinorUnitsSnapshot: row.available_minor_units_snapshot !== undefined && row.available_minor_units_snapshot !== null
+    ? String(row.available_minor_units_snapshot)
+    : undefined,
+  priority: row.priority !== undefined && row.priority !== null ? Number(row.priority) : undefined,
+  status: normalizeLifecycleStatus(row.status),
+  reasonCode: row.reason_code ?? undefined,
+  statusReason: row.status_reason ?? undefined,
+  providerReferenceId: row.provider_reference_id ?? undefined,
+  idempotencyKey: row.idempotency_key ?? undefined,
+  expiresAt: toIsoString(row.expires_at),
+  activatedAt: toIsoString(row.activated_at),
+  consumedAt: toIsoString(row.consumed_at),
+  releasedAt: toIsoString(row.released_at),
+  cancelledAt: toIsoString(row.cancelled_at),
+  expiredAt: toIsoString(row.expired_at),
   createdAt: toIsoString(row.created_at)
+});
+
+const mapRouteProfileRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  tenantId: row.platform_tenant_id,
+  profileCode: row.profile_code,
+  profileName: row.profile_name,
+  strategyType: normalizeLifecycleStatus(row.strategy_type),
+  weightCost: decimalValue(row.weight_cost, 0),
+  weightLatency: decimalValue(row.weight_latency, 0),
+  weightLiquidity: decimalValue(row.weight_liquidity, 0),
+  weightReliability: decimalValue(row.weight_reliability, 0),
+  status: normalizeLifecycleStatus(row.status),
+  createdBy: row.created_by ?? undefined,
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at)
+});
+
+const mapRouteBindingRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  tenantId: row.platform_tenant_id,
+  profileId: row.profile_id,
+  routeCode: row.route_code,
+  bindingScope: normalizeLifecycleStatus(row.binding_scope),
+  matchExpression: row.match_expression,
+  priority: integerValue(row.priority, 100),
+  active: row.active === true,
+  createdBy: row.created_by ?? undefined,
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at),
+  profileCode: row.profile_code ?? undefined,
+  profileName: row.profile_name ?? undefined,
+  strategyType: row.strategy_type ? normalizeLifecycleStatus(row.strategy_type) : undefined,
+  profileStatus: row.profile_status ? normalizeLifecycleStatus(row.profile_status) : undefined
+});
+
+const mapRoutingDecisionRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  tenantId: row.platform_tenant_id,
+  paymentInstructionId: row.payment_instruction_id,
+  selectedRouteCode: row.selected_route_code,
+  selectedProfileId: row.selected_profile_id ?? undefined,
+  decisionReason: row.decision_reason,
+  candidateScores: row.candidate_scores_json ?? {},
+  overrideApplied: row.override_applied === true,
+  overrideReason: row.override_reason ?? undefined,
+  decidedBy: row.decided_by ?? undefined,
+  decidedAt: toIsoString(row.decided_at)
+});
+
+const mapInternalTreasuryPaymentInstructionRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  tenantId: row.platform_tenant_id,
+  sourceAccountOfDigitalAssetId: row.source_account_of_digital_asset_id,
+  destinationAccountOfDigitalAssetId: row.destination_account_of_digital_asset_id,
+  settlementObligationId: row.settlement_obligation_id ?? undefined,
+  fundingReservationId: row.funding_reservation_id ?? undefined,
+  amountMinorUnits: String(row.amount_minor_units ?? 0),
+  routeCode: row.route_type,
+  instructionType: normalizeLifecycleStatus(row.instruction_type ?? "internal_ada_settlement"),
+  currency: String(row.currency ?? "USD").toUpperCase(),
+  status: normalizeLifecycleStatus(row.status),
+  idempotencyKey: row.idempotency_key ?? undefined,
+  correlationId: row.correlation_id ?? undefined,
+  createdBy: row.created_by ?? undefined,
+  routedAt: toIsoString(row.routed_at),
+  executedAt: toIsoString(row.executed_at),
+  failedAt: toIsoString(row.failed_at),
+  cancelledAt: toIsoString(row.cancelled_at),
+  terminalAt: toIsoString(row.terminal_at),
+  routeEvidence: row.route_evidence_json ?? {},
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at)
+});
+
+const mapInternalAdaSettlementRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  tenantId: row.platform_tenant_id,
+  paymentInstructionId: row.payment_instruction_id,
+  routeCode: row.route_code,
+  sourceAccountOfDigitalAssetId: row.source_account_of_digital_asset_id,
+  destinationAccountOfDigitalAssetId: row.destination_account_of_digital_asset_id,
+  amountMinorUnits: String(row.amount_minor_units ?? 0),
+  status: normalizeLifecycleStatus(row.status),
+  failureReason: row.failure_reason ?? undefined,
+  providerReferenceId: row.provider_reference_id ?? undefined,
+  journalEntryId: row.journal_entry_id ?? undefined,
+  startedAt: toIsoString(row.started_at),
+  settledAt: toIsoString(row.settled_at),
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at)
+});
+
+const mapRoutingAndSettlementEventRow = (row: Record<string, unknown>): Record<string, unknown> => ({
+  id: row.id,
+  paymentInstructionId: row.payment_instruction_id,
+  settlementId: row.settlement_id ?? undefined,
+  eventType: row.event_type,
+  payload: row.event_payload_json ?? {},
+  actorUserId: row.actor_user_id ?? undefined,
+  occurredAt: toIsoString(row.occurred_at)
 });
 
 const mapPaymentRow = (row: Record<string, unknown>): Record<string, unknown> => ({
@@ -5502,6 +8143,418 @@ const accountTransitions: Record<string, string[]> = {
   closed: []
 };
 
+const normalizeLifecycleStatus = (value: unknown): string => String(value ?? "").trim().toLowerCase();
+
+const isTerminalReservationStatus = (status: string): boolean =>
+  ["released", "expired", "cancelled", "consumed"].includes(status);
+
+const isTerminalObligationStatus = (status: string): boolean =>
+  ["fulfilled", "cancelled", "failed", "expired"].includes(status);
+
+const recordObligationEvent = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  obligationId: string,
+  reservationId: string | undefined,
+  eventType: string,
+  actorUserId: string | null,
+  payload: Record<string, unknown>
+): Promise<void> => {
+  await client.query(
+    `insert into obligation_events
+      (id, platform_tenant_id, obligation_id, reservation_id, event_type, event_payload_json, actor_user_id, occurred_at)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())`,
+    [randomUUID(), tenantId, obligationId, reservationId ?? null, eventType, JSON.stringify(payload), actorUserId]
+  );
+};
+
+const recordRoutingAndSettlementEvent = async (
+  client: Pick<PostgresClient, "query">,
+  tenantId: string,
+  paymentInstructionId: string,
+  settlementId: string | undefined,
+  eventType: string,
+  actorUserId: string | null,
+  payload: Record<string, unknown>
+): Promise<void> => {
+  await client.query(
+    `insert into routing_and_settlement_events
+      (id, platform_tenant_id, payment_instruction_id, settlement_id, event_type, event_payload_json, actor_user_id, occurred_at)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())`,
+    [randomUUID(), tenantId, paymentInstructionId, settlementId ?? null, eventType, JSON.stringify(payload), actorUserId]
+  );
+};
+
+const isRouteStrategyType = (value: string): boolean => ["standard", "weighted"].includes(value);
+
+const isRouteProfileStatus = (value: string): boolean => ["draft", "active", "inactive"].includes(value);
+
+const isRouteBindingScope = (value: string): boolean =>
+  ["default", "instruction_type", "segment", "region", "asset"].includes(value);
+
+const parseQueryBoolean = (value: string | undefined): boolean | null => {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "y", "active"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "inactive"].includes(normalized)) return false;
+  return null;
+};
+
+type LinkedInstrumentClass = "none" | "wallet" | "fiat" | "wallet_and_fiat";
+type LinkedInstrumentSelector = LinkedInstrumentClass | "wallet_or_fiat";
+
+const parseBooleanToken = (value: string): boolean | undefined => {
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "y", "active", "required"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "inactive", "optional"].includes(normalized)) return false;
+  return undefined;
+};
+
+const parseLinkedInstrumentSelector = (value: string): LinkedInstrumentSelector | undefined => {
+  const normalized = normalizeLifecycleStatus(value);
+  if (["wallet", "circle_wallet", "on_chain_wallet"].includes(normalized)) return "wallet";
+  if (["fiat", "fiat_route", "fiat_link", "wire", "fiat_wire"].includes(normalized)) return "fiat";
+  if (["none", "virtual_only", "no_linked_instrument"].includes(normalized)) return "none";
+  if (["wallet_or_fiat", "wallet_or_wire", "any", "either"].includes(normalized)) return "wallet_or_fiat";
+  if (["wallet_and_fiat", "both"].includes(normalized)) return "wallet_and_fiat";
+  return undefined;
+};
+
+const resolveLinkedInstrumentClass = (hasWallet: boolean, hasFiat: boolean): LinkedInstrumentClass => {
+  if (hasWallet && hasFiat) return "wallet_and_fiat";
+  if (hasWallet) return "wallet";
+  if (hasFiat) return "fiat";
+  return "none";
+};
+
+const linkedInstrumentSelectorMatches = (selector: LinkedInstrumentSelector, actualClass: LinkedInstrumentClass): boolean => {
+  if (selector === "wallet") return actualClass === "wallet" || actualClass === "wallet_and_fiat";
+  if (selector === "fiat") return actualClass === "fiat" || actualClass === "wallet_and_fiat";
+  if (selector === "wallet_or_fiat") return actualClass === "wallet" || actualClass === "fiat" || actualClass === "wallet_and_fiat";
+  if (selector === "wallet_and_fiat") return actualClass === "wallet_and_fiat";
+  return actualClass === "none";
+};
+
+const evaluateExpectedBoolean = (expectedValue: string, actual: boolean): boolean => {
+  const expected = parseBooleanToken(expectedValue);
+  if (expected === undefined) return true;
+  return actual === expected;
+};
+
+const extractBindingExpressionKeyValue = (matchExpression: string, keys: string[]): string | undefined => {
+  const normalizedKeys = new Set(keys.map((key) => normalizeLifecycleStatus(key)));
+  try {
+    const parsed = JSON.parse(matchExpression);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [rawKey, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
+        if (normalizedKeys.has(normalizeLifecycleStatus(rawKey))) {
+          return String(rawValue ?? "").trim();
+        }
+      }
+    }
+  } catch {
+    // Ignore and continue with token parser.
+  }
+
+  const tokens = matchExpression
+    .split(/[|,]/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  for (const token of tokens) {
+    const separator = token.includes("=") ? "=" : token.includes(":") ? ":" : "";
+    if (!separator) continue;
+    const [rawKey, rawValue] = token.split(separator, 2);
+    if (normalizedKeys.has(normalizeLifecycleStatus(rawKey))) {
+      return rawValue.trim();
+    }
+  }
+  return undefined;
+};
+
+const deriveBindingLegRequirement = (
+  matchExpression: string,
+  instruction: {
+    destinationHasVerifiedWalletLink: boolean;
+    destinationHasVerifiedFiatLink: boolean;
+  }
+): {
+  requiresMultiLegs: boolean;
+  requiredLinkedInstrument?: LinkedInstrumentSelector;
+  resolvedSecondLegType?: "wallet_externalization" | "fiat_externalization";
+  requiredPolicyClass?: InternalTreasuryPolicyClass;
+} => {
+  const linkedInstrumentValue = extractBindingExpressionKeyValue(matchExpression, [
+    "linked_instrument",
+    "linked_instrument_type",
+    "destination_linked_instrument",
+    "destination_linked_instrument_type"
+  ]);
+  const explicitMultiLegsValue = extractBindingExpressionKeyValue(matchExpression, [
+    "multi_legs_required",
+    "requires_multi_legs",
+    "require_multi_legs"
+  ]);
+
+  const requiredLinkedInstrument = linkedInstrumentValue
+    ? parseLinkedInstrumentSelector(linkedInstrumentValue)
+    : undefined;
+  const explicitMultiLegs = explicitMultiLegsValue ? parseBooleanToken(explicitMultiLegsValue) : undefined;
+  const requiresMultiLegs = explicitMultiLegs === true
+    || (requiredLinkedInstrument !== undefined && requiredLinkedInstrument !== "none");
+
+  if (!requiresMultiLegs) {
+    return { requiresMultiLegs: false, requiredLinkedInstrument };
+  }
+
+  const destinationClass = resolveLinkedInstrumentClass(
+    instruction.destinationHasVerifiedWalletLink,
+    instruction.destinationHasVerifiedFiatLink
+  );
+
+  const resolveFromClass = (): {
+    resolvedSecondLegType?: "wallet_externalization" | "fiat_externalization";
+    requiredPolicyClass?: InternalTreasuryPolicyClass;
+  } => {
+    if (destinationClass === "wallet" || destinationClass === "wallet_and_fiat") {
+      return { resolvedSecondLegType: "wallet_externalization", requiredPolicyClass: "wallet-required" };
+    }
+    if (destinationClass === "fiat") {
+      return { resolvedSecondLegType: "fiat_externalization", requiredPolicyClass: "fiat-required" };
+    }
+    return {};
+  };
+
+  if (!requiredLinkedInstrument || requiredLinkedInstrument === "wallet_or_fiat") {
+    const resolved = resolveFromClass();
+    return { requiresMultiLegs: true, requiredLinkedInstrument, ...resolved };
+  }
+
+  if (!linkedInstrumentSelectorMatches(requiredLinkedInstrument, destinationClass)) {
+    return { requiresMultiLegs: true, requiredLinkedInstrument };
+  }
+
+  if (requiredLinkedInstrument === "wallet" || requiredLinkedInstrument === "wallet_and_fiat") {
+    return {
+      requiresMultiLegs: true,
+      requiredLinkedInstrument,
+      resolvedSecondLegType: "wallet_externalization",
+      requiredPolicyClass: "wallet-required"
+    };
+  }
+  if (requiredLinkedInstrument === "fiat") {
+    return {
+      requiresMultiLegs: true,
+      requiredLinkedInstrument,
+      resolvedSecondLegType: "fiat_externalization",
+      requiredPolicyClass: "fiat-required"
+    };
+  }
+
+  return { requiresMultiLegs: true, requiredLinkedInstrument };
+};
+
+const routeBindingMatches = (
+  bindingScope: string,
+  matchExpression: string,
+  instruction: {
+    instructionType: string;
+    currency: string;
+    sourceAccountOfDigitalAssetId: string;
+    destinationAccountOfDigitalAssetId: string;
+    amountMinorUnits: bigint;
+    sourceUsePurpose: string;
+    destinationUsePurpose: string;
+    sourceRegion: string;
+    destinationRegion: string;
+    sourceExternalReference: string;
+    destinationExternalReference: string;
+    sourceHasVerifiedWalletLink: boolean;
+    sourceHasVerifiedFiatLink: boolean;
+    destinationHasVerifiedWalletLink: boolean;
+    destinationHasVerifiedFiatLink: boolean;
+    sourceLinkedInstrumentClass: LinkedInstrumentClass;
+    destinationLinkedInstrumentClass: LinkedInstrumentClass;
+  }
+): boolean => {
+  const normalizedExpression = matchExpression.trim();
+  if (!normalizedExpression || normalizedExpression === "*") return true;
+
+  const normalizedScope = normalizeLifecycleStatus(bindingScope);
+  if (normalizedScope === "default") return true;
+
+  try {
+    const parsed = JSON.parse(normalizedExpression);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const filters = parsed as Record<string, unknown>;
+      const entries = Object.entries(filters);
+      if (!entries.length) return true;
+      return entries.every(([rawKey, expected]) => {
+        const key = normalizeLifecycleStatus(rawKey);
+        const expectedValue = String(expected ?? "").trim().toLowerCase();
+        if (!expectedValue || expectedValue === "*") return true;
+        if (key === "instructiontype" || key === "instruction_type") {
+          return instruction.instructionType.toLowerCase() === expectedValue;
+        }
+        if (key === "currency") {
+          return instruction.currency.toLowerCase() === expectedValue;
+        }
+        if (key === "sourceaccountofdigitalassetid" || key === "source_account_of_digital_asset_id") {
+          return instruction.sourceAccountOfDigitalAssetId.toLowerCase() === expectedValue;
+        }
+        if (key === "destinationaccountofdigitalassetid" || key === "destination_account_of_digital_asset_id") {
+          return instruction.destinationAccountOfDigitalAssetId.toLowerCase() === expectedValue;
+        }
+        if (key === "sourceusepurpose" || key === "source_use_purpose" || key === "source_account_use_purpose") {
+          return instruction.sourceUsePurpose === expectedValue;
+        }
+        if (key === "destinationusepurpose" || key === "destination_use_purpose" || key === "destination_account_use_purpose") {
+          return instruction.destinationUsePurpose === expectedValue;
+        }
+        if (key === "sourceregion" || key === "source_region") {
+          return instruction.sourceRegion === expectedValue;
+        }
+        if (key === "destinationregion" || key === "destination_region") {
+          return instruction.destinationRegion === expectedValue;
+        }
+        if (key === "sourceexternalreference" || key === "source_external_reference") {
+          return instruction.sourceExternalReference === expectedValue;
+        }
+        if (key === "destinationexternalreference" || key === "destination_external_reference") {
+          return instruction.destinationExternalReference === expectedValue;
+        }
+        if (["linkedinstrument", "linked_instrument", "linkedinstrumenttype", "linked_instrument_type", "destinationlinkedinstrument", "destination_linked_instrument", "destinationlinkedinstrumenttype", "destination_linked_instrument_type"].includes(key)) {
+          const selector = parseLinkedInstrumentSelector(expectedValue);
+          if (!selector) return true;
+          return linkedInstrumentSelectorMatches(selector, instruction.destinationLinkedInstrumentClass);
+        }
+        if (["sourcelinkedinstrument", "source_linked_instrument", "sourcelinkedinstrumenttype", "source_linked_instrument_type"].includes(key)) {
+          const selector = parseLinkedInstrumentSelector(expectedValue);
+          if (!selector) return true;
+          return linkedInstrumentSelectorMatches(selector, instruction.sourceLinkedInstrumentClass);
+        }
+        if (["destinationhaswalletlink", "destination_has_wallet_link", "destination_has_verified_wallet_link"].includes(key)) {
+          return evaluateExpectedBoolean(expectedValue, instruction.destinationHasVerifiedWalletLink);
+        }
+        if (["destinationhasfiatlink", "destination_has_fiat_link", "destination_has_verified_fiat_link"].includes(key)) {
+          return evaluateExpectedBoolean(expectedValue, instruction.destinationHasVerifiedFiatLink);
+        }
+        if (["sourcehaswalletlink", "source_has_wallet_link", "source_has_verified_wallet_link"].includes(key)) {
+          return evaluateExpectedBoolean(expectedValue, instruction.sourceHasVerifiedWalletLink);
+        }
+        if (["sourcehasfiatlink", "source_has_fiat_link", "source_has_verified_fiat_link"].includes(key)) {
+          return evaluateExpectedBoolean(expectedValue, instruction.sourceHasVerifiedFiatLink);
+        }
+        if (key === "minamountminorunits" || key === "min_amount_minor_units") {
+          return instruction.amountMinorUnits >= asBigInt(expected);
+        }
+        if (key === "maxamountminorunits" || key === "max_amount_minor_units") {
+          return instruction.amountMinorUnits <= asBigInt(expected);
+        }
+        return true;
+      });
+    }
+  } catch {
+    // Expression is not JSON, continue with token parser.
+  }
+
+  const tokens = normalizedExpression
+    .split(/[|,]/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  return tokens.every((token) => {
+    const separator = token.includes("=") ? "=" : token.includes(":") ? ":" : undefined;
+    if (!separator) {
+      const normalizedToken = token.toLowerCase();
+      return instruction.instructionType.toLowerCase().includes(normalizedToken)
+        || instruction.currency.toLowerCase().includes(normalizedToken);
+    }
+
+    const [rawKey, rawValue] = token.split(separator, 2);
+    const key = normalizeLifecycleStatus(rawKey);
+    const value = rawValue.trim().toLowerCase();
+    if (!value || value === "*") return true;
+    if (key === "instruction" || key === "instructiontype" || key === "instruction_type") {
+      return instruction.instructionType.toLowerCase() === value;
+    }
+    if (key === "currency" || key === "asset") {
+      return instruction.currency.toLowerCase() === value;
+    }
+    if (key === "source" || key === "source_account_of_digital_asset_id") {
+      return instruction.sourceAccountOfDigitalAssetId.toLowerCase() === value;
+    }
+    if (key === "destination" || key === "destination_account_of_digital_asset_id") {
+      return instruction.destinationAccountOfDigitalAssetId.toLowerCase() === value;
+    }
+    if (key === "source_use_purpose" || key === "sourceusepurpose" || key === "source_account_use_purpose") {
+      return instruction.sourceUsePurpose === value;
+    }
+    if (key === "destination_use_purpose" || key === "destinationusepurpose" || key === "destination_account_use_purpose") {
+      return instruction.destinationUsePurpose === value;
+    }
+    if (key === "source_region" || key === "sourceregion") {
+      return instruction.sourceRegion === value;
+    }
+    if (key === "destination_region" || key === "destinationregion") {
+      return instruction.destinationRegion === value;
+    }
+    if (key === "source_external_reference" || key === "sourceexternalreference") {
+      return instruction.sourceExternalReference === value;
+    }
+    if (key === "destination_external_reference" || key === "destinationexternalreference") {
+      return instruction.destinationExternalReference === value;
+    }
+    if (["linked_instrument", "linkedinstrument", "linked_instrument_type", "linkedinstrumenttype", "destination_linked_instrument", "destinationlinkedinstrument", "destination_linked_instrument_type", "destinationlinkedinstrumenttype"].includes(key)) {
+      const selector = parseLinkedInstrumentSelector(value);
+      if (!selector) return true;
+      return linkedInstrumentSelectorMatches(selector, instruction.destinationLinkedInstrumentClass);
+    }
+    if (["source_linked_instrument", "sourcelinkedinstrument", "source_linked_instrument_type", "sourcelinkedinstrumenttype"].includes(key)) {
+      const selector = parseLinkedInstrumentSelector(value);
+      if (!selector) return true;
+      return linkedInstrumentSelectorMatches(selector, instruction.sourceLinkedInstrumentClass);
+    }
+    if (["destination_has_wallet_link", "destinationhaswalletlink", "destination_has_verified_wallet_link"].includes(key)) {
+      return evaluateExpectedBoolean(value, instruction.destinationHasVerifiedWalletLink);
+    }
+    if (["destination_has_fiat_link", "destinationhasfiatlink", "destination_has_verified_fiat_link"].includes(key)) {
+      return evaluateExpectedBoolean(value, instruction.destinationHasVerifiedFiatLink);
+    }
+    if (["source_has_wallet_link", "sourcehaswalletlink", "source_has_verified_wallet_link"].includes(key)) {
+      return evaluateExpectedBoolean(value, instruction.sourceHasVerifiedWalletLink);
+    }
+    if (["source_has_fiat_link", "sourcehasfiatlink", "source_has_verified_fiat_link"].includes(key)) {
+      return evaluateExpectedBoolean(value, instruction.sourceHasVerifiedFiatLink);
+    }
+    if (key === "scope") {
+      return normalizeLifecycleStatus(bindingScope) === value;
+    }
+    return true;
+  });
+};
+
+const toMatchText = (value: unknown): string => String(value ?? "").trim().toLowerCase();
+
+const metadataMatchText = (metadata: Record<string, unknown>, keys: string[]): string => {
+  for (const key of keys) {
+    const candidate = toMatchText(metadata[key]);
+    if (candidate) return candidate;
+  }
+  return "";
+};
+
+const computeRouteCandidateScore = (binding: Record<string, unknown>, amountMinorUnits: bigint): number => {
+  const weightCost = decimalValue(binding.weight_cost, 0.25);
+  const weightLatency = decimalValue(binding.weight_latency, 0.25);
+  const weightLiquidity = decimalValue(binding.weight_liquidity, 0.25);
+  const weightReliability = decimalValue(binding.weight_reliability, 0.25);
+  const priority = integerValue(binding.priority, 100);
+  const amountFactor = Number(amountMinorUnits % 1_000_000n) / 1_000_000;
+
+  const weightedQuality = (weightLiquidity * 600) + (weightReliability * 400) - (weightCost * 120) - (weightLatency * 80);
+  return Math.round((priority * 10) + weightedQuality + amountFactor);
+};
+
 const businessClientTransitionAllowed = (from: string, to: string): boolean => businessClientTransitions[from]?.includes(to) ?? false;
 
 const accountTransitionAllowed = (from: string, to: string): boolean => accountTransitions[from]?.includes(to) ?? false;
@@ -5590,6 +8643,53 @@ const asBigInt = (value: unknown): bigint => {
   } catch {
     return 0n;
   }
+};
+
+const decimalValue = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+};
+
+const decimalBody = (body: Record<string, unknown>, key: string, fallback: number): number =>
+  decimalValue(body[key], fallback);
+
+const integerValue = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+};
+
+const integerBody = (body: Record<string, unknown>, key: string, fallback: number): number =>
+  integerValue(body[key], fallback);
+
+const booleanValue = (value: unknown, fallback = false): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "y", "active", "t"].includes(normalized)) return true;
+    if (["false", "0", "no", "n", "inactive", "f"].includes(normalized)) return false;
+  }
+  return fallback;
+};
+
+const booleanBody = (body: Record<string, unknown>, key: string, fallback: boolean): boolean => {
+  const value = body[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "y", "active"].includes(normalized)) return true;
+    if (["false", "0", "no", "n", "inactive"].includes(normalized)) return false;
+  }
+  if (typeof value === "number") return value !== 0;
+  return fallback;
 };
 
 const stringBody = (body: Record<string, unknown>, key: string, fallback = ""): string => {

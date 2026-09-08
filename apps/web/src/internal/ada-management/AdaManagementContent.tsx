@@ -654,7 +654,7 @@ const AdaListView = ({
         </label>
         <label>
           <span>Status</span>
-          <select><option>All Statuses</option><option>Active</option><option>Restricted</option><option>Frozen</option><option>Pending Activation</option><option>Closed</option></select>
+          <select><option>All Statuses</option><option>Active</option><option>Restricted</option><option>Frozen</option><option>Pending Internal Approval</option><option>Closed</option></select>
         </label>
         <label>
           <span>Asset Type</span>
@@ -810,8 +810,19 @@ const AdaDetailView = ({
     }
   };
 
+  const actionProgressLabel = lifecycleActionLabel(actionStatus);
+
   return (
     <section className="ada-scope">
+      {actionStatus ? (
+        <div aria-live="polite" className="ada-action-progress-overlay" role="dialog" aria-modal="true" aria-busy="true">
+          <div className="ada-action-progress-card">
+            <RefreshCw className="spin" size={18} />
+            <strong>{actionProgressLabel} In Progress</strong>
+            <p>Please wait while this ADA lifecycle action is being processed.</p>
+          </div>
+        </div>
+      ) : null}
       <div className="ada-detail-content">
         <nav className="ada-breadcrumbs" aria-label="ADA detail breadcrumb">
           <button onClick={onBack} type="button">ADA Registry</button>
@@ -1722,6 +1733,12 @@ const AdaProvisionCircleConfirm = ({
 
   return (
     <section className="ada-scope">
+      {submitting ? (
+        <ActionProgressOverlay
+          description="Please wait while the Circle wallet provisioning request is being processed."
+          title="Provision Circle Wallet In Progress"
+        />
+      ) : null}
       <div className="ada-link-rail-content">
         <nav className="ada-breadcrumbs" aria-label="Provision Circle wallet breadcrumb">
           <button onClick={onBack} type="button">Linked Instruments</button>
@@ -1948,6 +1965,12 @@ const AdaLinkRailView = ({
 
   return (
     <section className="ada-scope">
+      {submitting ? (
+        <ActionProgressOverlay
+          description="Please wait while the new linked rail is being initialized."
+          title="Link Rail In Progress"
+        />
+      ) : null}
       <div className="ada-link-rail-content">
         <nav className="ada-breadcrumbs" aria-label="Link rail breadcrumb">
           <button onClick={onBack} type="button">Linked Instruments</button>
@@ -2132,6 +2155,12 @@ const AdaLinkFiatAccountView = ({
 
   return (
     <section className="ada-scope">
+      {submitting ? (
+        <ActionProgressOverlay
+          description="Please wait while the fiat account is being linked to Circle infrastructure."
+          title="Link Fiat Account In Progress"
+        />
+      ) : null}
       <div className="ada-fiat2-shell">
         <nav className="ada-breadcrumbs" aria-label="Link new bank account breadcrumb">
           <button onClick={onBack} type="button">Linked Instruments</button>
@@ -2727,6 +2756,22 @@ const TraceLine = ({ label, value }: { label: string; value: string }) => (
   <div className="ada-trace-line"><span>{label}</span><code>{value}</code></div>
 );
 
+const ActionProgressOverlay = ({
+  description,
+  title
+}: {
+  description: string;
+  title: string;
+}) => (
+  <div aria-live="polite" className="ada-action-progress-overlay" role="dialog" aria-modal="true" aria-busy="true">
+    <div className="ada-action-progress-card">
+      <RefreshCw className="spin" size={18} />
+      <strong>{title}</strong>
+      <p>{description}</p>
+    </div>
+  </div>
+);
+
 const StatusPill = ({ status }: { status: string }) => {
   const normalized = normalizeStatus(status);
   return <span className={`ada-status ${normalized}`}>{normalized.replace(/_/g, " ")}</span>;
@@ -2847,6 +2892,18 @@ const normalizeAdaAccount = (account: AdaAccount, clients: BusinessClient[]): Ad
 };
 
 const normalizeStatus = (status: string): string => status.toLowerCase().replace(/\s+/g, "_");
+
+const lifecycleActionLabel = (action: string): string => {
+  const normalized = normalizeStatus(action);
+  if (!normalized) return "Action";
+  if (normalized === "activate") return "Activate";
+  if (normalized === "restrict") return "Restrict";
+  if (normalized === "unrestrict") return "Unrestrict";
+  if (normalized === "freeze") return "Freeze";
+  if (normalized === "unfreeze") return "Unfreeze";
+  if (normalized === "close") return "Close";
+  return normalized.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
 
 const findAdaAccount = (accounts: AdaAccount[], accountId?: string): AdaAccount | undefined => {
   if (!accountId) return undefined;

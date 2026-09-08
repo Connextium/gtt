@@ -207,7 +207,8 @@ export const provisionCircleAccountService = async (
     payload: mappingPayload
   });
 
-  const needsSandboxWireSetup = circleEnvironment() === "circle-sandbox";
+  const needsSandboxWireSetup = circleEnvironment() === "circle-sandbox"
+    && hasSandboxWireProvisioningPayload(input.body);
   const sandboxWireSetup = provider.status === "complete" && needsSandboxWireSetup
     ? await circleTreasury.provisionSandboxWire({
         tenantId,
@@ -351,6 +352,32 @@ export const provisionCircleAccountService = async (
 const optionalStringBody = (body: Record<string, unknown>, key: string): string | undefined => {
   const value = body[key];
   return typeof value === "string" && value.trim() ? value : undefined;
+};
+
+const hasSandboxWireProvisioningPayload = (body: Record<string, unknown>): boolean => {
+  const wireAccount = body.wireAccount;
+  if (wireAccount && typeof wireAccount === "object" && !Array.isArray(wireAccount)) return true;
+
+  const wireFunding = body.wireFunding;
+  if (wireFunding && typeof wireFunding === "object" && !Array.isArray(wireFunding)) return true;
+
+  const topLevelWireFields = [
+    "accountNumber",
+    "routingNumber",
+    "holderName",
+    "bankName",
+    "billingLine1",
+    "billingCity",
+    "billingDistrict",
+    "billingPostalCode",
+    "billingCountry",
+    "bankAddressLine1",
+    "bankAddressCity",
+    "bankAddressDistrict",
+    "bankAddressCountry"
+  ];
+
+  return topLevelWireFields.some((field) => optionalStringBody(body, field) !== undefined);
 };
 
 const stringArrayBody = (body: Record<string, unknown>, key: string, fallback: string[]): string[] => {
