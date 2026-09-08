@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && npm run build:docs",
-    "build:docs": "node scripts/sync-business-client-docs.mjs",
+    "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "dev": "tsx watch src/server.ts",
     "bootstrap:super-admin": "tsx src/cli/provision-super-admin.ts",

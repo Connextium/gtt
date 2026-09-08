@@ -36,8 +36,7 @@ loadEnvironment();
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const BUSINESS_CLIENT_DOCS_CANDIDATE_PATHS = [
-  resolve(moduleDir, "./docs/business-client-api-docs.html"),
-  resolve(moduleDir, "../docs/business-client-api-docs.html")
+  resolve(moduleDir, "./docs/business-client-api-docs.html")
 ];
 let businessClientDocsHtmlCache: string | undefined;
 
@@ -251,9 +250,7 @@ const loadBusinessClientDocsHtml = async (): Promise<string> => {
 };
 
 const isBusinessClientDocsPath = (pathname: string): boolean => (
-  pathname === "/docs/business-client"
-  || pathname === "/docs/business-client/"
-  || pathname === "/docs/business-client-api"
+  pathname === "/docs/business-client-api"
   || pathname === "/docs/business-client-api/"
   || pathname === "/openapi/business-client/docs"
   || pathname === "/openapi/business-client/docs/"
