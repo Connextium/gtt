@@ -4,7 +4,11 @@
   "installCommand": "npm install",
   "functions": {
     "api/index.mjs": {
-      "includeFiles": "dist/**"
+      "includeFiles": [
+        "dist/**",
+        "docs/**",
+        "package.json"
+      ]
     }
   },
   "rewrites": [
