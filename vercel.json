@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "buildCommand": "npm run api:build",
+  "installCommand": "npm install",
+  "functions": {
+    "apps/api/api/index.mjs": {
+      "includeFiles": "apps/api/**/*"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/apps/api/api/index.mjs"
+    }
+  ]
+}
