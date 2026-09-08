@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(scriptDir, "..");
 const docsFile = path.join(apiRoot, "docs", "business-client-api-docs.html");
+const distDocsDir = path.join(apiRoot, "dist", "docs");
+const distDocsFile = path.join(distDocsDir, "business-client-api-docs.html");
 const specsModule = path.join(apiRoot, "dist", "openapi", "specs.js");
 
 const redocStatePrefix = "const __redoc_state = ";
@@ -53,6 +55,11 @@ state.spec.data = businessClientOpenApiSpec;
 const updatedHtml = `${html.slice(0, start)}${redocStatePrefix}${JSON.stringify(state)}${html.slice(end)}`;
 fs.writeFileSync(docsFile, updatedHtml, "utf8");
 console.log("[sync-business-client-docs] synced docs/business-client-api-docs.html");
+
+// Keep runtime assets self-contained for serverless deployments.
+fs.mkdirSync(distDocsDir, { recursive: true });
+fs.writeFileSync(distDocsFile, updatedHtml, "utf8");
+console.log("[sync-business-client-docs] copied docs to dist/docs/business-client-api-docs.html");
 
 function pathToFileUrl(filePath) {
   const normalized = path.resolve(filePath).replace(/\\/g, "/");

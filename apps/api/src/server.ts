@@ -34,7 +34,11 @@ const loadEnvironment = () => {
 
 loadEnvironment();
 
-const BUSINESS_CLIENT_DOCS_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../docs/business-client-api-docs.html");
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const BUSINESS_CLIENT_DOCS_CANDIDATE_PATHS = [
+  resolve(moduleDir, "./docs/business-client-api-docs.html"),
+  resolve(moduleDir, "../docs/business-client-api-docs.html")
+];
 let businessClientDocsHtmlCache: string | undefined;
 
 export interface ApiServerOptions {
@@ -218,7 +222,7 @@ const tryServeBusinessClientDocs = async (
     return false;
   }
 
-  const html = businessClientDocsHtmlCache ?? await readFile(BUSINESS_CLIENT_DOCS_PATH, "utf8");
+  const html = businessClientDocsHtmlCache ?? await loadBusinessClientDocsHtml();
   businessClientDocsHtmlCache = html;
   response.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
@@ -230,6 +234,20 @@ const tryServeBusinessClientDocs = async (
   }
   response.end(html);
   return true;
+};
+
+const loadBusinessClientDocsHtml = async (): Promise<string> => {
+  let lastError: unknown;
+  for (const docsPath of BUSINESS_CLIENT_DOCS_CANDIDATE_PATHS) {
+    try {
+      return await readFile(docsPath, "utf8");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? new Error(`business_client_docs_not_found: ${lastError.message}`)
+    : new Error("business_client_docs_not_found");
 };
 
 const isBusinessClientDocsPath = (pathname: string): boolean => (
