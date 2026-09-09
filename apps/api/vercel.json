@@ -3,14 +3,8 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "functions": {
-    "api/index.cjs": {
-      "includeFiles": "**/*"
+    "src/index.ts": {
+      "includeFiles": "package.json"
     }
-  },
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api/index.cjs"
-    }
-  ]
+  }
 }
