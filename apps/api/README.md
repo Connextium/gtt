@@ -1,6 +1,6 @@
 # API App
 
-Backend API for Global Trade Treasury Operations Console.
+ API for Global Trade Treasury Operations Console.
 
 ## Commands
 
