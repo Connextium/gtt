@@ -15,6 +15,41 @@ export interface OpenApiDocument {
 
 const localServer = [{ url: "http://localhost:4000", description: "Local development server" }];
 
+const firstHeaderValue = (value?: string): string | undefined => {
+  if (!value) return undefined;
+  return value.split(",")[0]?.trim();
+};
+
+export const resolveRequestOriginFromHeaders = (headers?: Record<string, string | undefined>): string | undefined => {
+  const proto = firstHeaderValue(headers?.["x-forwarded-proto"]) ?? "http";
+  const forwardedHost = firstHeaderValue(headers?.["x-forwarded-host"]);
+  const host = firstHeaderValue(headers?.host);
+  const resolvedHost = forwardedHost ?? host;
+  if (!resolvedHost) return undefined;
+  return `${proto}://${resolvedHost}`;
+};
+
+export const withResolvedServerOrigin = (
+  document: OpenApiDocument,
+  origin?: string
+): OpenApiDocument => {
+  if (!origin) return document;
+  const normalizedOrigin = origin.replace(/\/+$/, "");
+  const existingServers = Array.isArray(document.servers) ? document.servers : [];
+  const remainingServers = existingServers.filter((server) => {
+    if (!server?.url) return false;
+    return server.url.replace(/\/+$/, "") !== normalizedOrigin;
+  });
+
+  return {
+    ...document,
+    servers: [
+      { url: normalizedOrigin, description: "Live API server" },
+      ...remainingServers
+    ]
+  };
+};
+
 const transferTaxonomy = {
   sectionVersion: "1.3.0",
   umbrella: "transfer",

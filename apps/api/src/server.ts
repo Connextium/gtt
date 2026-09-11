@@ -15,7 +15,7 @@ import { persistInternalIdentityTables, refreshInternalIdentityStateFromTables, 
 import { readRawBody, sendJson, badRequest, corsHeaders } from "./http/index.js";
 import { findIdempotentResponse, recordIdempotentResponse, requestHash } from "./events/idempotency.js";
 import { handleApiRequest, routeMetadata } from "./http/router.js";
-import { resolveOpenApiDocument } from "./openapi/specs.js";
+import { resolveOpenApiDocument, resolveRequestOriginFromHeaders, withResolvedServerOrigin } from "./openapi/specs.js";
 
 const loadEnvironment = () => {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -63,11 +63,16 @@ export const createApiRequestHandler = (statePromise = loadApiStateSnapshot(crea
       if ((request.method ?? "GET") === "GET" && url.pathname.endsWith(".yaml")) {
         const document = resolveOpenApiDocument(url.pathname);
         if (document) {
+          const headers = Object.fromEntries(
+            Object.entries(request.headers).map(([key, value]) => [key, Array.isArray(value) ? value[0] : value])
+          );
+          const origin = resolveRequestOriginFromHeaders(headers);
+          const hydratedDocument = withResolvedServerOrigin(document, origin);
           response.writeHead(200, {
             "content-type": "application/yaml; charset=utf-8",
             ...corsHeaders(request.headers.origin)
           });
-          response.end(toYaml(document));
+          response.end(toYaml(hydratedDocument));
           return;
         }
       }

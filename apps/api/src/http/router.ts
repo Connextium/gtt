@@ -31,7 +31,14 @@ import {
   handleSubmitMyOnboarding,
   handleUpdateMyBusinessLinkedInstrument
 } from "../modules/client-onboarding/index.js";
-import { businessClientOpenApiSpec, gttServiceOpenApiSpec, openApiIndex, resolveOpenApiDocument } from "../openapi/specs.js";
+import {
+  businessClientOpenApiSpec,
+  gttServiceOpenApiSpec,
+  openApiIndex,
+  resolveOpenApiDocument,
+  resolveRequestOriginFromHeaders,
+  withResolvedServerOrigin
+} from "../openapi/specs.js";
 import { checkDatabaseConnection } from "../db/connection.js";
 import { listApiKeysFromState, listApiKeysFromTables } from "../db/api-key-store.js";
 import {
@@ -116,7 +123,7 @@ export const routeMetadata = (method: string, pathname: string): { public?: bool
 };
 
 export const handleApiRequest = async (state: ApiState, input: RouteInput): Promise<JsonResponse> => {
-  const { method, pathname, body = {} } = input;
+  const { method, pathname, body = {}, headers = {} } = input;
   const normalizedPathname = pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
 
   if (method === "HEAD" && (normalizedPathname === "/webhooks/circle" || normalizedPathname === "/webhooks/circle/onboarding")) {
@@ -145,13 +152,18 @@ export const handleApiRequest = async (state: ApiState, input: RouteInput): Prom
   }
   if (method === "GET" && pathname.startsWith("/openapi/")) {
     const document = resolveOpenApiDocument(pathname);
-    if (document) return ok(document);
+    if (document) {
+      const origin = resolveRequestOriginFromHeaders(headers);
+      return ok(withResolvedServerOrigin(document, origin));
+    }
   }
   if (method === "GET" && pathname === "/openapi/business-client") {
-    return ok(businessClientOpenApiSpec);
+    const origin = resolveRequestOriginFromHeaders(headers);
+    return ok(withResolvedServerOrigin(businessClientOpenApiSpec, origin));
   }
   if (method === "GET" && pathname === "/openapi/gtt-service") {
-    return ok(gttServiceOpenApiSpec);
+    const origin = resolveRequestOriginFromHeaders(headers);
+    return ok(withResolvedServerOrigin(gttServiceOpenApiSpec, origin));
   }
   if (method === "GET" && pathname === "/integrations/circle/health") {
     const circle = await checkCircleHealth({ probe: false });
