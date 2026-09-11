@@ -518,22 +518,266 @@ export const businessClientOpenApiSpec: OpenApiDocument = {
           refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.refresh.sample"
         }
       },
+      BusinessOnboardingApplication: {
+        type: "object",
+        required: ["id", "email", "currentStep", "status", "createdAt", "updatedAt"],
+        properties: {
+          id: { type: "string" },
+          email: { type: "string", format: "email" },
+          currentStep: { type: "string", enum: ["step_1", "step_2", "step_3", "step_4", "pending_review", "reviewd"] },
+          status: { type: "string", enum: ["draft", "submitted", "pending_review", "needs_information", "approved", "rejected"] },
+          submittedAt: { type: "string", format: "date-time" },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" }
+        },
+        example: {
+          id: "onb_app_01J6TWVY5N0E8J9Y3V0WRPZ0BQ",
+          email: "ops@acme-trading.com",
+          currentStep: "step_2",
+          status: "draft",
+          createdAt: "2026-09-08T12:30:00.000Z",
+          updatedAt: "2026-09-08T12:45:00.000Z"
+        }
+      },
+      BusinessOnboardingSnapshotResponse: {
+        type: "object",
+        required: ["profile", "application"],
+        properties: {
+          profile: {
+            type: "object",
+            required: ["onboardingProfileId", "status", "businessClientId"],
+            properties: {
+              onboardingProfileId: { type: "string" },
+              status: { type: "string" },
+              businessClientId: { type: "string" }
+            }
+          },
+          application: { $ref: "#/components/schemas/BusinessOnboardingApplication" }
+        }
+      },
+      BusinessOnboardingStep1Payload: {
+        type: "object",
+        properties: {
+          completedStepKey: { type: "string", enum: ["step_1"] },
+          contactFirstName: { type: "string" },
+          contactLastName: { type: "string" },
+          workEmail: { type: "string", format: "email" },
+          phoneCountryCode: { type: "string", example: "+1" },
+          phoneNumber: { type: "string" },
+          preferredLanguage: { type: "string" },
+          referralCode: { type: "string" },
+          marketingConsent: { type: "boolean" }
+        },
+        additionalProperties: true,
+        example: {
+          completedStepKey: "step_1",
+          contactFirstName: "Alex",
+          contactLastName: "Morgan",
+          workEmail: "ops@acme-trading.com",
+          phoneCountryCode: "+1",
+          phoneNumber: "4155550199",
+          preferredLanguage: "en",
+          marketingConsent: false
+        }
+      },
+      BusinessOnboardingStep2Payload: {
+        type: "object",
+        properties: {
+          completedStepKey: { type: "string", enum: ["step_2"] },
+          legalBusinessName: { type: "string" },
+          legalName: { type: "string" },
+          dbaName: { type: "string" },
+          registrationNumber: { type: "string" },
+          incorporationCountry: { type: "string", example: "US" },
+          incorporationDate: { type: "string", format: "date" },
+          country: { type: "string", example: "US" },
+          taxId: { type: "string" },
+          websiteUrl: { type: "string", format: "uri" },
+          businessDescription: { type: "string" },
+          expectedMonthlyVolumeMinorUnits: { type: "string", pattern: "^[0-9]+$" },
+          expectedMonthlyTransactionCount: { type: "integer" }
+        },
+        additionalProperties: true,
+        example: {
+          completedStepKey: "step_2",
+          legalBusinessName: "Acme Trading LLC",
+          dbaName: "Acme Global Treasury",
+          registrationNumber: "US-REG-123456",
+          incorporationCountry: "US",
+          incorporationDate: "2021-04-15",
+          country: "US",
+          taxId: "12-3456789",
+          websiteUrl: "https://acme-trading.example",
+          expectedMonthlyVolumeMinorUnits: "250000000",
+          expectedMonthlyTransactionCount: 180
+        }
+      },
+      BusinessOnboardingStep3Payload: {
+        type: "object",
+        properties: {
+          completedStepKey: { type: "string", enum: ["step_3"] },
+          legalAddressLine1: { type: "string" },
+          legalAddressLine2: { type: "string" },
+          legalCity: { type: "string" },
+          legalStateOrProvince: { type: "string" },
+          legalPostalCode: { type: "string" },
+          legalCountry: { type: "string", example: "US" },
+          operationsAddressSameAsLegal: { type: "boolean" },
+          operationsAddress: {
+            type: "object",
+            properties: {
+              line1: { type: "string" },
+              line2: { type: "string" },
+              city: { type: "string" },
+              stateOrProvince: { type: "string" },
+              postalCode: { type: "string" },
+              country: { type: "string" }
+            },
+            additionalProperties: true
+          }
+        },
+        additionalProperties: true,
+        example: {
+          completedStepKey: "step_3",
+          legalAddressLine1: "100 Market Street",
+          legalAddressLine2: "Suite 900",
+          legalCity: "San Francisco",
+          legalStateOrProvince: "CA",
+          legalPostalCode: "94105",
+          legalCountry: "US",
+          operationsAddressSameAsLegal: true
+        }
+      },
+      BusinessOnboardingStep4Payload: {
+        type: "object",
+        properties: {
+          completedStepKey: { type: "string", enum: ["step_4"] },
+          primaryUseCase: { type: "string" },
+          sourceOfFunds: { type: "string" },
+          expectedCorridors: {
+            type: "array",
+            items: { type: "string" }
+          },
+          sanctionsScreeningConfirmed: { type: "boolean" },
+          termsAccepted: { type: "boolean" },
+          privacyAccepted: { type: "boolean" },
+          beneficialOwners: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                fullName: { type: "string" },
+                title: { type: "string" },
+                ownershipPercent: { type: "number" },
+                country: { type: "string" }
+              },
+              additionalProperties: true
+            }
+          }
+        },
+        additionalProperties: true,
+        example: {
+          completedStepKey: "step_4",
+          primaryUseCase: "Cross-border treasury settlement",
+          sourceOfFunds: "Operating revenue",
+          expectedCorridors: ["US->MX", "US->EU"],
+          sanctionsScreeningConfirmed: true,
+          termsAccepted: true,
+          privacyAccepted: true,
+          beneficialOwners: [
+            {
+              fullName: "Alex Morgan",
+              title: "Director",
+              ownershipPercent: 35,
+              country: "US"
+            }
+          ]
+        }
+      },
+      BusinessOnboardingRfiResponsePayload: {
+        type: "object",
+        properties: {
+          completedStepKey: { type: "string", enum: ["rfi_response"] },
+          responses: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                taskId: { type: "string" },
+                responseText: { type: "string" },
+                attachmentUrls: {
+                  type: "array",
+                  items: { type: "string", format: "uri" }
+                }
+              },
+              additionalProperties: true
+            }
+          }
+        },
+        additionalProperties: true,
+        example: {
+          completedStepKey: "rfi_response",
+          responses: [
+            {
+              taskId: "rfi_01J8K4T75J4MVD9A9BSK8W5M5P",
+              responseText: "Attached latest formation certificate and updated ownership chart.",
+              attachmentUrls: ["https://files.example.com/onboarding/formation-certificate.pdf"]
+            }
+          ]
+        }
+      },
       BusinessOnboardingStepSaveRequest: {
         type: "object",
         required: ["payload"],
         properties: {
           payload: {
-            type: "object",
-            additionalProperties: true
+            oneOf: [
+              { $ref: "#/components/schemas/BusinessOnboardingStep1Payload" },
+              { $ref: "#/components/schemas/BusinessOnboardingStep2Payload" },
+              { $ref: "#/components/schemas/BusinessOnboardingStep3Payload" },
+              { $ref: "#/components/schemas/BusinessOnboardingStep4Payload" },
+              { $ref: "#/components/schemas/BusinessOnboardingRfiResponsePayload" }
+            ]
           }
         },
         example: {
           payload: {
-            completedStepKey: "business_profile",
-            legalName: "Acme Trading LLC",
+            completedStepKey: "step_2",
+            legalBusinessName: "Acme Trading LLC",
             country: "US",
-            registrationNumber: "US-REG-123456"
+            registrationNumber: "US-REG-123456",
+            websiteUrl: "https://acme-trading.example"
           }
+        }
+      },
+      BusinessOnboardingStepSaveResponse: {
+        type: "object",
+        required: ["ok", "application"],
+        properties: {
+          ok: { type: "boolean" },
+          application: { $ref: "#/components/schemas/BusinessOnboardingApplication" }
+        }
+      },
+      BusinessClientSummary: {
+        type: "object",
+        required: ["id", "tenantId", "legalName", "country", "onboardingStatus", "createdAt"],
+        properties: {
+          id: { type: "string" },
+          tenantId: { type: "string" },
+          legalName: { type: "string" },
+          country: { type: "string" },
+          onboardingStatus: { type: "string" },
+          createdAt: { type: "string", format: "date-time" }
+        }
+      },
+      BusinessOnboardingSubmitResponse: {
+        type: "object",
+        required: ["status", "redirectTo", "application", "businessClient"],
+        properties: {
+          status: { type: "string", enum: ["pending_review"] },
+          redirectTo: { type: "string", example: "/submission-confirmed" },
+          application: { $ref: "#/components/schemas/BusinessOnboardingApplication" },
+          businessClient: { $ref: "#/components/schemas/BusinessClientSummary" }
         }
       },
       BusinessJwtUser: {
@@ -1761,7 +2005,7 @@ export const businessClientOpenApiSpec: OpenApiDocument = {
             description: "Onboarding snapshot.",
             content: {
               "application/json": {
-                schema: { type: "object", additionalProperties: true },
+                schema: { $ref: "#/components/schemas/BusinessOnboardingSnapshotResponse" },
                 examples: {
                   success: {
                     value: {
@@ -1771,8 +2015,12 @@ export const businessClientOpenApiSpec: OpenApiDocument = {
                         businessClientId: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ"
                       },
                       application: {
-                        applicationStatus: "draft",
-                        currentStep: "business_profile"
+                        id: "onb_app_01J6TWVY5N0E8J9Y3V0WRPZ0BQ",
+                        email: "ops@acme-trading.com",
+                        currentStep: "step_2",
+                        status: "draft",
+                        createdAt: "2026-09-08T12:30:00.000Z",
+                        updatedAt: "2026-09-08T12:45:00.000Z"
                       }
                     }
                   }
@@ -1803,20 +2051,50 @@ export const businessClientOpenApiSpec: OpenApiDocument = {
       patch: {
         tags: ["Onboarding"],
         summary: "Save onboarding step payload",
-        parameters: [{ name: "stepKey", in: "path", required: true, schema: { type: "string" } }],
+        description: "Persists a step payload. `payload.completedStepKey` may match the path step key and supports optional fields per step schema.",
+        parameters: [{ name: "stepKey", in: "path", required: true, schema: { type: "string", enum: ["step_1", "step_2", "step_3", "step_4", "rfi_response"] } }],
         requestBody: {
           required: true,
           content: {
             "application/json": {
               schema: { $ref: "#/components/schemas/BusinessOnboardingStepSaveRequest" },
               examples: {
-                business_profile: {
+                step_1_contact: {
                   value: {
                     payload: {
-                      completedStepKey: "business_profile",
+                      completedStepKey: "step_1",
+                      contactFirstName: "Alex",
+                      contactLastName: "Morgan",
+                      workEmail: "ops@acme-trading.com",
+                      phoneCountryCode: "+1",
+                      phoneNumber: "4155550199",
+                      preferredLanguage: "en"
+                    }
+                  }
+                },
+                step_2_business_profile: {
+                  value: {
+                    payload: {
+                      completedStepKey: "step_2",
+                      legalBusinessName: "Acme Trading LLC",
                       legalName: "Acme Trading LLC",
+                      registrationNumber: "US-REG-123456",
                       country: "US",
-                      registrationNumber: "US-REG-123456"
+                      taxId: "12-3456789",
+                      websiteUrl: "https://acme-trading.example"
+                    }
+                  }
+                },
+                step_4_compliance: {
+                  value: {
+                    payload: {
+                      completedStepKey: "step_4",
+                      primaryUseCase: "Cross-border treasury settlement",
+                      sourceOfFunds: "Operating revenue",
+                      expectedCorridors: ["US->MX", "US->EU"],
+                      sanctionsScreeningConfirmed: true,
+                      termsAccepted: true,
+                      privacyAccepted: true
                     }
                   }
                 }
@@ -1829,13 +2107,19 @@ export const businessClientOpenApiSpec: OpenApiDocument = {
             description: "Step saved.",
             content: {
               "application/json": {
-                schema: { type: "object", additionalProperties: true },
+                schema: { $ref: "#/components/schemas/BusinessOnboardingStepSaveResponse" },
                 examples: {
                   success: {
                     value: {
                       ok: true,
-                      stepKey: "business_profile",
-                      savedAt: "2026-09-08T12:45:00.000Z"
+                      application: {
+                        id: "onb_app_01J6TWVY5N0E8J9Y3V0WRPZ0BQ",
+                        email: "ops@acme-trading.com",
+                        currentStep: "step_2",
+                        status: "draft",
+                        createdAt: "2026-09-08T12:30:00.000Z",
+                        updatedAt: "2026-09-08T12:45:00.000Z"
+                      }
                     }
                   }
                 }
@@ -1870,13 +2154,29 @@ export const businessClientOpenApiSpec: OpenApiDocument = {
             description: "Onboarding submitted.",
             content: {
               "application/json": {
-                schema: { type: "object", additionalProperties: true },
+                schema: { $ref: "#/components/schemas/BusinessOnboardingSubmitResponse" },
                 examples: {
                   success: {
                     value: {
-                      ok: true,
-                      status: "submitted",
-                      submittedAt: "2026-09-08T12:50:00.000Z"
+                      status: "pending_review",
+                      redirectTo: "/submission-confirmed",
+                      application: {
+                        id: "onb_app_01J6TWVY5N0E8J9Y3V0WRPZ0BQ",
+                        email: "ops@acme-trading.com",
+                        currentStep: "pending_review",
+                        status: "pending_review",
+                        submittedAt: "2026-09-08T12:50:00.000Z",
+                        createdAt: "2026-09-08T12:30:00.000Z",
+                        updatedAt: "2026-09-08T12:50:00.000Z"
+                      },
+                      businessClient: {
+                        id: "bc_01J6T8BCRX9KP0Q2WJ9GT5B2TQ",
+                        tenantId: "tenant_demo",
+                        legalName: "Acme Trading LLC",
+                        country: "US",
+                        onboardingStatus: "submitted",
+                        createdAt: "2026-09-08T12:30:00.000Z"
+                      }
                     }
                   }
                 }
